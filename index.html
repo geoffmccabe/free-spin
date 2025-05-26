@@ -77,10 +77,16 @@ const segments = [
           type: "spinToStop",
           duration: 5,
           spins: 8,
-          callbackFinished: function () {
-            alert("You won: " + (announcedPrize || "Unknown"));
-            wheelSpinning = false;
-          }
+callbackFinished: function (indicatedSegment) {
+  if (indicatedSegment && indicatedSegment.text) {
+    alert("You won: " + indicatedSegment.text);
+  } else {
+    alert("You won: " + (announcedPrize || "Error: Prize not determined"));
+    console.warn("Winwheel.js did not indicate a segment or segment had no text. Announced prize was: " + announcedPrize);
+  }
+  wheelSpinning = false;
+}
+
         }
       });
 
