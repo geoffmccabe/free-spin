@@ -24,9 +24,9 @@
     }
     #pointer {
       position: absolute;
-      top: -20px;
-      left: 50%;
-      transform: translateX(-50%);
+      top: 50%;
+      right: -20px;
+      transform: translateY(-50%) rotate(90deg);
       width: 0;
       height: 0;
       border-left: 15px solid transparent;
@@ -72,7 +72,7 @@
         canvasId: "wheelcanvas",
         numSegments: segments.length,
         segments: segments,
-        pointerAngle: 90, // Pointer is at the top
+        pointerAngle: 0, // Pointer is on the right
         animation: {
           type: "spinToStop",
           duration: 5,
@@ -88,6 +88,15 @@
           }
         }
       });
+
+      // Log segment angles for debugging
+      console.log("Segment Angles:", theWheel.segments.map((seg, i) => ({
+        index: i,
+        text: seg.text,
+        startAngle: seg.startAngle,
+        endAngle: seg.endAngle,
+        center: (seg.startAngle + seg.endAngle) / 2
+      })));
 
       let wheelSpinning = false;
       const token = new URLSearchParams(window.location.search).get("token");
@@ -120,9 +129,9 @@
             return;
           }
 
-          // Calculate the stop angle to align segment center with pointer (90°)
+          // Calculate the stop angle to align segment center with pointer (0°)
           const center = (seg.startAngle + seg.endAngle) / 2;
-          let stopAngle = (center - 90 + 360) % 360;
+          let stopAngle = (center + 360) % 360;
 
           console.log("Segment Index:", data.segmentIndex, "Segment Number:", segmentNumber, "Prize:", seg.text, "Center:", center, "Stop Angle:", stopAngle);
 
