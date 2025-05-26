@@ -22,9 +22,9 @@
     }
     #pointer {
       position: absolute;
-      top: 50%;
-      right: -20px;
-      transform: translateY(-50%) rotate(90deg);
+      top: -20px;
+      left: 50%;
+      transform: translateX(-50%);
       width: 0;
       height: 0;
       border-left: 15px solid transparent;
@@ -57,4 +57,78 @@
         { fillStyle: "#1abc9c", text: "30 $HAROLD" },
         { fillStyle: "#2ecc71", text: "100 $HAROLD" },
         { fillStyle: "#3498db", text: "300 $HAROLD" },
-        { fillStyle: "#
+        { fillStyle: "#e74c3c", text: "3000 $HAROLD" },
+        { fillStyle: "#f1c40f", text: "30000 $HAROLD" }
+      ];
+      let announcedPrize = null;
+      const theWheel = new Winwheel({
+        canvasId: "wheelcanvas",
+        numSegments: segments.length,
+        segments: segments,
+        pointerAngle: 90, // Pointer is at the top
+        animation: {
+          type: "spinToStop",
+          duration: 5,
+          spins: 8,
+          callbackFinished: function (indicatedSegment) {
+            if (indicatedSegment && indicatedSegment.text) {
+              alert("You won: " + indicatedSegment.text);
+            } else {
+              alert("You won: " + (announcedPrize || "Error: Prize not determined"));
+              console.warn("Winwheel.js did not indicate a segment or segment had no text. Announced prize was: " + announcedPrize);
+            }
+            wheelSpinning = false;
+          }
+        }
+      });
+      console.log("Segment Angles:", theWheel.segments
+        .map((seg, i) => seg ? {
+          index: i,
+          text: seg.text,
+          startAngle: seg.startAngle,
+          endAngle: seg.endAngle,
+          center: (seg.startAngle + seg.endAngle) / 2
+        } : null)
+        .filter(item => item !== null));
+      let wheelSpinning = false;
+      const token = new URLSearchParams(window.location.search).get("token");
+      document.getElementById("spin-button").addEventListener("click", async () => {
+        if (wheelSpinning) return;
+        if (!token) return alert("No token provided.");
+        wheelSpinning = true;
+        try {
+          const res = await fetch("/api/spin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token })
+          });
+          const data = await res.json();
+          if (!res.ok || typeof data.segmentIndex !== "number") {
+            alert("Spin failed: " + (data.error || "invalid result"));
+            wheelSpinning = false;
+            return;
+          }
+          const segmentNumber = data.segmentIndex + 1;
+          const seg = theWheel.segments[segmentNumber];
+          if (!seg) {
+            alert("Spin failed. Segment missing.");
+            wheelSpinning = false;
+            return;
+          }
+          const center = (seg.startAngle + seg.endAngle) / 2;
+          let stopAngle = (center + 60 + 360) % 360 - 90; // Adjusted for pointer at 90°
+          if (stopAngle < 0) stopAngle += 360; // Ensure positive angle
+          console.log("Segment Index:", data.segmentIndex, "Segment Number:", segmentNumber, "Prize:", seg.text, "Center:", center, "Stop Angle:", stopAngle);
+          theWheel.animation.stopAngle = stopAngle;
+          announcedPrize = seg.text;
+          theWheel.startAnimation();
+        } catch (err) {
+          console.error(err);
+          alert("Spin crashed. Try again later.");
+          wheelSpinning = false;
+        }
+      });
+    };
+  </script>
+</body>
+</html>
