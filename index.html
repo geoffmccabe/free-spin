@@ -123,7 +123,7 @@ callbackFinished: function (indicatedSegment) {
 
           // Fix: Offset stop angle forward by one segment (60 degrees)
           const center = (seg.startAngle + seg.endAngle) / 2;
-          let stopAngle = (theWheel.pointerAngle - center - 60 + 360) % 360;
+          let stopAngle = (theWheel.pointerAngle - center + 60 + 360) % 360;
 
           theWheel.animation.stopAngle = stopAngle;
           announcedPrize = seg.text;
