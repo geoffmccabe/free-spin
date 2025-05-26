@@ -119,7 +119,9 @@
         }
 
         const center = (seg.startAngle + seg.endAngle) / 2;
-        theWheel.animation.stopAngle = center;
+let stopAngle = theWheel.pointerAngle - center;
+stopAngle = (stopAngle % 360 + 360) % 360; // Normalize angle
+theWheel.animation.stopAngle = stopAngle;
         theWheel.startAnimation();
       } catch (err) {
         alert("Spin crashed. Try again later.");
