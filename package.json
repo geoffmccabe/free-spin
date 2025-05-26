@@ -5,5 +5,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.39.6",
     "@solana/web3.js": "^1.89.0"
+    "@solana/spl-token": "^0.3.8"
+
   }
 }
