@@ -117,7 +117,8 @@ const segments = [
 
           // Correct stopAngle calculation
           const center = (seg.startAngle + seg.endAngle) / 2;
-let stopAngle = (360 - ((seg.startAngle + seg.endAngle) / 2) + theWheel.pointerAngle) % 360;
+let stopAngle = (theWheel.pointerAngle - center + 360) % 360;
+
 theWheel.animation.stopAngle = stopAngle;
 
 
