@@ -36,12 +36,12 @@ export default async function handler(req, res) {
     }
 
     const rewardOptions = [
-      { text: '1 HAROLD', amount: 1, weight: 30000 },
-      { text: '10 HAROLD', amount: 10, weight: 2000 },
-      { text: '100 HAROLD', amount: 100, weight: 400 },
-      { text: '300 HAROLD', amount: 300, weight: 200 },
-      { text: '3000 HAROLD', amount: 3000, weight: 50 },
-      { text: '10000 HAROLD', amount: 10000, weight: 10 }
+{ text: '3 HAROLD', amount: 3, weight: 10000 },
+{ text: '30 HAROLD', amount: 30, weight: 3000 },
+{ text: '100 HAROLD', amount: 100, weight: 300 },
+{ text: '300 HAROLD', amount: 300, weight: 100 },
+{ text: '3000 HAROLD', amount: 3000, weight: 10 },
+{ text: '30000 HAROLD', amount: 30000, weight: 1 }
     ];
 
     const totalWeight = rewardOptions.reduce((sum, r) => sum + r.weight, 0);
