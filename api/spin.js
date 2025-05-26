@@ -47,7 +47,9 @@ export default async function handler(req, res) {
 
     const reward = rewardOptions[selectedIndex];
     const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-    const userWallet = new PublicKey(tokenRow.wallet); // make sure your Supabase DB has a valid wallet field
+
+    // ⚠️ Change this if you're not storing the wallet in `wallet`
+    const userWallet = new PublicKey(tokenRow.wallet);
 
     if (reward.lamports > 0) {
       const { blockhash } = await connection.getLatestBlockhash();
@@ -63,8 +65,8 @@ export default async function handler(req, res) {
         })
       );
 
-      const signature = await connection.sendTransaction(tx, [fundingWallet]);
-      await connection.confirmTransaction(signature, 'confirmed');
+      const sig = await connection.sendTransaction(tx, [fundingWallet]);
+      await connection.confirmTransaction(sig, 'confirmed');
     }
 
     await supabase
@@ -76,9 +78,12 @@ export default async function handler(req, res) {
       .from('daily_spins')
       .insert({ discord_id: tokenRow.discord_id, reward: reward.lamports });
 
-    res.status(200).json({ prize: reward.text, segmentIndex: selectedIndex });
+    return res.status(200).json({
+      prize: reward.text,
+      segmentIndex: selectedIndex
+    });
   } catch (err) {
-    console.error('Spin API error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Spin API error:', err.message || err);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
