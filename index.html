@@ -89,14 +89,16 @@
         }
       });
 
-      // Log segment angles for debugging
-      console.log("Segment Angles:", theWheel.segments.map((seg, i) => ({
-        index: i,
-        text: seg.text,
-        startAngle: seg.startAngle,
-        endAngle: seg.endAngle,
-        center: (seg.startAngle + seg.endAngle) / 2
-      })));
+      // Log segment angles for debugging, skipping null segments
+      console.log("Segment Angles:", theWheel.segments
+        .map((seg, i) => seg ? {
+          index: i,
+          text: seg.text,
+          startAngle: seg.startAngle,
+          endAngle: seg.endAngle,
+          center: (seg.startAngle + seg.endAngle) / 2
+        } : null)
+        .filter(item => item !== null));
 
       let wheelSpinning = false;
       const token = new URLSearchParams(window.location.search).get("token");
