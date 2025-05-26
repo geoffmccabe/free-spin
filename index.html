@@ -77,8 +77,10 @@
         type: "spinToStop",
         duration: 5,
         spins: 8,
-        callbackFinished: function (segment) {
-          alert("You won: " + segment.text);
+      callbackFinished: function () {
+        const indicatedAngle = (theWheel.pointerAngle - theWheel.rotationAngle + 360) % 360;
+        const actualSegment = theWheel.getSegmentAt(indicatedAngle);
+        alert("You won: " + actualSegment.text);
         }
       }
     });
@@ -120,7 +122,7 @@
           return;
         }
 
-        const center = (seg.startAngle + seg.endAngle) / 2;
+const center = (seg.startAngle + seg.endAngle) / 2;
 let stopAngle = theWheel.pointerAngle - center;
 stopAngle = (stopAngle % 360 + 360) % 360; // Normalize angle
 theWheel.animation.stopAngle = stopAngle;
