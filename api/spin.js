@@ -52,13 +52,17 @@ export default async function handler(req, res) {
     const userWallet = new PublicKey(tokenRow.discord_id); // Replace this with real wallet lookup if needed
 
     if (reward.lamports > 0) {
-      const tx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: fundingWallet.publicKey,
-          toPubkey: userWallet,
-          lamports: reward.lamports
-        })
-      );
+const tx = new Transaction({
+  recentBlockhash: (await connection.getLatestBlockhash()).blockhash,
+  feePayer: fundingWallet.publicKey
+}).add(
+  SystemProgram.transfer({
+    fromPubkey: fundingWallet.publicKey,
+    toPubkey: userWallet,
+    lamports: reward.lamports
+  })
+);
+
       await connection.sendTransaction(tx, [fundingWallet]);
     }
 
