@@ -116,7 +116,7 @@
             return;
           }
           const center = (seg.startAngle + seg.endAngle) / 2;
-          let stopAngle = (center - 90 + 60 + 360) % 360; // Adjusted for pointer at 90°
+          let stopAngle = (center + 60 - 90 + 360) % 360; // Adjusted for pointer at 90°
           console.log("Segment Index:", data.segmentIndex, "Segment Number:", segmentNumber, "Prize:", seg.text, "Center:", center, "Stop Angle:", stopAngle);
           theWheel.animation.stopAngle = stopAngle;
           announcedPrize = seg.text;
