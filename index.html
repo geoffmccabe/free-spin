@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Spin the Wheel</title>
 
-  <!-- Required scripts -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.4/TweenMax.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
 
@@ -18,11 +17,29 @@
       margin: 0;
       padding: 0;
     }
-    #wheelcanvas {
-      margin-top: 50px;
+    #wheel-container {
+      position: relative;
+      width: 500px;
+      margin: 50px auto 0;
+    }
+    #pointer {
+      position: absolute;
+      top: -20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0;
+      height: 0;
+      border-left: 15px solid transparent;
+      border-right: 15px solid transparent;
+      border-top: 20px solid red; /* ▼ pointing down */
+      z-index: 10;
+    }
+    canvas {
+      display: block;
+      margin: 0 auto;
     }
     #spin-button {
-      margin-top: 20px;
+      margin-top: 30px;
       padding: 12px 24px;
       font-size: 18px;
       cursor: pointer;
@@ -30,23 +47,9 @@
   </style>
 </head>
 <body>
-  <!-- ✅ Wheel canvas -->
-  <div style="position: relative; width: 500px; margin: auto;">
-    <!-- Pointer triangle -->
-    <div style="
-      position: absolute;
-      top: -12px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 0;
-      height: 0;
-      border-left: 15px solid transparent;
-      border-right: 15px solid transparent;
-      border-bottom: 20px solid red;
-      z-index: 10;
-    "></div>
 
-    <!-- Canvas -->
+  <div id="wheel-container">
+    <div id="pointer"></div>
     <canvas id="wheelcanvas" width="500" height="500"></canvas>
   </div>
 
@@ -83,7 +86,6 @@
       document.getElementById("spin-button").addEventListener("click", async () => {
         if (wheelSpinning) return;
         if (!token) return alert("No token provided.");
-
         wheelSpinning = true;
 
         try {
@@ -96,12 +98,11 @@
           const raw = await res.text();
           const data = JSON.parse(raw);
 
-          // Adjust stop angle to be center of the segment
-          const angleRange = theWheel.getRandomForSegment(data.segmentIndex + 1);
-          const segment = theWheel.segments[data.segmentIndex + 1];
-          const centerAngle = (segment.startAngle + segment.endAngle) / 2;
+          const segmentNumber = data.segmentIndex + 1;
+          const stopAt = theWheel.getRandomForSegment(segmentNumber);
 
-          theWheel.animation.stopAngle = centerAngle;
+          // ✅ Start the spin
+          theWheel.animation.stopAngle = stopAt;
           theWheel.startAnimation();
         } catch (err) {
           console.error("Spin failed:", err);
@@ -111,6 +112,6 @@
       });
     };
   </script>
-</body>
 
+</body>
 </html>
