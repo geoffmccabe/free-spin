@@ -1,9 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
-import { Connection, PublicKey, Keypair, SystemProgram, Transaction } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair, Transaction } from '@solana/web3.js';
+import {
+  getAssociatedTokenAddress,
+  getOrCreateAssociatedTokenAccount,
+  createTransferInstruction,
+  TOKEN_PROGRAM_ID
+} from "@solana/spl-token";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
+const HAROLD_TOKEN_MINT = new PublicKey("3vgopg7xm3EWkXfxmWPUpcf7g939hecfqg18sLuXDzVt");
 
 const connection = new Connection('https://api.mainnet-beta.solana.com');
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -22,17 +29,18 @@ export default async function handler(req, res) {
       .single();
 
     if (error || !tokenRow || tokenRow.used) {
+      console.error("Token error:", error || "Used or invalid token");
       return res.status(400).json({ error: 'Invalid or used token' });
     }
 
-const rewardOptions = [
-  { text: '10 HAROLD', amount: 10, weight: 10000 },
-  { text: '50 HAROLD', amount: 50, weight: 3000 },
-  { text: '200 HAROLD', amount: 200, weight: 300 },
-  { text: '400 HAROLD', amount: 400, weight: 100 },
-  { text: '2000 HAROLD', amount: 2000, weight: 10 },
-  { text: '30000 HAROLD', amount: 30000, weight: 1 }
-];
+    const rewardOptions = [
+      { text: '1 HAROLD', amount: 1, weight: 30000 },
+      { text: '10 HAROLD', amount: 10, weight: 2000 },
+      { text: '100 HAROLD', amount: 100, weight: 400 },
+      { text: '300 HAROLD', amount: 300, weight: 200 },
+      { text: '3000 HAROLD', amount: 3000, weight: 50 },
+      { text: '10000 HAROLD', amount: 10000, weight: 10 }
+    ];
 
     const totalWeight = rewardOptions.reduce((sum, r) => sum + r.weight, 0);
     let rand = Math.random() * totalWeight;
@@ -46,60 +54,49 @@ const rewardOptions = [
     }
 
     const reward = rewardOptions[selectedIndex];
+    const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+    const userWallet = new PublicKey(tokenRow.discord_id); // user's public key in `discord_id`
 
-    let fundingWallet;
-    try {
-      fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-    } catch (e) {
-      return res.status(500).json({ error: 'Wallet key is invalid or missing' });
-    }
+    // Send HAROLD token
+    const fromTokenAccount = await getOrCreateAssociatedTokenAccount(
+      connection,
+      fundingWallet,
+      HAROLD_TOKEN_MINT,
+      fundingWallet.publicKey
+    );
 
-    if (!tokenRow.wallet) {
-      return res.status(500).json({ error: 'User wallet missing in database' });
-    }
+    const toTokenAccount = await getOrCreateAssociatedTokenAccount(
+      connection,
+      fundingWallet,
+      HAROLD_TOKEN_MINT,
+      userWallet
+    );
 
-    let userWallet;
-    try {
-      userWallet = new PublicKey(tokenRow.wallet);
-    } catch (e) {
-      return res.status(500).json({ error: 'Invalid user wallet address' });
-    }
+    const tx = new Transaction().add(
+      createTransferInstruction(
+        fromTokenAccount.address,
+        toTokenAccount.address,
+        fundingWallet.publicKey,
+        reward.amount,
+        [],
+        TOKEN_PROGRAM_ID
+      )
+    );
 
-    if (reward.lamports > 0) {
-      try {
-        const { blockhash } = await connection.getLatestBlockhash();
-        const tx = new Transaction({
-          recentBlockhash: blockhash,
-          feePayer: fundingWallet.publicKey
-        }).add(
-          SystemProgram.transfer({
-            fromPubkey: fundingWallet.publicKey,
-            toPubkey: userWallet,
-            lamports: reward.lamports
-          })
-        );
-
-        const sig = await connection.sendTransaction(tx, [fundingWallet]);
-        await connection.confirmTransaction(sig, 'confirmed');
-      } catch (e) {
-        return res.status(500).json({ error: 'Solana transaction failed: ' + e.message });
-      }
-    }
+    await connection.sendTransaction(tx, [fundingWallet]);
 
     await supabase
       .from('spin_tokens')
-      .update({ used: true, reward: reward.lamports })
+      .update({ used: true, reward: reward.amount })
       .eq('token', token);
 
     await supabase
       .from('daily_spins')
-      .insert({ discord_id: tokenRow.discord_id, reward: reward.lamports });
+      .insert({ discord_id: tokenRow.discord_id, reward: reward.amount });
 
-    return res.status(200).json({
-      prize: reward.text,
-      segmentIndex: selectedIndex
-    });
+    res.status(200).json({ prize: reward.text, segmentIndex: selectedIndex });
   } catch (err) {
-    return res.status(500).json({ error: 'Unexpected error: ' + (err.message || err) });
+    console.error('Spin API error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
