@@ -25,14 +25,14 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid or used token' });
     }
 
-    const rewardOptions = [
-      { text: '0.001 SOL', lamports: 1000000, weight: 40 },
-      { text: '0.01 SOL',  lamports: 10000000, weight: 25 },
-      { text: '0.02 SOL',  lamports: 20000000, weight: 15 },
-      { text: '0.05 SOL',  lamports: 50000000, weight: 10 },
-      { text: '0.1 SOL',   lamports: 100000000, weight: 5 },
-      { text: 'Try Again', lamports: 0, weight: 5 }
-    ];
+const rewardOptions = [
+  { text: '10000 HAROLD', amount: 10000, weight: 10 },
+  { text: '3000 HAROLD', amount: 3000, weight: 50 },
+  { text: '300 HAROLD', amount: 300, weight: 200 },
+  { text: '100 HAROLD', amount: 100, weight: 400 },
+  { text: '10 HAROLD', amount: 10, weight: 2000 },
+  { text: '1 HAROLD', amount: 1, weight: 30000 }
+];
 
     const totalWeight = rewardOptions.reduce((sum, r) => sum + r.weight, 0);
     let rand = Math.random() * totalWeight;
