@@ -71,6 +71,7 @@
           duration: 5,
           spins: 8,
           callbackFinished: function (indicatedSegment) {
+            console.log("Indicated Segment:", indicatedSegment ? indicatedSegment.text : "None");
             if (indicatedSegment && indicatedSegment.text) {
               alert("You won: " + indicatedSegment.text);
             } else {
@@ -116,7 +117,7 @@
             return;
           }
           const center = (seg.startAngle + seg.endAngle) / 2;
-          let stopAngle = (center + 60 + 360) % 360; // Working stop angle
+          let stopAngle = (center + 360) % 360; // Simplified stop angle
           console.log("Segment Index:", data.segmentIndex, "Segment Number:", segmentNumber, "Prize:", seg.text, "Center:", center, "Stop Angle:", stopAngle);
           theWheel.animation.stopAngle = stopAngle;
           announcedPrize = seg.text;
