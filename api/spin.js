@@ -46,27 +46,44 @@ export default async function handler(req, res) {
     }
 
     const reward = rewardOptions[selectedIndex];
-    const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
 
-    // ⚠️ Change this if you're not storing the wallet in `wallet`
-    const userWallet = new PublicKey(tokenRow.wallet);
+    let fundingWallet;
+    try {
+      fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+    } catch (e) {
+      return res.status(500).json({ error: 'Wallet key is invalid or missing' });
+    }
+
+    if (!tokenRow.wallet) {
+      return res.status(500).json({ error: 'User wallet missing in database' });
+    }
+
+    let userWallet;
+    try {
+      userWallet = new PublicKey(tokenRow.wallet);
+    } catch (e) {
+      return res.status(500).json({ error: 'Invalid user wallet address' });
+    }
 
     if (reward.lamports > 0) {
-      const { blockhash } = await connection.getLatestBlockhash();
+      try {
+        const { blockhash } = await connection.getLatestBlockhash();
+        const tx = new Transaction({
+          recentBlockhash: blockhash,
+          feePayer: fundingWallet.publicKey
+        }).add(
+          SystemProgram.transfer({
+            fromPubkey: fundingWallet.publicKey,
+            toPubkey: userWallet,
+            lamports: reward.lamports
+          })
+        );
 
-      const tx = new Transaction({
-        recentBlockhash: blockhash,
-        feePayer: fundingWallet.publicKey
-      }).add(
-        SystemProgram.transfer({
-          fromPubkey: fundingWallet.publicKey,
-          toPubkey: userWallet,
-          lamports: reward.lamports
-        })
-      );
-
-      const sig = await connection.sendTransaction(tx, [fundingWallet]);
-      await connection.confirmTransaction(sig, 'confirmed');
+        const sig = await connection.sendTransaction(tx, [fundingWallet]);
+        await connection.confirmTransaction(sig, 'confirmed');
+      } catch (e) {
+        return res.status(500).json({ error: 'Solana transaction failed: ' + e.message });
+      }
     }
 
     await supabase
@@ -83,7 +100,6 @@ export default async function handler(req, res) {
       segmentIndex: selectedIndex
     });
   } catch (err) {
-    console.error('Spin API error:', err.message || err);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Unexpected error: ' + (err.message || err) });
   }
 }
