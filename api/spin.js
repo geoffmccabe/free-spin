@@ -79,7 +79,7 @@ export default async function handler(req, res) {
         fromTokenAccount.address,
         toTokenAccount.address,
         fundingWallet.publicKey,
-        reward.amount,
+        reward.amount * 1_000_000, // ✅ Convert to base units
         [],
         TOKEN_PROGRAM_ID
       )
