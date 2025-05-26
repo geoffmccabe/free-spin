@@ -57,14 +57,14 @@
 
   <script>
     window.onload = function () {
-      const segments = [
-        { fillStyle: "#f39c12", text: "3 $HAROLD" },
-        { fillStyle: "#1abc9c", text: "30 $HAROLD" },
-        { fillStyle: "#2ecc71", text: "100 $HAROLD" },
-        { fillStyle: "#3498db", text: "300 $HAROLD" },
-        { fillStyle: "#e74c3c", text: "3000 $HAROLD" },
-        { fillStyle: "#f1c40f", text: "30000 $HAROLD" }
-      ];
+const segments = [
+  { fillStyle: "#f39c12", text: "3 $HAROLD" },     // weight 10000
+  { fillStyle: "#1abc9c", text: "30 $HAROLD" },    // weight 3000
+  { fillStyle: "#2ecc71", text: "100 $HAROLD" },   // weight 300
+  { fillStyle: "#3498db", text: "300 $HAROLD" },   // weight 100
+  { fillStyle: "#e74c3c", text: "3000 $HAROLD" },  // weight 10
+  { fillStyle: "#f1c40f", text: "30000 $HAROLD" }  // weight 1
+];
 
       let announcedPrize = null;
 
@@ -117,8 +117,9 @@
 
           // Correct stopAngle calculation
           const center = (seg.startAngle + seg.endAngle) / 2;
-let stopAngle = theWheel.pointerAngle - center + 180;
-stopAngle = (stopAngle + 360) % 360;
+let stopAngle = (360 - ((seg.startAngle + seg.endAngle) / 2) + theWheel.pointerAngle) % 360;
+theWheel.animation.stopAngle = stopAngle;
+
 
 
           theWheel.animation.stopAngle = stopAngle;
