@@ -22,9 +22,9 @@
     }
     #pointer {
       position: absolute;
-      top: 50%;
-      right: -20px;
-      transform: translateY(-50%) rotate(90deg);
+      top: -20px;
+      left: 50%;
+      transform: translateX(-50%);
       width: 0;
       height: 0;
       border-left: 15px solid transparent;
@@ -65,7 +65,7 @@
         canvasId: "wheelcanvas",
         numSegments: segments.length,
         segments: segments,
-        pointerAngle: 0, // Pointer is on the right
+        pointerAngle: 0, // Pointer angle unchanged
         animation: {
           type: "spinToStop",
           duration: 5,
@@ -117,7 +117,7 @@
             return;
           }
           const center = (seg.startAngle + seg.endAngle) / 2;
-          let stopAngle = (center + 360) % 360; // Simplified stop angle
+          let stopAngle = (center + 360) % 360; // Same stop angle as working version
           console.log("Segment Index:", data.segmentIndex, "Segment Number:", segmentNumber, "Prize:", seg.text, "Center:", center, "Stop Angle:", stopAngle);
           theWheel.animation.stopAngle = stopAngle;
           announcedPrize = seg.text;
