@@ -20,11 +20,11 @@ export default async function handler(req, res) {
   if (error || !tokenRow || tokenRow.used) return res.status(400).json({ error: 'Invalid or used token' });
 
   const rewardOptions = [
-    { text: '0.001 SOL', lamports: 1000000, weight: 40 },
-    { text: '0.01 SOL',  lamports: 10000000, weight: 25 },
-    { text: '0.02 SOL',  lamports: 20000000, weight: 15 },
-    { text: '0.05 SOL',  lamports: 50000000, weight: 10 },
-    { text: '0.1 SOL',   lamports: 100000000, weight: 5 },
+    { text: '0.001 SOL', lamports: 1000000, weight: 1000 },
+    { text: '0.01 SOL',  lamports: 10000000, weight: 100 },
+    { text: '0.02 SOL',  lamports: 20000000, weight: 20 },
+    { text: '0.05 SOL',  lamports: 50000000, weight: 2 },
+    { text: '0.1 SOL',   lamports: 100000000, weight: 1 },
     { text: 'Try Again', lamports: 0, weight: 5 }
   ];
 
