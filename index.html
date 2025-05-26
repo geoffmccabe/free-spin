@@ -31,10 +31,27 @@
 </head>
 <body>
   <!-- ✅ Wheel canvas -->
-  <canvas id="wheelcanvas" width="500" height="500"></canvas>
+  <div style="position: relative; width: 500px; margin: auto;">
+    <!-- Pointer triangle -->
+    <div style="
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0;
+      height: 0;
+      border-left: 15px solid transparent;
+      border-right: 15px solid transparent;
+      border-bottom: 20px solid red;
+      z-index: 10;
+    "></div>
+
+    <!-- Canvas -->
+    <canvas id="wheelcanvas" width="500" height="500"></canvas>
+  </div>
+
   <button id="spin-button">SPIN</button>
 
-  <!-- ✅ Safe JS loading after DOM is ready -->
   <script>
     window.onload = function () {
       const segments = [
@@ -77,11 +94,14 @@
           });
 
           const raw = await res.text();
-          console.log("Raw response:", raw);
-
           const data = JSON.parse(raw);
-          const stopAt = theWheel.getRandomForSegment(data.segmentIndex + 1);
-          theWheel.animation.stopAngle = stopAt;
+
+          // Adjust stop angle to be center of the segment
+          const angleRange = theWheel.getRandomForSegment(data.segmentIndex + 1);
+          const segment = theWheel.segments[data.segmentIndex + 1];
+          const centerAngle = (segment.startAngle + segment.endAngle) / 2;
+
+          theWheel.animation.stopAngle = centerAngle;
           theWheel.startAnimation();
         } catch (err) {
           console.error("Spin failed:", err);
@@ -92,4 +112,5 @@
     };
   </script>
 </body>
+
 </html>
