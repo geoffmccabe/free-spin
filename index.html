@@ -31,7 +31,7 @@
       height: 0;
       border-left: 15px solid transparent;
       border-right: 15px solid transparent;
-      border-top: 20px solid red; /* ▼ pointing down */
+      border-top: 20px solid red;
       z-index: 10;
     }
     canvas {
@@ -56,87 +56,89 @@
   <button id="spin-button">SPIN</button>
 
   <script>
-  window.onload = function () {
-  const segments = [
-    { fillStyle: "#f39c12", text: "1 $HAROLD" },
-    { fillStyle: "#1abc9c", text: "10 $HAROLD" },
-    { fillStyle: "#2ecc71", text: "100 $HAROLD" },
-    { fillStyle: "#3498db", text: "300 $HAROLD" },
-    { fillStyle: "#9b59b6", text: "1000 $HAROLD" },
-    { fillStyle: "#e74c3c", text: "3000 $HAROLD" },
-    { fillStyle: "#f1c40f", text: "10000 $HAROLD" }
-  ];
+    window.onload = function () {
+      const segments = [
+        { fillStyle: "#f39c12", text: "1 $HAROLD" },
+        { fillStyle: "#1abc9c", text: "10 $HAROLD" },
+        { fillStyle: "#2ecc71", text: "100 $HAROLD" },
+        { fillStyle: "#3498db", text: "300 $HAROLD" },
+        { fillStyle: "#9b59b6", text: "1000 $HAROLD" },
+        { fillStyle: "#e74c3c", text: "3000 $HAROLD" },
+        { fillStyle: "#f1c40f", text: "10000 $HAROLD" }
+      ];
 
+      let announcedPrize = null;
 
-    const theWheel = new Winwheel({
-      canvasId: "wheelcanvas",
-      numSegments: segments.length,
-      segments: segments,
-      pointerAngle: 90, // 🛠️ This tells the wheel the pointer is at the top
-      animation: {
-        type: "spinToStop",
-        duration: 5,
-        spins: 8,
-      callbackFinished: function () {
-        const indicatedAngle = (theWheel.pointerAngle - theWheel.rotationAngle + 360) % 360;
-        const actualSegment = theWheel.getSegmentAt(indicatedAngle);
-        alert("You won: " + actualSegment.text);
+      const theWheel = new Winwheel({
+        canvasId: "wheelcanvas",
+        numSegments: segments.length,
+        segments: segments,
+        pointerAngle: 90,
+        animation: {
+          type: "spinToStop",
+          duration: 5,
+          spins: 8,
+          callbackFinished: function () {
+            if (announcedPrize) {
+              alert("You won: " + announcedPrize);
+            } else {
+              alert("You won, but couldn’t read the prize.");
+            }
+          }
         }
-      }
-    });
+      });
 
-    let wheelSpinning = false;
-    const token = new URLSearchParams(window.location.search).get("token");
+      let wheelSpinning = false;
+      const token = new URLSearchParams(window.location.search).get("token");
 
-    document.getElementById("spin-button").addEventListener("click", async () => {
-      if (wheelSpinning) return;
-      if (!token) return alert("No token provided.");
-      wheelSpinning = true;
+      document.getElementById("spin-button").addEventListener("click", async () => {
+        if (wheelSpinning) return;
+        if (!token) return alert("No token provided.");
+        wheelSpinning = true;
 
-      try {
-        const res = await fetch("/api/spin", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token: token })
-        });
+        try {
+          const res = await fetch("/api/spin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: token })
+          });
 
-        const data = await res.json();
+          const data = await res.json();
 
-        if (!res.ok) {
-          alert("Spin failed: " + (data.error || "unknown error"));
+          if (!res.ok) {
+            alert("Spin failed: " + (data.error || "unknown error"));
+            wheelSpinning = false;
+            return;
+          }
+
+          if (typeof data.segmentIndex !== "number") {
+            alert("Spin failed. No segment returned.");
+            wheelSpinning = false;
+            return;
+          }
+
+          const segmentNumber = data.segmentIndex + 1;
+          const seg = theWheel.segments[segmentNumber];
+          if (!seg) {
+            alert("Spin failed. Segment missing.");
+            wheelSpinning = false;
+            return;
+          }
+
+          const center = (seg.startAngle + seg.endAngle) / 2;
+          let stopAngle = theWheel.pointerAngle - center;
+          stopAngle = (stopAngle % 360 + 360) % 360;
+
+          theWheel.animation.stopAngle = stopAngle;
+          announcedPrize = seg.text;
+
+          theWheel.startAnimation();
+        } catch (err) {
+          alert("Spin crashed. Try again later.");
           wheelSpinning = false;
-          return;
         }
-
-        if (typeof data.segmentIndex !== "number") {
-          alert("Spin failed. No segment returned.");
-          wheelSpinning = false;
-          return;
-        }
-
-        const segmentNumber = data.segmentIndex + 1;
-        const seg = theWheel.segments[segmentNumber];
-        if (!seg) {
-          alert("Spin failed. Segment missing.");
-          wheelSpinning = false;
-          return;
-        }
-
-const center = (seg.startAngle + seg.endAngle) / 2;
-let stopAngle = theWheel.pointerAngle - center;
-stopAngle = (stopAngle % 360 + 360) % 360; // Normalize angle
-theWheel.animation.stopAngle = stopAngle;
-        theWheel.startAnimation();
-      } catch (err) {
-        alert("Spin crashed. Try again later.");
-        wheelSpinning = false;
-      }
-    });
-  };
-</script>
-
-
-
-
+      });
+    };
+  </script>
 </body>
 </html>
