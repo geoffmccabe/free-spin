@@ -1,11 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, Transaction } from '@solana/web3.js';
-import {
-  getAssociatedTokenAddress,
-  getOrCreateAssociatedTokenAccount,
-  createTransferInstruction,
-  TOKEN_PROGRAM_ID
-} from "@solana/spl-token";
+let getAssociatedTokenAddress, getOrCreateAssociatedTokenAccount, createTransferInstruction, TOKEN_PROGRAM_ID;
+
+const splToken = await import('@solana/spl-token');
+getAssociatedTokenAddress = splToken.getAssociatedTokenAddress;
+getOrCreateAssociatedTokenAccount = splToken.getOrCreateAssociatedTokenAccount;
+createTransferInstruction = splToken.createTransferInstruction;
+TOKEN_PROGRAM_ID = splToken.TOKEN_PROGRAM_ID;
+
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
