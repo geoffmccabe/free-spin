@@ -72,17 +72,14 @@
         canvasId: "wheelcanvas",
         numSegments: segments.length,
         segments: segments,
-        pointerAngle: 90,
+        pointerAngle: 90, // Pointer is at the top
         animation: {
           type: "spinToStop",
           duration: 5,
           spins: 8,
           callbackFinished: function () {
-            if (announcedPrize) {
-              alert("You won: " + announcedPrize);
-            } else {
-              alert("You won, but couldn’t read the prize.");
-            }
+            alert("You won: " + (announcedPrize || "Unknown"));
+            wheelSpinning = false;
           }
         }
       });
@@ -99,19 +96,13 @@
           const res = await fetch("/api/spin", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: token })
+            body: JSON.stringify({ token })
           });
 
           const data = await res.json();
 
-          if (!res.ok) {
-            alert("Spin failed: " + (data.error || "unknown error"));
-            wheelSpinning = false;
-            return;
-          }
-
-          if (typeof data.segmentIndex !== "number") {
-            alert("Spin failed. No segment returned.");
+          if (!res.ok || typeof data.segmentIndex !== "number") {
+            alert("Spin failed: " + (data.error || "invalid result"));
             wheelSpinning = false;
             return;
           }
@@ -124,15 +115,17 @@
             return;
           }
 
+          // Correct stopAngle calculation
           const center = (seg.startAngle + seg.endAngle) / 2;
           let stopAngle = theWheel.pointerAngle - center;
-          stopAngle = (stopAngle % 360 + 360) % 360;
+          stopAngle = (stopAngle + 360) % 360;
 
           theWheel.animation.stopAngle = stopAngle;
           announcedPrize = seg.text;
 
           theWheel.startAnimation();
         } catch (err) {
+          console.error(err);
           alert("Spin crashed. Try again later.");
           wheelSpinning = false;
         }
