@@ -96,23 +96,40 @@
         });
 
         const raw = await res.text();
-        const data = JSON.parse(raw);
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          alert("Spin failed. Invalid response.");
+          wheelSpinning = false;
+          return;
+        }
 
-        // ✅ SAFELY calculate a center angle for the segment
+        if (!data || typeof data.segmentIndex !== "number") {
+          alert("Spin failed. No prize returned.");
+          wheelSpinning = false;
+          return;
+        }
+
         const segmentNumber = data.segmentIndex + 1;
         const seg = theWheel.segments[segmentNumber];
-        const center = (seg.startAngle + seg.endAngle) / 2;
+        if (!seg) {
+          alert("Spin failed. Segment not found.");
+          wheelSpinning = false;
+          return;
+        }
 
+        const center = (seg.startAngle + seg.endAngle) / 2;
         theWheel.animation.stopAngle = center;
         theWheel.startAnimation();
       } catch (err) {
-        console.error("Spin failed:", err);
         alert("Spin failed. Try again later.");
         wheelSpinning = false;
       }
     });
   };
 </script>
+
 
 
 </body>
