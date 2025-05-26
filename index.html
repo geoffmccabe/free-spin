@@ -56,62 +56,64 @@
   <button id="spin-button">SPIN</button>
 
   <script>
-    window.onload = function () {
-      const segments = [
-        { fillStyle: "#e74c3c", text: "0.001 SOL" },
-        { fillStyle: "#3498db", text: "0.01 SOL" },
-        { fillStyle: "#2ecc71", text: "0.02 SOL" },
-        { fillStyle: "#9b59b6", text: "0.05 SOL" },
-        { fillStyle: "#f1c40f", text: "0.1 SOL" },
-        { fillStyle: "#95a5a6", text: "Try Again" }
-      ];
+  window.onload = function () {
+    const segments = [
+      { fillStyle: "#e74c3c", text: "0.001 SOL" },
+      { fillStyle: "#3498db", text: "0.01 SOL" },
+      { fillStyle: "#2ecc71", text: "0.02 SOL" },
+      { fillStyle: "#9b59b6", text: "0.05 SOL" },
+      { fillStyle: "#f1c40f", text: "0.1 SOL" },
+      { fillStyle: "#95a5a6", text: "Try Again" }
+    ];
 
-      const theWheel = new Winwheel({
-        canvasId: "wheelcanvas",
-        numSegments: segments.length,
-        segments: segments,
-        animation: {
-          type: "spinToStop",
-          duration: 5,
-          spins: 8,
-          callbackFinished: function (segment) {
-            alert("You won: " + segment.text);
-          }
+    const theWheel = new Winwheel({
+      canvasId: "wheelcanvas",
+      numSegments: segments.length,
+      segments: segments,
+      animation: {
+        type: "spinToStop",
+        duration: 5,
+        spins: 8,
+        callbackFinished: function (segment) {
+          alert("You won: " + segment.text);
         }
-      });
+      }
+    });
 
-      let wheelSpinning = false;
-      const token = new URLSearchParams(window.location.search).get("token");
+    let wheelSpinning = false;
+    const token = new URLSearchParams(window.location.search).get("token");
 
-      document.getElementById("spin-button").addEventListener("click", async () => {
-        if (wheelSpinning) return;
-        if (!token) return alert("No token provided.");
-        wheelSpinning = true;
+    document.getElementById("spin-button").addEventListener("click", async () => {
+      if (wheelSpinning) return;
+      if (!token) return alert("No token provided.");
+      wheelSpinning = true;
 
-        try {
-          const res = await fetch("/api/spin", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token })
-          });
+      try {
+        const res = await fetch("/api/spin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token })
+        });
 
-          const raw = await res.text();
-          const data = JSON.parse(raw);
+        const raw = await res.text();
+        const data = JSON.parse(raw);
 
-          const segmentNumber = data.segmentIndex + 1;
-          const stopAt = theWheel.getRandomForSegment(segmentNumber);
+        // ✅ SAFELY calculate a center angle for the segment
+        const segmentNumber = data.segmentIndex + 1;
+        const seg = theWheel.segments[segmentNumber];
+        const center = (seg.startAngle + seg.endAngle) / 2;
 
-          // ✅ Start the spin
-          theWheel.animation.stopAngle = stopAt;
-          theWheel.startAnimation();
-        } catch (err) {
-          console.error("Spin failed:", err);
-          alert("Spin failed: " + err.message);
-          wheelSpinning = false;
-        }
-      });
-    };
-  </script>
+        theWheel.animation.stopAngle = center;
+        theWheel.startAnimation();
+      } catch (err) {
+        console.error("Spin failed:", err);
+        alert("Spin failed. Try again later.");
+        wheelSpinning = false;
+      }
+    });
+  };
+</script>
+
 
 </body>
 </html>
