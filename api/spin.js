@@ -8,7 +8,6 @@ getOrCreateAssociatedTokenAccount = splToken.getOrCreateAssociatedTokenAccount;
 createTransferInstruction = splToken.createTransferInstruction;
 TOKEN_PROGRAM_ID = splToken.TOKEN_PROGRAM_ID;
 
-
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
@@ -36,12 +35,12 @@ export default async function handler(req, res) {
     }
 
     const rewardOptions = [
-{ text: '3 HAROLD', amount: 3, weight: 10000 },
-{ text: '30 HAROLD', amount: 30, weight: 3000 },
-{ text: '100 HAROLD', amount: 100, weight: 300 },
-{ text: '300 HAROLD', amount: 300, weight: 100 },
-{ text: '3000 HAROLD', amount: 3000, weight: 10 },
-{ text: '30000 HAROLD', amount: 30000, weight: 1 }
+      { text: '3 HAROLD', amount: 3, weight: 10000 },
+      { text: '30 HAROLD', amount: 30, weight: 3000 },
+      { text: '100 HAROLD', amount: 100, weight: 300 },
+      { text: '300 HAROLD', amount: 300, weight: 100 },
+      { text: '3000 HAROLD', amount: 3000, weight: 10 },
+      { text: '30000 HAROLD', amount: 30000, weight: 1 }
     ];
 
     const totalWeight = rewardOptions.reduce((sum, r) => sum + r.weight, 0);
@@ -56,10 +55,11 @@ export default async function handler(req, res) {
     }
 
     const reward = rewardOptions[selectedIndex];
-    const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-    const userWallet = new PublicKey(tokenRow.discord_id); // user's public key in `discord_id`
+    console.log("Selected Index:", selectedIndex, "Reward:", reward.text, "Amount:", reward.amount);
 
-    // Send HAROLD token
+    const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+    const userWallet = new PublicKey(tokenRow.discord_id);
+
     const fromTokenAccount = await getOrCreateAssociatedTokenAccount(
       connection,
       fundingWallet,
@@ -79,7 +79,7 @@ export default async function handler(req, res) {
         fromTokenAccount.address,
         toTokenAccount.address,
         fundingWallet.publicKey,
-        reward.amount * 100000, // ✅ Convert to base units
+        reward.amount * 100000, // Convert to base units
         [],
         TOKEN_PROGRAM_ID
       )
