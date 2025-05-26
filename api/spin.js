@@ -4,7 +4,6 @@ import { Connection, PublicKey, Keypair, SystemProgram, Transaction } from '@sol
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
-const FUNDING_WALLET_PUBLIC_KEY = process.env.FUNDING_WALLET_PUBLIC_KEY;
 
 const connection = new Connection('https://api.mainnet-beta.solana.com');
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -23,7 +22,6 @@ export default async function handler(req, res) {
       .single();
 
     if (error || !tokenRow || tokenRow.used) {
-      console.error("Token error:", error || "Used or invalid token");
       return res.status(400).json({ error: 'Invalid or used token' });
     }
 
@@ -49,21 +47,24 @@ export default async function handler(req, res) {
 
     const reward = rewardOptions[selectedIndex];
     const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-    const userWallet = new PublicKey(tokenRow.discord_id); // Replace this with real wallet lookup if needed
+    const userWallet = new PublicKey(tokenRow.wallet); // make sure your Supabase DB has a valid wallet field
 
     if (reward.lamports > 0) {
-const tx = new Transaction({
-  recentBlockhash: (await connection.getLatestBlockhash()).blockhash,
-  feePayer: fundingWallet.publicKey
-}).add(
-  SystemProgram.transfer({
-    fromPubkey: fundingWallet.publicKey,
-    toPubkey: userWallet,
-    lamports: reward.lamports
-  })
-);
+      const { blockhash } = await connection.getLatestBlockhash();
 
-      await connection.sendTransaction(tx, [fundingWallet]);
+      const tx = new Transaction({
+        recentBlockhash: blockhash,
+        feePayer: fundingWallet.publicKey
+      }).add(
+        SystemProgram.transfer({
+          fromPubkey: fundingWallet.publicKey,
+          toPubkey: userWallet,
+          lamports: reward.lamports
+        })
+      );
+
+      const signature = await connection.sendTransaction(tx, [fundingWallet]);
+      await connection.confirmTransaction(signature, 'confirmed');
     }
 
     await supabase
@@ -78,6 +79,6 @@ const tx = new Transaction({
     res.status(200).json({ prize: reward.text, segmentIndex: selectedIndex });
   } catch (err) {
     console.error('Spin API error:', err);
-    return res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error' });
   }
 }
