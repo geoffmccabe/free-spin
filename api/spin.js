@@ -96,6 +96,7 @@ export default async function handler(req, res) {
       .from('daily_spins')
       .insert({ discord_id: tokenRow.discord_id, reward: reward.amount });
 
+    console.log("Returning: segmentIndex:", selectedIndex, "Prize:", reward.text);
     res.status(200).json({ prize: reward.text, segmentIndex: selectedIndex });
   } catch (err) {
     console.error('Spin API error:', err);
