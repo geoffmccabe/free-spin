@@ -92,9 +92,17 @@ export default async function handler(req, res) {
       .update({ used: true, reward: reward.amount })
       .eq('token', token);
 
-    await supabase
-      .from('daily_spins')
-      .insert({ discord_id: tokenRow.discord_id, reward: reward.amount });
+// Log the daily spin
+await supabase
+  .from('daily_spins')
+  .insert({ discord_id: tokenRow.discord_id, reward: reward.amount });
+
+// Update wallet_totals (leaderboard)
+await supabase.rpc('increment_wallet_total', {
+  wallet_address: tokenRow.discord_id,
+  reward_amount: reward.amount
+});
+
 
     console.log("Returning: segmentIndex:", selectedIndex, "Prize:", reward.text);
     res.status(200).json({ prize: reward.text, segmentIndex: selectedIndex });
