@@ -98,7 +98,8 @@
         if (!token) return alert("No token provided.");
         wheelSpinning = true;
         try {
-          const res = await fetch("https://free-spin.vercel.app/api/spin", {
+          const res = await fetch("https://free-spin.fly.dev/api/spin", {
+
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ token })
