@@ -9,6 +9,7 @@ import {
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import { v4 as uuidv4 } from "uuid";
+import http from "http"; // Added for HTTP server
 
 dotenv.config();
 
@@ -27,6 +28,12 @@ requiredEnv.forEach(key => {
     process.exit(1);
   }
 });
+
+// Add minimal HTTP server for Railway
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('Bot is running');
+}).listen(process.env.PORT || 8080);
 
 const client = new Client({
   intents: [
