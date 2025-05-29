@@ -73,7 +73,7 @@ async function handleVerifyCommand(user, channel) {
     await supabase.from("spin_tokens").insert({ token, discord_id });
   }
 
-  const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/spin?token=${token}`;
+  const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/spin.html?token=${token}`;
   channel.send(`🎯 <@${discord_id}> Click to spin the wheel:\n🔗 ${spinUrl}`);
 }
 
