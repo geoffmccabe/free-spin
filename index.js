@@ -9,7 +9,7 @@ import {
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import { v4 as uuidv4 } from "uuid";
-import http from "http"; // Added for HTTP server
+import http from "http";
 
 dotenv.config();
 
@@ -29,7 +29,7 @@ requiredEnv.forEach(key => {
   }
 });
 
-// Add minimal HTTP server for Railway
+// Minimal HTTP server for Railway
 http.createServer((req, res) => {
   res.writeHead(200);
   res.end('Bot is running');
@@ -53,7 +53,7 @@ let lastLeaderboardPost = "";
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (error) => {
-  console.error('Unhandled promise rejection:', error);
+  console.error('Unhandled promise rejection:', error.message, error.stack);
 });
 
 // Handle SIGTERM for graceful shutdown
@@ -94,7 +94,7 @@ process.on('SIGTERM', async () => {
     );
     console.log('Slash commands registered successfully');
   } catch (error) {
-    console.error('Failed to register slash commands:', error);
+    console.error('Failed to register slash commands:', error.message, error.stack);
     process.exit(1);
   }
 })();
@@ -102,6 +102,7 @@ process.on('SIGTERM', async () => {
 async function handleVerifyCommand(user, channel) {
   try {
     const discord_id = user.id;
+    console.log(`Fetching spin token for discord_id: ${discord_id}`);
     const { data: existing, error } = await supabase
       .from("spin_tokens")
       .select("*")
@@ -109,20 +110,29 @@ async function handleVerifyCommand(user, channel) {
       .eq("used", false)
       .single();
 
-    if (error && error.code !== 'PGRST116') { // PGRST116: no rows found
-      throw new Error(`Supabase error: ${error.message}`);
+    if (error && error.code !== 'PGRST116') {
+      console.error(`Supabase query error: ${error.message}, code: ${error.code}`);
+      throw new Error(`Supabase query failed: ${error.message}`);
     }
 
     let token = existing?.token;
     if (!token) {
+      console.log(`No existing token, generating new token for ${discord_id}`);
       token = uuidv4();
-      await supabase.from("spin_tokens").insert({ token, discord_id });
+      const { error: insertError } = await supabase
+        .from("spin_tokens")
+        .insert({ token, discord_id });
+      if (insertError) {
+        console.error(`Supabase insert error: ${insertError.message}`);
+        throw new Error(`Failed to insert token: ${insertError.message}`);
+      }
     }
 
     const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/index.html?token=${token}`;
+    console.log(`Sending spin URL: ${spinUrl}`);
     channel.send(`🎯 <@${discord_id}> Click to spin the wheel:\n🔗 ${spinUrl}`);
   } catch (error) {
-    console.error('Error in handleVerifyCommand:', error);
+    console.error('Error in handleVerifyCommand:', error.message, error.stack);
     channel.send('❌ Failed to generate spin link. Try again later.');
   }
 }
@@ -135,7 +145,10 @@ async function fetchLeaderboardText() {
       .order("total", { ascending: false })
       .limit(10);
 
-    if (error) throw new Error(`Supabase error: ${error.message}`);
+    if (error) {
+      console.error(`Supabase leaderboard error: ${error.message}`);
+      throw new Error(`Supabase error: ${error.message}`);
+    }
     if (!data) return "Error fetching leaderboard.";
 
     return data
@@ -145,7 +158,7 @@ async function fetchLeaderboardText() {
       )
       .join("\n");
   } catch (error) {
-    console.error('Error fetching leaderboard:', error);
+    console.error('Error fetching leaderboard:', error.message);
     return "Error fetching leaderboard.";
   }
 }
@@ -208,7 +221,7 @@ setInterval(
         lastLeaderboardPost = leaderboardText;
       }
     } catch (error) {
-      console.error('Error posting leaderboard:', error);
+      console.error('Error posting leaderboard:', error.message);
     }
   },
   60 * 60 * 1000,
@@ -220,7 +233,7 @@ setInterval(
     await client.login(process.env.DISCORD_TOKEN);
     console.log('Bot logged in successfully');
   } catch (error) {
-    console.error('Failed to login to Discord:', error);
+    console.error('Failed to login to Discord:', error.message, error.stack);
     process.exit(1);
   }
 })();
