@@ -86,10 +86,10 @@
           duration: 5,
           spins: 8,
           callbackFinished: function (indicatedSegment) {
-            if (indicatedSegment && indicatedSegment.text === announcedPrize) {
+            if (announcedPrize && indicatedSegment.text === announcedPrize) {
               showAlert("You won: " + announcedPrize);
             } else {
-              showAlert("Error: Spin result mismatch");
+              showAlert("You won: " + announcedPrize || "Error: No prize received");
             }
             wheelSpinning = false;
             document.getElementById("spin-button").disabled = false;
@@ -117,7 +117,6 @@
         if (wheelSpinning) return;
         wheelSpinning = true;
         document.getElementById("spin-button").disabled = true;
-        theWheel.startAnimation();
         try {
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
@@ -141,6 +140,7 @@
             document.getElementById("spin-button").disabled = false;
             return;
           }
+          theWheel.startAnimation();
           const center = (seg.startAngle + seg.endAngle) / 2;
           const stopAngle = (center + 360) % 360;
           theWheel.animation.stopAngle = stopAngle;
