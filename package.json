@@ -7,9 +7,11 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.5",
-    "discord.js": "^14.14.1",
+    "@supabase/supabase-js": "^2.45.4",
+    "discord.js": "^14.16.1",
     "dotenv": "^16.4.5",
-    "uuid": "^9.0.1"
+    "uuid": "^10.0.0",
+    "@solana/web3.js": "^1.95.3",
+    "@solana/spl-token": "^0.4.8"
   }
 }
