@@ -5,6 +5,7 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
+  InteractionResponseType,
 } from "discord.js";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
@@ -143,10 +144,10 @@ async function handleVerifyCommand(user, channel) {
 
     const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/index.html?token=${token}`;
     console.log(`Generated spin URL: ${spinUrl}`);
-    channel.send(`🎯 <@${discord_id}> Click to spin the wheel:\n🔗 ${spinUrl}`);
+    await channel.send(`🎯 <@${discord_id}> Click to spin the wheel:\n🔗 ${spinUrl}`);
   } catch (error) {
     console.error('handleVerifyCommand error:', error.message, error.stack);
-    channel.send('❌ Failed to generate spin link. Try again later.');
+    await channel.send('❌ Failed to generate spin link. Try again later.');
   }
 }
 
@@ -196,13 +197,13 @@ client.on("interactionCreate", async (interaction) => {
     interaction.commandName === "dailyspin"
   ) {
     if (channel.name !== SPIN_CHANNEL_NAME) {
-      await interaction.reply({
+      await interaction.respond({
         content: "Please use this command in #🔄-free-spin",
-        ephemeral: true,
+        flags: 64, // Ephemeral response
       });
       return;
     }
-    await interaction.reply({ content: "Processing spin...", ephemeral: true });
+    await interaction.respond({ type: InteractionResponseType.DeferredChannelMessageWithSource });
     await handleVerifyCommand(interaction.user, channel);
     await interaction.editReply({ content: "Spin link sent!" });
   }
@@ -211,7 +212,7 @@ client.on("interactionCreate", async (interaction) => {
     interaction.commandName === "leaders" ||
     interaction.commandName === "leaderboard"
   ) {
-    await interaction.reply({ content: "Fetching leaderboard...", ephemeral: true });
+    await interaction.respond({ type: InteractionResponseType.DeferredChannelMessageWithSource });
     const leaderboard = await fetchLeaderboardText();
     await interaction.editReply({
       content: `🏆 **Current Top 10 Winners:**\n\n${leaderboard}`,
@@ -225,26 +226,4 @@ setInterval(
       const channel = client.channels.cache.find(
         (c) => c.name === SPIN_CHANNEL_NAME,
       );
-      if (!channel || !channel.isTextBased()) return;
-
-      const leaderboardText = await fetchLeaderboardText();
-      if (leaderboardText !== lastLeaderboardPost) {
-        channel.send(`🏆 **Updated Leaderboard:**\n\n${leaderboardText}`);
-        lastLeaderboardPost = leaderboardText;
-      }
-    } catch (error) {
-      console.error('Leaderboard post error:', error.message);
-    }
-  },
-  60 * 60 * 1000,
-);
-
-(async () => {
-  try {
-    await client.login(process.env.DISCORD_TOKEN);
-    console.log('Bot logged in successfully');
-  } catch (error) {
-    console.error('Discord login error:', error.message);
-    process.exit(1);
-  }
-})();
+      if (!channel ||
