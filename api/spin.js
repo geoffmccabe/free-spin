@@ -11,9 +11,10 @@ TOKEN_PROGRAM_ID = splToken.TOKEN_PROGRAM_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const HAROLD_TOKEN_MINT = new PublicKey("3vgopg7xm3EWkXfxmWPUpcf7g939hecfqg18sLuXDzVt");
 
-const connection = new Connection('https://api.mainnet-beta.solana.com');
+const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 export default async function handler(req, res) {
@@ -27,11 +28,13 @@ export default async function handler(req, res) {
 
   try {
     if (req.method !== 'POST') {
+      console.error("Invalid method:", req.method);
       return res.status(405).json({ error: 'Method not allowed' });
     }
 
     const { token } = req.body;
     if (!token) {
+      console.error("No token provided");
       return res.status(400).json({ error: 'No token provided' });
     }
 
@@ -42,7 +45,7 @@ export default async function handler(req, res) {
       .single();
 
     if (tokenError || !tokenRow || tokenRow.used) {
-      console.error("Token error:", tokenError || "Used or invalid token");
+      console.error("Token error:", tokenError?.message || "Used or invalid token");
       return res.status(400).json({ error: 'Invalid or used token' });
     }
 
@@ -67,6 +70,7 @@ export default async function handler(req, res) {
     }
 
     if (recentSpins.length >= dailySpinLimit) {
+      console.error("Daily spin limit reached for:", tokenRow.discord_id);
       return res.status(400).json({ error: 'Daily spin limit reached' });
     }
 
@@ -116,7 +120,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid user wallet address' });
     }
 
-    let fromTokenAccount;
+    let fromTokenAccount, toTokenAccount;
     try {
       fromTokenAccount = await getOrCreateAssociatedTokenAccount(
         connection,
@@ -124,24 +128,16 @@ export default async function handler(req, res) {
         HAROLD_TOKEN_MINT,
         fundingWallet.publicKey
       );
-      console.log("From token account:", fromTokenAccount.address.toString());
-    } catch (err) {
-      console.error("From token account error:", err.message);
-      return res.status(500).json({ error: 'Failed to create funding token account' });
-    }
-
-    let toTokenAccount;
-    try {
       toTokenAccount = await getOrCreateAssociatedTokenAccount(
         connection,
         fundingWallet,
         HAROLD_TOKEN_MINT,
         userWallet
       );
-      console.log("To token account:", toTokenAccount.address.toString());
+      console.log("Token accounts loaded:", fromTokenAccount.address.toString(), toTokenAccount.address.toString());
     } catch (err) {
-      console.error("To token account error:", err.message);
-      return res.status(500).json({ error: 'Failed to create user token account' });
+      console.error("Token account error:", err.message);
+      return res.status(500).json({ error: 'Failed to create token account: ' + err.message });
     }
 
     const tx = new Transaction().add(
@@ -157,9 +153,9 @@ export default async function handler(req, res) {
 
     let txSignature;
     try {
-      txSignature = await connection.sendTransaction(tx, [fundingWallet]);
+      txSignature = await connection.sendTransaction(tx, [fundingWallet], { skipPreflight: true });
       console.log("Transaction sent:", txSignature);
-      await connection.confirmTransaction(txSignature);
+      await connection.confirmTransaction(txSignature, 'confirmed');
       console.log("Transaction confirmed:", txSignature);
     } catch (err) {
       console.error("Transaction error:", err.message);
@@ -169,21 +165,4 @@ export default async function handler(req, res) {
     await supabase
       .from('spin_tokens')
       .update({ used: true, reward: reward.amount })
-      .eq('token', token);
-
-    await supabase
-      .from('daily_spins')
-      .insert({ discord_id: tokenRow.discord_id, reward: reward.amount });
-
-    await supabase.rpc('increment_wallet_total', {
-      wallet_address: tokenRow.wallet_address,
-      reward_amount: reward.amount
-    });
-
-    console.log("Returning: segmentIndex:", selectedIndex, "Prize:", reward.text);
-    res.status(200).json({ prize: reward.text, segmentIndex: selectedIndex });
-  } catch (err) {
-    console.error('Spin API error:', err.message);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-}
+      .eq('token
