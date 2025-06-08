@@ -42,6 +42,21 @@
       font-size: 18px;
       cursor: pointer;
     }
+    .alert {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #f44336;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 5px;
+      z-index: 100;
+      user-select: text;
+      -webkit-user-select: text;
+      -moz-user-select: text;
+      -ms-user-select: text;
+    }
   </style>
 </head>
 <body>
@@ -72,9 +87,9 @@
           spins: 8,
           callbackFinished: function (indicatedSegment) {
             if (indicatedSegment && indicatedSegment.text === announcedPrize) {
-              alert("You won: " + announcedPrize);
+              showAlert("You won: " + announcedPrize);
             } else {
-              alert("Error: Spin result mismatch");
+              showAlert("Error: Spin result mismatch");
             }
             wheelSpinning = false;
             document.getElementById("spin-button").disabled = false;
@@ -85,9 +100,17 @@
       let wheelSpinning = false;
       const token = new URLSearchParams(window.location.search).get("token");
       if (!token) {
-        alert("No token provided.");
+        showAlert("No token provided.");
         document.getElementById("spin-button").disabled = true;
         return;
+      }
+
+      function showAlert(message) {
+        const alert = document.createElement('div');
+        alert.className = 'alert';
+        alert.textContent = message;
+        document.body.appendChild(alert);
+        setTimeout(() => alert.remove(), 5000);
       }
 
       document.getElementById("spin-button").addEventListener("click", async () => {
@@ -103,7 +126,7 @@
           });
           const data = await res.json();
           if (!res.ok || typeof data.segmentIndex !== "number") {
-            alert("Spin failed: " + (data.error || "invalid result"));
+            showAlert("Spin failed: " + (data.error || "invalid result"));
             theWheel.stopAnimation(false);
             wheelSpinning = false;
             document.getElementById("spin-button").disabled = false;
@@ -112,7 +135,7 @@
           const segmentNumber = data.segmentIndex + 1;
           const seg = theWheel.segments[segmentNumber];
           if (!seg) {
-            alert("Spin failed. Segment missing.");
+            showAlert("Spin failed. Segment missing.");
             theWheel.stopAnimation(false);
             wheelSpinning = false;
             document.getElementById("spin-button").disabled = false;
@@ -124,7 +147,7 @@
           announcedPrize = data.prize;
         } catch (err) {
           console.error(err);
-          alert("Spin crashed. Try again later.");
+          showAlert("Spin crashed. Try again later.");
           theWheel.stopAnimation(false);
           wheelSpinning = false;
           document.getElementById("spin-button").disabled = false;
