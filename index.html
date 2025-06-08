@@ -56,6 +56,7 @@
       -webkit-user-select: text;
       -moz-user-select: text;
       -ms-user-select: text;
+      cursor: pointer;
     }
   </style>
 </head>
@@ -109,14 +110,15 @@
         const alert = document.createElement('div');
         alert.className = 'alert';
         alert.textContent = message;
+        alert.onclick = () => alert.remove();
         document.body.appendChild(alert);
-        setTimeout(() => alert.remove(), 5000);
       }
 
       document.getElementById("spin-button").addEventListener("click", async () => {
         if (wheelSpinning) return;
         wheelSpinning = true;
         document.getElementById("spin-button").disabled = true;
+        theWheel.startAnimation();
         try {
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
@@ -126,7 +128,7 @@
           const data = await res.json();
           if (!res.ok || typeof data.segmentIndex !== "number") {
             showAlert("Spin failed: " + (data.error || "invalid result"));
-            theWheel.stopAnimation(false);
+            if (theWheel.animation) theWheel.stopAnimation(false);
             wheelSpinning = false;
             document.getElementById("spin-button").disabled = false;
             return;
@@ -135,12 +137,11 @@
           const seg = theWheel.segments[segmentNumber];
           if (!seg) {
             showAlert("Spin failed. Segment missing.");
-            theWheel.stopAnimation(false);
+            if (theWheel.animation) theWheel.stopAnimation(false);
             wheelSpinning = false;
             document.getElementById("spin-button").disabled = false;
             return;
           }
-          theWheel.startAnimation();
           const center = (seg.startAngle + seg.endAngle) / 2;
           const stopAngle = (center + 360) % 360;
           theWheel.animation.stopAngle = stopAngle;
@@ -148,7 +149,7 @@
         } catch (err) {
           console.error(err);
           showAlert("Spin crashed. Try again later.");
-          theWheel.stopAnimation(false);
+          if (theWheel.animation) theWheel.stopAnimation(false);
           wheelSpinning = false;
           document.getElementById("spin-button").disabled = false;
         }
