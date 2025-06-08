@@ -122,7 +122,8 @@
             body: JSON.stringify({ token })
           });
           const data = await res.json();
-          if (!res.ok || typeof data.segmentIndex !== "number") {
+          console.log("API response:", data);
+          if (!res.ok || typeof data.segmentIndex !== "number" || !data.prize) {
             showAlert("Spin failed: " + (data.error || "invalid result"));
             if (theWheel.animation) theWheel.stopAnimation(false);
             wheelSpinning = false;
@@ -132,7 +133,7 @@
           const segmentNumber = data.segmentIndex + 1;
           const seg = theWheel.segments[segmentNumber];
           if (!seg) {
-            showAlert("Spin failed. Segment missing.");
+            showAlert("Spin failed: Segment missing.");
             if (theWheel.animation) theWheel.stopAnimation(false);
             wheelSpinning = false;
             document.getElementById("spin-button").disabled = false;
@@ -141,9 +142,9 @@
           const center = (seg.startAngle + seg.endAngle) / 2;
           const stopAngle = (center + 360) % 360;
           theWheel.animation.stopAngle = stopAngle;
-          announcedPrize = data.prize || "Unknown prize";
+          announcedPrize = data.prize;
         } catch (err) {
-          console.error(err);
+          console.error("Fetch error:", err.message);
           showAlert("Spin crashed: " + err.message);
           if (theWheel.animation) theWheel.stopAnimation(false);
           wheelSpinning = false;
