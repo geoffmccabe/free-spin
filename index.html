@@ -51,7 +51,7 @@
   </div>
   <button id="spin-button">SPIN</button>
   <script>
-    window.onload = async function () {
+    window.onload = function () {
       const segments = [
         { fillStyle: "#f39c12", text: "3 $HAROLD" },
         { fillStyle: "#1abc9c", text: "30 $HAROLD" },
@@ -61,9 +61,6 @@
         { fillStyle: "#f1c40f", text: "30000 $HAROLD" }
       ];
       let announcedPrize = null;
-      let spinResult = null;
-      let wheelSpinning = false;
-
       const theWheel = new Winwheel({
         canvasId: "wheelcanvas",
         numSegments: segments.length,
@@ -74,8 +71,8 @@
           duration: 5,
           spins: 8,
           callbackFinished: function (indicatedSegment) {
-            if (spinResult && indicatedSegment.text === spinResult.prize) {
-              alert("You won: " + spinResult.prize);
+            if (indicatedSegment && indicatedSegment.text === announcedPrize) {
+              alert("You won: " + announcedPrize);
             } else {
               alert("Error: Spin result mismatch");
             }
@@ -85,6 +82,7 @@
         }
       });
 
+      let wheelSpinning = false;
       const token = new URLSearchParams(window.location.search).get("token");
       if (!token) {
         alert("No token provided.");
@@ -92,44 +90,47 @@
         return;
       }
 
-      // Pre-fetch spin result
-      try {
-        const res = await fetch("https://solspin.lightningworks.io/api/spin", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token })
-        });
-        const data = await res.json();
-        if (!res.ok || typeof data.segmentIndex !== "number") {
-          alert("Spin failed: " + (data.error || "invalid result"));
-          document.getElementById("spin-button").disabled = true;
-          return;
-        }
-        spinResult = data;
-        announcedPrize = data.prize;
-      } catch (err) {
-        console.error(err);
-        alert("Spin crashed. Try again later.");
-        document.getElementById("spin-button").disabled = true;
-        return;
-      }
-
-      document.getElementById("spin-button").addEventListener("click", () => {
-        if (wheelSpinning || !spinResult) return;
+      document.getElementById("spin-button").addEventListener("click", async () => {
+        if (wheelSpinning) return;
         wheelSpinning = true;
         document.getElementById("spin-button").disabled = true;
-        const segmentNumber = spinResult.segmentIndex + 1;
-        const seg = theWheel.segments[segmentNumber];
-        if (!seg) {
-          alert("Spin failed. Segment missing.");
+        theWheel.startAnimation();
+        try {
+          const res = await fetch("https://solspin.lightningworks.io/api/spin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token })
+          });
+          const data = await res.json();
+          if (!res.ok || typeof data.segmentIndex !== "number") {
+            alert("Spin failed: " + (data.error || "invalid result"));
+            theWheel.stopAnimation(false);
+            wheelSpinning = false;
+            document.getElementById("spin-button").disabled = false;
+            return;
+          }
+          const segmentNumber = data.segmentIndex + 1;
+          const seg = theWheel.segments[segmentNumber];
+          if (!seg) {
+            alert("Spin failed. Segment missing.");
+            theWheel.stopAnimation(false);
+            wheelSpinning = false;
+            document.getElementById("spin-button").disabled = false;
+            return;
+          }
+          const center = (seg.startAngle + seg.endAngle) / 2;
+          const stopAngle = (center + 360) % 360;
+          theWheel.animation.stopAngle = stopAngle;
+          announcedPrize = data.prize;
+        } catch (err) {
+          console.error(err);
+          alert("Spin crashed. Try again later.");
+          theWheel.stopAnimation(false);
           wheelSpinning = false;
           document.getElementById("spin-button").disabled = false;
-          return;
         }
-        const center = (seg.startAngle + seg.endAngle) / 2;
-        const stopAngle = (center + 360) % 360;
-        theWheel.animation.stopAngle = stopAngle;
-        theWheel.startAnimation();
       });
     };
-  </script
+  </script>
+</body>
+</html>
