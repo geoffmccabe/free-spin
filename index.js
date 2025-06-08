@@ -147,6 +147,9 @@ async function handleVerifyCommand(user, channel, interaction) {
   } catch (error) {
     console.error('handleVerifyCommand error:', error.message, error.stack);
     await channel.send('❌ Failed to generate spin link. Try again later.');
+    if (interaction) {
+      await interaction.followUp({ content: 'Error processing spin.', ephemeral: true });
+    }
   }
 }
 
