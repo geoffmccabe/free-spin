@@ -87,11 +87,7 @@
           duration: 5,
           spins: 8,
           callbackFinished: function (indicatedSegment) {
-            if (announcedPrize && indicatedSegment.text === announcedPrize) {
-              showAlert("You won: " + announcedPrize);
-            } else {
-              showAlert("You won: " + announcedPrize || "Error: No prize received");
-            }
+            showAlert(announcedPrize ? "You won: " + announcedPrize : "Error: No prize received");
             wheelSpinning = false;
             document.getElementById("spin-button").disabled = false;
           }
