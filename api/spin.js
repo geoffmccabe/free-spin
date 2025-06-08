@@ -38,17 +38,23 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No token provided' });
     }
 
+    console.log("Fetching spin token:", token);
     const { data: tokenRow, error: tokenError } = await supabase
       .from('spin_tokens')
       .select('*')
       .eq('token', token)
       .single();
 
-    if (tokenError || !tokenRow || tokenRow.used) {
-      console.error("Token error:", tokenError?.message || "Used or invalid token");
+    if (tokenError || !tokenRow) {
+      console.error("Token query error:", tokenError?.message || "No token found");
       return res.status(400).json({ error: 'Invalid or used token' });
     }
+    if (tokenRow.used) {
+      console.error("Token already used:", token);
+      return res.status(400).json({ error: 'Token already used' });
+    }
 
+    console.log("Fetching spin limit for wallet:", tokenRow.wallet_address);
     const { data: limitRow, error: limitError } = await supabase
       .from('spin_limits')
       .select('daily_spin_limit')
@@ -56,7 +62,9 @@ export default async function handler(req, res) {
       .single();
 
     const dailySpinLimit = limitRow?.daily_spin_limit || 1;
+    console.log("Daily spin limit:", dailySpinLimit);
 
+    console.log("Checking recent spins for:", tokenRow.discord_id);
     const { data: recentSpins, error: spinError } = await supabase
       .from('daily_spins')
       .select('id')
@@ -95,7 +103,7 @@ export default async function handler(req, res) {
     }
 
     const reward = rewardOptions[selectedIndex];
-    console.log("Selected Index:", selectedIndex, "Reward:", reward.text, "Amount:", reward.amount);
+    console.log("Selected reward:", { index: selectedIndex, text: reward.text, amount: reward.amount });
 
     if (!FUNDING_WALLET_PRIVATE_KEY) {
       console.error("Missing FUNDING_WALLET_PRIVATE_KEY");
@@ -134,7 +142,7 @@ export default async function handler(req, res) {
         HAROLD_TOKEN_MINT,
         userWallet
       );
-      console.log("Token accounts loaded:", fromTokenAccount.address.toString(), toTokenAccount.address.toString());
+      console.log("Token accounts:", fromTokenAccount.address.toString(), toTokenAccount.address.toString());
     } catch (err) {
       console.error("Token account error:", err.message);
       return res.status(500).json({ error: 'Failed to create token account: ' + err.message });
@@ -162,7 +170,27 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Transaction failed: ' + err.message });
     }
 
+    console.log("Updating spin token:", token);
     await supabase
       .from('spin_tokens')
       .update({ used: true, reward: reward.amount })
-      .eq('token
+      .eq('token', token);
+
+    console.log("Inserting daily spin:", tokenRow.discord_id);
+    await supabase
+      .from('daily_spins')
+      .insert({ discord_id: tokenRow.discord_id, reward: reward.amount });
+
+    console.log("Updating wallet totals:", tokenRow.wallet_address);
+    await supabase.rpc('increment_wallet_total', {
+      wallet_address: tokenRow.wallet_address,
+      reward_amount: reward.amount
+    });
+
+    console.log("Returning response:", { segmentIndex: selectedIndex, prize: reward.text });
+    return res.status(200).json({ segmentIndex: selectedIndex, prize: reward.text });
+  } catch (err) {
+    console.error("API error:", err.message, err.stack);
+    return res.status(500).json({ error: 'Internal server error: ' + err.message });
+  }
+}
