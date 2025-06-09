@@ -53,10 +53,12 @@
       border-radius: 5px;
       z-index: 100;
       user-select: text;
-      -webkit-user-select: text;
-      -moz-user-select: text;
-      -ms-user-select: text;
       cursor: pointer;
+    }
+    #error-message {
+      margin-top: 20px;
+      color: #f44336;
+      font-size: 16px;
     }
   </style>
 </head>
@@ -66,12 +68,14 @@
     <canvas id="wheelcanvas" width="500" height="500"></canvas>
   </div>
   <button id="spin-button">SPIN</button>
+  <div id="error-message"></div>
   <script>
     window.onload = function () {
       let segments = [];
       let tokenName = '';
       let announcedPrize = null;
       let theWheel = null;
+      let wheelSpinning = false;
 
       const token = new URLSearchParams(window.location.search).get("token");
       if (!token) {
@@ -80,7 +84,6 @@
         return;
       }
 
-      // Fetch token configuration to initialize wheel
       async function initializeWheel() {
         try {
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
@@ -90,8 +93,11 @@
           });
           const data = await res.json();
           console.log("Initial API response:", data);
+
           if (!res.ok || !data.tokenConfig) {
-            showAlert("Failed to load token configuration: " + (data.error || "invalid response"));
+            const errorMsg = data.error || "Failed to load token configuration";
+            showAlert(errorMsg);
+            document.getElementById("error-message").textContent = errorMsg;
             document.getElementById("spin-button").disabled = true;
             return;
           }
@@ -119,16 +125,16 @@
               }
             }
           });
+          document.getElementById("spin-button").disabled = false;
         } catch (err) {
           console.error("Initial fetch error:", err.message);
           showAlert("Failed to initialize wheel: " + err.message);
+          document.getElementById("error-message").textContent = "Failed to initialize wheel: " + err.message;
           document.getElementById("spin-button").disabled = true;
         }
       }
 
       initializeWheel();
-
-      let wheelSpinning = false;
 
       function showAlert(message) {
         const alert = document.createElement('div');
@@ -147,13 +153,14 @@
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token })
+            body: JSON.stringify({ token, spin: true })
           });
           const data = await res.json();
           console.log("Spin API response:", data);
           if (!res.ok || typeof data.segmentIndex !== "number" || !data.prize) {
             showAlert("Spin failed: " + (data.error || "invalid result"));
-            if (theWheel.animation) theWheel.stopAnimation(false);
+            theWheel.stopAnimation(false);
+            document.getElementById("error-message").textContent = data.error || "Spin failed";
             wheelSpinning = false;
             document.getElementById("spin-button").disabled = false;
             return;
@@ -162,7 +169,8 @@
           const seg = theWheel.segments[segmentNumber];
           if (!seg) {
             showAlert("Spin failed: Segment missing.");
-            if (theWheel.animation) theWheel.stopAnimation(false);
+            theWheel.stopAnimation(false);
+            document.getElementById("error-message").textContent = "Segment missing";
             wheelSpinning = false;
             document.getElementById("spin-button").disabled = false;
             return;
@@ -173,8 +181,9 @@
           announcedPrize = data.prize;
         } catch (err) {
           console.error("Spin fetch error:", err.message);
-          showAlert("Spin crashed: " + err.message);
-          if (theWheel.animation) theWheel.stopAnimation(false);
+          showAlert("Spin failed: " + err.message);
+          document.getElementById("error-message").textContent = "Spin failed: " + err.message;
+          theWheel.stopAnimation(false);
           wheelSpinning = false;
           document.getElementById("spin-button").disabled = false;
         }
