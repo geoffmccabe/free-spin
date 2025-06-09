@@ -71,19 +71,50 @@ process.on('SIGTERM', async () => {
         body: [
           new SlashCommandBuilder()
             .setName("spin")
-            .setDescription("Spin the wheel to win $HAROLD tokens"),
+            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
           new SlashCommandBuilder()
             .setName("freespin")
-            .setDescription("Spin the wheel to win $HAROLD tokens"),
+            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
           new SlashCommandBuilder()
             .setName("dailyspin")
-            .setDescription("Spin the wheel to win $HAROLD tokens"),
+            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
+          new SlashCommandBuilder()
+            .setName("mywallet")
+            .setDescription("Link your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address")
+                .setRequired(true)),
+          new SlashCommandBuilder()
+            .setName("addmywallet")
+            .setDescription("Link your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address")
+                .setRequired(true)),
+          new SlashCommandBuilder()
+            .setName("myaddr")
+            .setDescription("Link your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address")
+                .setRequired(true)),
+          new SlashCommandBuilder()
+            .setName("myaddress")
+            .setDescription("Link your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address")
+                .setRequired(true)),
           new SlashCommandBuilder()
             .setName("leaders")
             .setDescription("View the current leaderboard"),
           new SlashCommandBuilder()
             .setName("leaderboard")
             .setDescription("Alias for /leaders"),
+          new SlashCommandBuilder()
+            .setName("help")
+            .setDescription("View available commands"),
         ],
       },
     );
@@ -94,33 +125,137 @@ process.on('SIGTERM', async () => {
   }
 })();
 
+async function handleWalletCommand(user, channel, interaction, walletAddress) {
+  try {
+    const discord_id = user.id;
+    console.log(`Processing wallet registration for discord_id: ${discord_id}`);
+
+    // Validate Solana wallet address (44 characters, base58)
+    const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{43,44}$/;
+    if (!walletRegex.test(walletAddress)) {
+      await channel.send(`❌ <@${discord_id}> Invalid Solana wallet address. Please provide a valid address.`);
+      if (interaction) {
+        await interaction.editReply({ content: 'Invalid address.' });
+      }
+      return;
+    }
+
+    // Check if wallet is already registered
+    const { data: existingUser, error: userError } = await supabase
+      .from('users')
+      .select('wallet_address')
+      .eq('discord_id', discord_id)
+      .single();
+
+    if (userError && userError.code !== 'PGRST116') {
+      console.error(`User query error: ${userError.message}, code: ${userError.code}`);
+      throw new Error(`Database error: ${userError.message}`);
+    }
+
+    if (existingUser) {
+      await channel.send(`❌ <@${discord_id}> Wallet already linked: ${existingUser.wallet_address}. To update, use /mywallet <new_address> again.`);
+      if (interaction) {
+        await interaction.editReply({ content: 'Wallet already linked.' });
+      }
+      return;
+    }
+
+    // Register wallet
+    const { error: insertError } = await supabase
+      .from('users')
+      .upsert({ discord_id, wallet_address: walletAddress });
+
+    if (insertError) {
+      console.error(`Wallet insert error: ${insertError.message}, code: ${insertError.code}`);
+      throw new Error(`Failed to link wallet: ${insertError.message}`);
+    }
+
+    await channel.send(`✅ <@${discord_id}> Wallet linked: ${walletAddress}`);
+    if (interaction) {
+      await interaction.editReply({ content: 'Wallet linked!' });
+    }
+  } catch (error) {
+    console.error('handleWalletCommand error:', error.message, error.stack);
+    await channel.send(`❌ <@${discord_id}> Failed to link wallet. Try again later.`);
+    if (interaction) {
+      await interaction.editReply({ content: 'Error linking wallet.' });
+    }
+  }
+}
+
 async function handleVerifyCommand(user, channel, interaction) {
   try {
     const discord_id = user.id;
     console.log(`Processing spin for discord_id: ${discord_id}`);
 
+    // Check if user has a registered wallet
     const { data: userData, error: userError } = await supabase
       .from('users')
       .select('wallet_address')
       .eq('discord_id', discord_id)
       .single();
 
-    if (userError) {
-      console.error(`User lookup error: ${userError.message}, code: ${userError.code}`);
-      throw new Error(`Database error: ${userError.message}`);
-    }
-    if (!userData) {
-      console.error(`No user found for discord_id: ${discord_id}`);
-      throw new Error('User not registered. Please verify your wallet.');
+    if (userError || !userData) {
+      console.error(`User lookup error: ${userError?.message || 'No wallet found'}, code: ${userError?.code}`);
+      await channel.send(`❌ <@${discord_id}> Please link your wallet first with /mywallet <your_solana_address>!`);
+      if (interaction) {
+        await interaction.editReply({ content: 'No wallet linked.' });
+      }
+      return;
     }
 
     const wallet_address = userData.wallet_address;
+
+    // Select a random active token from wheel_configurations
+    const { data: tokens, error: tokenError } = await supabase
+      .from('wheel_configurations')
+      .select('contract_address')
+      .eq('active', true);
+
+    if (tokenError || !tokens || tokens.length === 0) {
+      console.error(`Token query error: ${tokenError?.message || 'No active tokens found'}`);
+      throw new Error('No active tokens available');
+    }
+
+    const randomToken = tokens[Math.floor(Math.random() * tokens.length)];
+    const contract_address = randomToken.contract_address;
+
+    // Check daily spin limit per token
+    const { data: limitRow, error: limitError } = await supabase
+      .from('spin_limits')
+      .select('daily_spin_limit')
+      .eq('wallet_address', wallet_address)
+      .single();
+
+    const dailySpinLimit = limitRow?.daily_spin_limit || 1;
+
+    const { data: recentSpins, error: spinError } = await supabase
+      .from('daily_spins')
+      .select('id')
+      .eq('discord_id', discord_id)
+      .eq('contract_address', contract_address)
+      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+      .limit(dailySpinLimit + 1);
+
+    if (spinError) {
+      console.error(`Spin check error: ${spinError.message}`);
+      throw new Error(`Failed to check spin limit: ${spinError.message}`);
+    }
+
+    if (recentSpins.length >= dailySpinLimit) {
+      await channel.send(`❌ <@${discord_id}> You've reached your daily spin limit for this token. Try again tomorrow!`);
+      if (interaction) {
+        await interaction.editReply({ content: 'Daily spin limit reached.' });
+      }
+      return;
+    }
 
     const { data: existing, error } = await supabase
       .from("spin_tokens")
       .select("*")
       .eq("discord_id", discord_id)
       .eq("used", false)
+      .eq("contract_address", contract_address)
       .single();
 
     if (error && error.code !== 'PGRST116') {
@@ -134,7 +269,7 @@ async function handleVerifyCommand(user, channel, interaction) {
       token = uuidv4();
       const { error: insertError } = await supabase
         .from("spin_tokens")
-        .insert({ token, discord_id, wallet_address });
+        .insert({ token, discord_id, wallet_address, contract_address });
       if (insertError) {
         console.error(`Token insert error: ${insertError.message}, code: ${insertError.code}`);
         throw new Error(`Failed to save token: ${insertError.message}`);
@@ -144,11 +279,14 @@ async function handleVerifyCommand(user, channel, interaction) {
     const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/index.html?token=${token}`;
     console.log(`Generated spin URL: ${spinUrl}`);
     await channel.send(`🎯 <@${discord_id}> Click to spin the wheel:\n🔗 ${spinUrl}`);
+    if (interaction) {
+      await interaction.editReply({ content: 'Spin link sent!' });
+    }
   } catch (error) {
     console.error('handleVerifyCommand error:', error.message, error.stack);
     await channel.send('❌ Failed to generate spin link. Try again later.');
     if (interaction) {
-      await interaction.followUp({ content: 'Error processing spin.', ephemeral: true });
+      await interaction.editReply({ content: 'Error processing spin.' });
     }
   }
 }
@@ -197,7 +335,17 @@ client.on("interactionCreate", async (interaction) => {
     }
     await interaction.deferReply({ ephemeral: true });
     await handleVerifyCommand(interaction.user, channel, interaction);
-    await interaction.editReply({ content: "Spin link sent!" });
+  }
+
+  if (
+    interaction.commandName === "mywallet" ||
+    interaction.commandName === "addmywallet" ||
+    interaction.commandName === "myaddr" ||
+    interaction.commandName === "myaddress"
+  ) {
+    const walletAddress = interaction.options.getString("address");
+    await interaction.deferReply({ ephemeral: true });
+    await handleWalletCommand(interaction.user, channel, interaction, walletAddress);
   }
 
   if (
@@ -209,6 +357,17 @@ client.on("interactionCreate", async (interaction) => {
     await interaction.editReply({
       content: `🏆 **Current Top 10 Winners:**\n\n${leaderboard}`,
     });
+  }
+
+  if (interaction.commandName === "help") {
+    await interaction.deferReply({ ephemeral: true });
+    const helpText = `
+Available Commands:
+- **/mywallet <address>**: Link your Solana wallet address.
+- **/spin**: Spin the wheel to win $HAROLD or other tokens (in #🔄-free-spin).
+- **/leaders**: View the current leaderboard.
+    `;
+    await interaction.editReply({ content: helpText });
   }
 });
 
