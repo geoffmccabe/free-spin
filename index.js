@@ -38,8 +38,9 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages,
   ],
-  partials: [Partials.Channel, Partials.Message],
+  partials: [Partials.Channel, Partials.Message, Partials.User],
 });
 
 const supabase = createClient(
@@ -113,7 +114,7 @@ process.on('SIGTERM', async () => {
             .setName("leaderboard")
             .setDescription("Alias for /leaders"),
           new SlashCommandBuilder()
-            .setName("help")
+            .setName("spinhelp")
             .setDescription("View available commands"),
         ],
       },
@@ -145,7 +146,7 @@ async function handleWalletCommand(user, channel, interaction) {
     }
 
     if (!existingUser && !walletAddress) {
-      await interaction.editReply({ content: 'Please provide a Solana wallet address to link.' });
+      await interaction.editReply({ content: 'Please provide a Solana wallet address to link.', ephemeral: true });
       return;
     }
 
@@ -153,7 +154,7 @@ async function handleWalletCommand(user, channel, interaction) {
       // Validate and register new wallet
       const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{43,44}$/;
       if (!walletRegex.test(walletAddress)) {
-        await interaction.editReply({ content: 'Invalid Solana wallet address. Please provide a valid address.' });
+        await interaction.editReply({ content: 'Invalid Solana wallet address. Please provide a valid address.', ephemeral: true });
         return;
       }
 
@@ -166,17 +167,20 @@ async function handleWalletCommand(user, channel, interaction) {
         throw new Error(`Failed to link wallet: ${insertError.message}`);
       }
 
-      await interaction.editReply({ content: `✅ Wallet linked: ${walletAddress}` });
+      await interaction.editReply({ content: `✅ Wallet linked: ${walletAddress}`, ephemeral: true });
       return;
     }
 
-    // Existing wallet found, prompt for update
-    await interaction.editReply({
-      content: `Your current wallet is: ${existingUser.wallet_address}\nReply with a new Solana address to update, or press Enter to keep it (30 seconds).`
-    });
+    // Existing wallet found, prompt for update via DM
+    await interaction.editReply({ content: 'Check your DMs to update your wallet.', ephemeral: true });
+
+    const dmChannel = await user.createDM();
+    const promptMessage = await dmChannel.send(
+      `Your current wallet is: ${existingUser.wallet_address}\nReply with a new Solana address to update, or press Enter to keep it (30 seconds).`
+    );
 
     const filter = m => m.author.id === user.id;
-    const collector = channel.createMessageCollector({ filter, time: 30000, max: 1 });
+    const collector = dmChannel.createMessageCollector({ filter, time: 30000, max: 1 });
 
     collector.on('collect', async (message) => {
       const newAddress = message.content.trim();
@@ -207,12 +211,12 @@ async function handleWalletCommand(user, channel, interaction) {
 
     collector.on('end', collected => {
       if (collected.length === 0) {
-        channel.send(`<@${discord_id}> No response received. Keeping current wallet: ${existingUser.wallet_address}`);
+        dmChannel.send(`No response received. Keeping current wallet: ${existingUser.wallet_address}`);
       }
     });
   } catch (error) {
     console.error('handleWalletCommand error:', error.message, error.stack);
-    await interaction.editReply({ content: '❌ Failed to process wallet command. Try again later.' });
+    await interaction.editReply({ content: '❌ Failed to process wallet command. Try again later.', ephemeral: true });
   }
 }
 
@@ -232,7 +236,7 @@ async function handleVerifyCommand(user, channel, interaction) {
       console.error(`User lookup error: ${userError?.message || 'No wallet found'}, code: ${userError?.code}`);
       await channel.send(`❌ <@${discord_id}> Please link your wallet first with /mywallet <your_solana_address>!`);
       if (interaction) {
-        await interaction.editReply({ content: 'No wallet linked.' });
+        await interaction.editReply({ content: 'No wallet linked.', ephemeral: true });
       }
       return;
     }
@@ -278,7 +282,7 @@ async function handleVerifyCommand(user, channel, interaction) {
     if (recentSpins.length >= dailySpinLimit) {
       await channel.send(`❌ <@${discord_id}> You've reached your daily spin limit for this token. Try again tomorrow!`);
       if (interaction) {
-        await interaction.editReply({ content: 'Daily spin limit reached.' });
+        await interaction.editReply({ content: 'Daily spin limit reached.', ephemeral: true });
       }
       return;
     }
@@ -313,13 +317,13 @@ async function handleVerifyCommand(user, channel, interaction) {
     console.log(`Generated spin URL: ${spinUrl}`);
     await channel.send(`🎯 <@${discord_id}> Click to spin the wheel:\n🔗 ${spinUrl}`);
     if (interaction) {
-      await interaction.editReply({ content: 'Spin link sent!' });
+      await interaction.editReply({ content: 'Spin link sent!', ephemeral: true });
     }
   } catch (error) {
     console.error('handleVerifyCommand error:', error.message, error.stack);
     await channel.send('❌ Failed to generate spin link. Try again later.');
     if (interaction) {
-      await interaction.editReply({ content: 'Error processing spin.' });
+      await interaction.editReply({ content: 'Error processing spin.', ephemeral: true });
     }
   }
 }
@@ -391,7 +395,7 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 
-  if (interaction.commandName === "help") {
+  if (interaction.commandName === "spinhelp") {
     await interaction.deferReply({ ephemeral: true });
     const helpText = `
 Available Commands:
