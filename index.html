@@ -107,8 +107,10 @@
           tokenName = data.tokenConfig.token_name;
           const payouts = data.tokenConfig.payout_amounts;
           segments = payouts.map((amount, index) => ({
-            fillStyle: ["#f39c12", "#1abc9c", "#2ecc71", "#3498db", "#e74c3c", "#f1c40f"][index],
-            text: `${amount} ${tokenName}`
+            fillStyle: ["#f39c12", "#1abc9c", "#2ecc71", "#3498db", "#e74c3c", "#f1c40f"][index % 6],
+            text: `${amount} ${tokenName}`,
+            textFillStyle: 'white',
+            textFontSize: 16
           }));
 
           // Set overlay image
@@ -120,6 +122,9 @@
             numSegments: segments.length,
             segments: segments,
             pointerAngle: 0,
+            textAlignment: 'center',
+            textOrientation: 'curved',
+            textFontFamily: 'Arial',
             animation: {
               type: "spinToStop",
               duration: 5,
@@ -133,6 +138,12 @@
               }
             }
           });
+
+          // Sync overlay with wheel animation
+          theWheel.animation.callbackBefore = () => {
+            TweenMax.to("#wheel-overlay", 5, { rotation: "+=2880", ease: Power2.easeOut });
+          };
+
           document.getElementById("spin-button").disabled = false;
         } catch (err) {
           console.error("Initial fetch error:", err.message);
