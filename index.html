@@ -109,7 +109,7 @@
           segments = payouts.map((amount, index) => ({
             fillStyle: ["#f39c12", "#1abc9c", "#2ecc71", "#3498db", "#e74c3c", "#f1c40f"][index % 6],
             text: `${amount} ${tokenName}`,
-            textFillStyle: 'black', // Changed to black for visibility on transparent overlay
+            textFillStyle: 'black',
             textFontSize: 18,
             textFontFamily: 'Arial',
             textAlignment: 'center',
@@ -124,7 +124,7 @@
 
           // Set overlay image
           const overlay = document.getElementById("wheel-overlay");
-          overlay.src = data.tokenConfig.image_url || '/img/default_image.webp';
+          overlay.src = data.tokenConfig.image_url || '/img/default_wheel.webp';
 
           theWheel = new Winwheel({
             canvasId: "wheelcanvas",
@@ -140,7 +140,7 @@
             animation: {
               type: "spinToStop",
               duration: 5,
-              spins: 3600 / 360, // Preserve existing spins (10 full rotations)
+              spins: 3600 / 360,
               callbackFinished: function () {
                 if (announcedPrize) {
                   document.getElementById("error-message").textContent = `You won: ${announcedPrize}`;
@@ -156,7 +156,7 @@
           // Sync overlay with wheel animation
           theWheel.animation.callbackBefore = () => {
             TweenMax.set("#wheel-overlay", { rotation: theWheel.rotationAngle });
-            TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut }); // Match 10 spins
+            TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut });
           };
 
           document.getElementById("spin-button").disabled = false;
@@ -169,10 +169,12 @@
 
       initializeWheel();
 
-      document.getElementById("spin-button").addEventListener("click", async () => {
+      // Single event listener to prevent double spins
+      const spinButton = document.getElementById("spin-button");
+      spinButton.addEventListener("click", async () => {
         if (wheelSpinning || !theWheel) return;
         wheelSpinning = true;
-        document.getElementById("spin-button").disabled = true;
+        spinButton.disabled = true;
         theWheel.startAnimation();
         try {
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
@@ -190,7 +192,7 @@
             }
             theWheel.stopAnimation(false);
             wheelSpinning = false;
-            document.getElementById("spin-button").disabled = true;
+            spinButton.disabled = true;
             return;
           }
           const segmentNumber = data.segmentIndex + 1;
@@ -199,7 +201,7 @@
             document.getElementById("error-message").textContent = "Spin failed: Segment missing";
             theWheel.stopAnimation(false);
             wheelSpinning = false;
-            document.getElementById("spin-button").disabled = true;
+            spinButton.disabled = true;
             return;
           }
           const center = (seg.startAngle + seg.endAngle) / 2;
@@ -211,9 +213,9 @@
           document.getElementById("error-message").textContent = "Spin failed: " + err.message;
           theWheel.stopAnimation(false);
           wheelSpinning = false;
-          document.getElementById("spin-button").disabled = true;
+          spinButton.disabled = true;
         }
-      });
+      }, { once: false }); // Ensure single listener
     };
   </script>
 </body>
