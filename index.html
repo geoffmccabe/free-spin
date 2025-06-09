@@ -18,6 +18,7 @@
     #wheel-container {
       position: relative;
       width: 500px;
+      height: 500px;
       margin: 50px auto 0;
     }
     #pointer {
@@ -33,8 +34,19 @@
       z-index: 10;
     }
     canvas {
-      display: block;
-      margin: 0 auto;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+    #wheel-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 500px;
+      height: 500px;
+      z-index: 2;
+      pointer-events: none;
     }
     #spin-button {
       margin-top: 30px;
@@ -53,6 +65,7 @@
   <div id="wheel-container">
     <div id="pointer"></div>
     <canvas id="wheelcanvas" width="500" height="500"></canvas>
+    <img id="wheel-overlay" src="" alt="Wheel Overlay" />
   </div>
   <button id="spin-button">SPIN</button>
   <div id="error-message"></div>
@@ -97,6 +110,10 @@
             fillStyle: ["#f39c12", "#1abc9c", "#2ecc71", "#3498db", "#e74c3c", "#f1c40f"][index],
             text: `${amount} ${tokenName}`
           }));
+
+          // Set overlay image
+          const overlay = document.getElementById("wheel-overlay");
+          overlay.src = data.tokenConfig.image_url || '/img/default_wheel.webp';
 
           theWheel = new Winwheel({
             canvasId: "wheelcanvas",
