@@ -80,32 +80,32 @@ process.on('SIGTERM', async () => {
             .setDescription("Spin the wheel to win $HAROLD or other tokens"),
           new SlashCommandBuilder()
             .setName("mywallet")
-            .setDescription("Link or update your Solana wallet address")
+            .setDescription("Link or view your Solana wallet address")
             .addStringOption(option =>
               option.setName("address")
-                .setDescription("Your Solana wallet address")
-                .setRequired(true)),
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
           new SlashCommandBuilder()
             .setName("addmywallet")
-            .setDescription("Link or update your Solana wallet address")
+            .setDescription("Link or view your Solana wallet address")
             .addStringOption(option =>
               option.setName("address")
-                .setDescription("Your Solana wallet address")
-                .setRequired(true)),
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
           new SlashCommandBuilder()
             .setName("myaddr")
-            .setDescription("Link or update your Solana wallet address")
+            .setDescription("Link or view your Solana wallet address")
             .addStringOption(option =>
               option.setName("address")
-                .setDescription("Your Solana wallet address")
-                .setRequired(true)),
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
           new SlashCommandBuilder()
             .setName("myaddress")
-            .setDescription("Link or update your Solana wallet address")
+            .setDescription("Link or view your Solana wallet address")
             .addStringOption(option =>
               option.setName("address")
-                .setDescription("Your Solana wallet address")
-                .setRequired(true)),
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
           new SlashCommandBuilder()
             .setName("leaders")
             .setDescription("View the current leaderboard"),
@@ -128,16 +128,9 @@ process.on('SIGTERM', async () => {
 async function handleWalletCommand(user, channel, interaction, walletAddress) {
   try {
     const discord_id = user.id;
-    console.log(`Processing wallet registration for discord_id: ${discord_id}, address: ${walletAddress}`);
+    console.log(`Processing wallet command for discord_id: ${discord_id}, address: ${walletAddress || 'none'}`);
 
-    // Validate Solana wallet address (44 characters, base58)
-    const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{43,44}$/;
-    if (!walletRegex.test(walletAddress)) {
-      await interaction.editReply({ content: '❌ Invalid Solana wallet address. Please provide a valid address.', ephemeral: true });
-      return;
-    }
-
-    // Check if wallet is already registered
+    // Check if wallet is registered
     const { data: existingUser, error: userError } = await supabase
       .from('users')
       .select('wallet_address')
@@ -150,7 +143,23 @@ async function handleWalletCommand(user, channel, interaction, walletAddress) {
       return;
     }
 
-    // Register or update wallet
+    // No address provided, show current wallet or prompt to link
+    if (!walletAddress) {
+      if (existingUser) {
+        await interaction.editReply({ content: `Your current wallet is: ${existingUser.wallet_address}`, ephemeral: true });
+      } else {
+        await interaction.editReply({ content: '❌ No wallet linked. Use /mywallet <your_solana_address> to link one.', ephemeral: true });
+      }
+      return;
+    }
+
+    // Validate and update/link wallet
+    const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{43,44}$/;
+    if (!walletRegex.test(walletAddress)) {
+      await interaction.editReply({ content: '❌ Invalid Solana wallet address. Please provide a valid address.', ephemeral: true });
+      return;
+    }
+
     const { error: upsertError } = await supabase
       .from('users')
       .upsert({ discord_id, wallet_address: walletAddress });
