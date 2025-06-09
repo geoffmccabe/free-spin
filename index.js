@@ -50,7 +50,7 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
-const SPIN_CHANNEL_NAME = "🔄│free-spin";
+const SPIN_CHANNEL_NAME = "🔄|free-spin";
 let lastLeaderboardPost = "";
 
 process.on('unhandledRejection', (error) => {
@@ -273,10 +273,8 @@ async function fetchLeaderboardText() {
     const { data, error } = await supabase.rpc('fetch_leaderboard_text');
     if (error) throw error;
     
-    if (!data) return 'No leaderboard data available.';
-    
     // Parse leaderboard text and replace discord_id with usernames
-    const lines = data.split('\n');
+    const lines = data ? data.split('\n') : [];
     const guild = client.guilds.cache.get(process.env.DISCORD_GUILD);
     const updatedLines = await Promise.all(lines.map(async (line) => {
       const match = line.match(/: (\d{17,19}) —/);
