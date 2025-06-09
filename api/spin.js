@@ -17,6 +17,7 @@ const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 export default async function handler(req, res) {
+  console.log('Spin API request received:', req.method, req.body);
   res.setHeader('Access-Control-Allow-Origin', 'https://solspin.lightningworks.io');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -54,18 +55,7 @@ export default async function handler(req, res) {
     }
 
     const { discord_id, wallet_address, contract_address } = tokenRow;
-
-    // Verify user has a registered wallet
-    const { data: userData, error: userError } = await supabase
-      .from('users')
-      .select('wallet_address')
-      .eq('discord_id', discord_id)
-      .single();
-
-    if (userError || !userData) {
-      console.error("User not found for discord_id:", discord_id);
-      return res.status(400).json({ error: 'No wallet registered' });
-    }
+    console.log(`Spin token data: discord_id=${discord_id}, wallet=${wallet_address}, contract=${contract_address}`);
 
     // Fetch token configuration
     const { data: tokenConfig, error: configError } = await supabase
@@ -80,7 +70,26 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid token configuration' });
     }
 
+    // Return tokenConfig for initial wheel load
+    if (!req.body.spin) {
+      console.log('Returning token config for wheel initialization');
+      return res.status(200).json({ tokenConfig });
+    }
+
     const { payout_amounts, payout_weights, token_name } = tokenConfig;
+    console.log(`Token config: name=${token_name}, payouts=${payout_amounts}`);
+
+    // Verify user has a registered wallet
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('wallet_address')
+      .eq('discord_id', discord_id)
+      .single();
+
+    if (userError || !userData) {
+      console.error("User not found for discord_id:", discord_id);
+      return res.status(400).json({ error: 'No wallet registered' });
+    }
 
     // Select reward
     const totalWeight = payout_weights.reduce((sum, w) => sum + w, 0);
@@ -155,7 +164,7 @@ export default async function handler(req, res) {
         fromTokenAccount.address,
         toTokenAccount.address,
         fundingWallet.publicKey,
-        rewardAmount * 100000, // Adjust for token decimals (assumes 5 decimals)
+        rewardAmount * 100000, // Adjust for token decimals
         [],
         TOKEN_PROGRAM_ID
       )
