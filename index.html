@@ -155,8 +155,10 @@
 
           // Sync overlay with wheel animation
           theWheel.animation.callbackBefore = () => {
-            TweenMax.set("#wheel-overlay", { rotation: theWheel.rotationAngle });
-            TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut });
+            if (wheelSpinning) {
+              TweenMax.set("#wheel-overlay", { rotation: theWheel.rotationAngle });
+              TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut });
+            }
           };
 
           document.getElementById("spin-button").disabled = false;
@@ -171,12 +173,12 @@
 
       // Single event listener to prevent double spins
       const spinButton = document.getElementById("spin-button");
-      spinButton.addEventListener("click", async () => {
+      let spinHandler = async () => {
         if (wheelSpinning || !theWheel) return;
         wheelSpinning = true;
         spinButton.disabled = true;
-        theWheel.startAnimation();
         try {
+          theWheel.startAnimation();
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -215,7 +217,8 @@
           wheelSpinning = false;
           spinButton.disabled = true;
         }
-      }, { once: false }); // Ensure single listener
+      };
+      spinButton.addEventListener("click", spinHandler);
     };
   </script>
 </body>
