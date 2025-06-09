@@ -146,7 +146,7 @@ async function handleWalletCommand(user, channel, interaction, walletAddress) {
     // No address provided, show current wallet or prompt to link
     if (!walletAddress) {
       if (existingUser) {
-        await interaction.editReply({ content: `Your current wallet is: ${existingUser.wallet_address}`, ephemeral: true });
+        await interaction.editReply({ content: `Your current wallet is: ${existingUser.wallet_address}\nTo update, use /mywallet <new_address>.`, ephemeral: true });
       } else {
         await interaction.editReply({ content: '❌ No wallet linked. Use /mywallet <your_solana_address> to link one.', ephemeral: true });
       }
