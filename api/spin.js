@@ -32,7 +32,7 @@ export default async function handler(req, res) {
       return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    const { token } = req.body;
+    const { token, spin } = req.body;
     if (!token) {
       console.error("No token provided");
       return res.status(400).json({ error: 'No token provided' });
@@ -41,7 +41,7 @@ export default async function handler(req, res) {
     console.log("Fetching spin token:", token);
     const { data: tokenRow, error: tokenError } = await supabase
       .from('spin_tokens')
-      .select('*')
+      .select('discord_id, wallet_address, contract_address')
       .eq('token', token)
       .single();
 
@@ -49,7 +49,7 @@ export default async function handler(req, res) {
       console.error("Token query error:", tokenError?.message || "No token found");
       return res.status(400).json({ error: 'Invalid or used token' });
     }
-    if (tokenRow.used) {
+    if (tokenRow.used && spin) {
       console.error("Token already used:", token);
       return res.status(400).json({ error: 'Token already used' });
     }
@@ -60,7 +60,7 @@ export default async function handler(req, res) {
     // Fetch token configuration
     const { data: tokenConfig, error: configError } = await supabase
       .from('wheel_configurations')
-      .select('payout_amounts, payout_weights, token_name')
+      .select('payout_amounts, payout_weights, token_name, token_id, image_url')
       .eq('contract_address', contract_address)
       .eq('active', true)
       .single();
@@ -71,13 +71,13 @@ export default async function handler(req, res) {
     }
 
     // Return tokenConfig for initial wheel load
-    if (!req.body.spin) {
+    if (!spin) {
       console.log('Returning token config for wheel initialization');
       return res.status(200).json({ tokenConfig });
     }
 
-    const { payout_amounts, payout_weights, token_name } = tokenConfig;
-    console.log(`Token config: name=${token_name}, payouts=${payout_amounts}`);
+    const { payout_amounts, payout_weights, token_name, token_id } = tokenConfig;
+    console.log(`Token config: name=${token_name}, payouts=${payout_amounts}, token_id=${token_id}`);
 
     // Verify user has a registered wallet
     const { data: userData, error: userError } = await supabase
@@ -192,10 +192,11 @@ export default async function handler(req, res) {
       .from('daily_spins')
       .insert({ discord_id, reward: rewardAmount, contract_address });
 
-    console.log("Updating wallet totals:", wallet_address);
+    console.log("Updating wallet totals:", wallet_address, token_id);
     await supabase.rpc('increment_wallet_total', {
       wallet_address,
-      reward_amount: rewardAmount
+      reward_amount: rewardAmount,
+      token_id
     });
 
     console.log("Returning response:", { segmentIndex: selectedIndex, prize: prizeText });
