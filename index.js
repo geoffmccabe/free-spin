@@ -119,10 +119,13 @@ process.on('SIGTERM', async () => {
                 .setRequired(false)),
           new SlashCommandBuilder()
             .setName("leaders")
-            .setDescription("View the current leaderboard"),
+            .setDescription("View the current leaderboard (use /spinleaders instead)"),
           new SlashCommandBuilder()
             .setName("leaderboard")
-            .setDescription("Alias for /leaders"),
+            .setDescription("Alias for /leaders (use /spinleaders instead)"),
+          new SlashCommandBuilder()
+            .setName("spinleaders")
+            .setDescription("View the current leaderboard"),
           new SlashCommandBuilder()
             .setName("spinhelp")
             .setDescription("View available commands"),
@@ -287,7 +290,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.channel.name !== SPIN_CHANNEL_NAME) {
       return interaction.reply({ content: `Please use this command in the #${SPIN_CHANNEL_NAME} channel.`, ephemeral: true });
     }
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ ephemeral: false });
     await handleVerifyCommand(interaction);
   }
 
@@ -296,14 +299,14 @@ client.on("interactionCreate", async (interaction) => {
     await handleWalletCommand(interaction, walletAddress);
   }
 
-  if (["leaders", "leaderboard"].includes(interaction.commandName)) {
+  if (["leaders", "leaderboard", "spinleaders"].includes(interaction.commandName)) {
     await interaction.deferReply();
     const leaderboard = await fetchLeaderboardText();
     await interaction.editReply({ content: `🏆 **Current Top 10 Winners:**\n\n${leaderboard}` });
   }
 
   if (interaction.commandName === "spinhelp") {
-    const helpText = "**/mywallet <address>**: Link your Solana wallet.\n**/spin**: Get a link to spin the wheel.\n**/leaders**: View the leaderboard.";
+    const helpText = "**/mywallet <address>**: Link your Solana wallet.\n**/spin**: Get a link to spin the wheel.\n**/spinleaders**: View the leaderboard.";
     await interaction.reply({ content: helpText, ephemeral: true });
   }
 });
