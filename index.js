@@ -273,8 +273,10 @@ async function fetchLeaderboardText() {
     const { data, error } = await supabase.rpc('fetch_leaderboard_text');
     if (error) throw error;
     
+    if (!data) return 'No leaderboard data available.';
+    
     // Parse leaderboard text and replace discord_id with usernames
-    const lines = data ? data.split('\n') : [];
+    const lines = data.split('\n');
     const guild = client.guilds.cache.get(process.env.DISCORD_GUILD);
     const updatedLines = await Promise.all(lines.map(async (line) => {
       const match = line.match(/: (\d{17,19}) —/);
@@ -287,7 +289,7 @@ async function fetchLeaderboardText() {
         return line.replace(discord_id, username);
       } catch (err) {
         console.error(`Failed to fetch username for discord_id: ${discord_id}`, err);
-        return line; // Fallback to discord_id
+        return line.replace(discord_id, `User_${discord_id}`); // Fallback to generic name
       }
     }));
     
