@@ -139,16 +139,16 @@ async function handleWalletCommand(user, channel, interaction, walletAddress) {
 
     if (userError && userError.code !== 'PGRST116') {
       console.error(`User query error: ${userError.message}, code: ${userError.code}`);
-      await interaction.editReply({ content: '❌ Database error querying user data. Contact support.', ephemeral: true });
+      await interaction.reply({ content: '❌ Database error querying user data. Contact support.', ephemeral: true });
       return;
     }
 
     // No address provided, show current wallet or prompt to link
     if (!walletAddress) {
       if (existingUser) {
-        await interaction.editReply({ content: `Your current wallet is: ${existingUser.wallet_address}\nTo update, use /mywallet <new_address>.`, ephemeral: true });
+        await interaction.reply({ content: `Your current wallet is: ${existingUser.wallet_address}\nTo update, use /mywallet <new_address>.`, ephemeral: true });
       } else {
-        await interaction.editReply({ content: '❌ No wallet linked. Use /mywallet <your_solana_address> to link one.', ephemeral: true });
+        await interaction.reply({ content: '❌ No wallet linked. Use /mywallet <your_solana_address> to link one.', ephemeral: true });
       }
       return;
     }
@@ -156,7 +156,7 @@ async function handleWalletCommand(user, channel, interaction, walletAddress) {
     // Validate and update/link wallet
     const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{43,44}$/;
     if (!walletRegex.test(walletAddress)) {
-      await interaction.editReply({ content: '❌ Invalid Solana wallet address. Please provide a valid address.', ephemeral: true });
+      await interaction.reply({ content: '❌ Invalid Solana wallet address. Please provide a valid address.', ephemeral: true });
       return;
     }
 
@@ -166,15 +166,15 @@ async function handleWalletCommand(user, channel, interaction, walletAddress) {
 
     if (upsertError) {
       console.error(`Wallet upsert error: ${upsertError.message}, code: ${upsertError.code}`);
-      await interaction.editReply({ content: '❌ Failed to save wallet due to database error. Contact support.', ephemeral: true });
+      await interaction.reply({ content: '❌ Failed to save wallet due to database error. Contact support.', ephemeral: true });
       return;
     }
 
     const action = existingUser ? 'updated' : 'linked';
-    await interaction.editReply({ content: `✅ Wallet ${action}: ${walletAddress}`, ephemeral: true });
+    await interaction.reply({ content: `✅ Wallet ${action}: ${walletAddress}`, ephemeral: true });
   } catch (error) {
     console.error('handleWalletCommand error:', error.message, error.stack);
-    await interaction.editReply({ content: '❌ Unexpected error processing wallet. Contact support.', ephemeral: true });
+    await interaction.reply({ content: '❌ Unexpected error processing wallet. Contact support.', ephemeral: true });
   }
 }
 
@@ -194,7 +194,7 @@ async function handleVerifyCommand(user, channel, interaction) {
       console.error(`User lookup error: ${userError?.message || 'No wallet found'}, code: ${userError?.code}`);
       await channel.send(`❌ <@${discord_id}> Please link your wallet first with /mywallet <your_solana_address>!`);
       if (interaction) {
-        await interaction.editReply({ content: 'No wallet linked.', ephemeral: true });
+        await interaction.reply({ content: 'No wallet linked.', ephemeral: true });
       }
       return;
     }
@@ -209,11 +209,14 @@ async function handleVerifyCommand(user, channel, interaction) {
 
     if (tokenError || !tokens || tokens.length === 0) {
       console.error(`Token query error: ${tokenError?.message || 'No active tokens found'}`);
-      throw new Error('No active tokens available');
+      await channel.send(`❌ <@${discord_id}> No active tokens available. Try again later.`);
+      await interaction.reply({ content: 'No active tokens.', ephemeral: true });
+      return;
     }
 
     const randomToken = tokens[Math.floor(Math.random() * tokens.length)];
     const contract_address = randomToken.contract_address;
+    console.log(`Selected token: ${contract_address}`);
 
     // Check daily spin limit per token
     const { data: limitRow, error: limitError } = await supabase
@@ -221,6 +224,11 @@ async function handleVerifyCommand(user, channel, interaction) {
       .select('daily_spin_limit')
       .eq('wallet_address', wallet_address)
       .single();
+
+    if (limitError && limitError.code !== 'PGRST116') {
+      console.error(`Limit query error: ${limitError.message}, code: ${limitError.code}`);
+      throw new Error(`Failed to check spin limit: ${limitError.message}`);
+    }
 
     const dailySpinLimit = limitRow?.daily_spin_limit || 1;
 
@@ -233,15 +241,13 @@ async function handleVerifyCommand(user, channel, interaction) {
       .limit(dailySpinLimit + 1);
 
     if (spinError) {
-      console.error(`Spin check error: ${spinError.message}`);
+      console.error(`Spin check error: ${spinError.message}, code: ${spinError.code}`);
       throw new Error(`Failed to check spin limit: ${spinError.message}`);
     }
 
     if (recentSpins.length >= dailySpinLimit) {
       await channel.send(`❌ <@${discord_id}> You've reached your daily spin limit for this token. Try again tomorrow!`);
-      if (interaction) {
-        await interaction.editReply({ content: 'Daily spin limit reached.', ephemeral: true });
-      }
+      await interaction.reply({ content: 'Daily spin limit reached.', ephemeral: true });
       return;
     }
 
@@ -274,15 +280,11 @@ async function handleVerifyCommand(user, channel, interaction) {
     const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/index.html?token=${token}`;
     console.log(`Generated spin URL: ${spinUrl}`);
     await channel.send(`🎯 <@${discord_id}> Click to spin the wheel:\n🔗 ${spinUrl}`);
-    if (interaction) {
-      await interaction.editReply({ content: 'Spin link sent!', ephemeral: true });
-    }
+    await interaction.reply({ content: 'Spin link sent!', ephemeral: true });
   } catch (error) {
     console.error('handleVerifyCommand error:', error.message, error.stack);
-    await channel.send('❌ Failed to generate spin link. Try again later.');
-    if (interaction) {
-      await interaction.editReply({ content: 'Error processing spin.', ephemeral: true });
-    }
+    await channel.send(`❌ <@${discord_id}> Failed to generate spin link: ${error.message}`);
+    await interaction.reply({ content: `Error processing spin: ${error.message}`, ephemeral: true });
   }
 }
 
@@ -298,7 +300,7 @@ async function fetchLeaderboardText() {
     return data || 'No leaderboard data available.';
   } catch (error) {
     console.error('Leaderboard fetch error:', error.message);
-    return 'Error fetching leaderboard.';
+    return 'Error fetching leaderboard: ' + error.message;
   }
 }
 
@@ -328,7 +330,6 @@ client.on("interactionCreate", async (interaction) => {
       });
       return;
     }
-    await interaction.deferReply({ ephemeral: true });
     await handleVerifyCommand(interaction.user, channel, interaction);
   }
 
@@ -339,7 +340,6 @@ client.on("interactionCreate", async (interaction) => {
     interaction.commandName === "myaddress"
   ) {
     const walletAddress = interaction.options.getString("address");
-    await interaction.deferReply({ ephemeral: true });
     await handleWalletCommand(interaction.user, channel, interaction, walletAddress);
   }
 
@@ -347,22 +347,20 @@ client.on("interactionCreate", async (interaction) => {
     interaction.commandName === "leaders" ||
     interaction.commandName === "leaderboard"
   ) {
-    await interaction.deferReply();
     const leaderboard = await fetchLeaderboardText();
-    await interaction.editReply({
+    await interaction.reply({
       content: `🏆 **Current Top 10 Winners:**\n\n${leaderboard}`,
     });
   }
 
   if (interaction.commandName === "spinhelp") {
-    await interaction.deferReply({ ephemeral: true });
     const helpText = `
 Available Commands:
 - **/mywallet <address>**: Link your Solana wallet address.
 - **/spin**: Spin the wheel to win $HAROLD or other tokens (in #🔄-free-spin).
 - **/leaders**: View the current leaderboard.
     `;
-    await interaction.editReply({ content: helpText });
+    await interaction.reply({ content: helpText, ephemeral: true });
   }
 });
 
