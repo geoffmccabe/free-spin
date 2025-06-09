@@ -39,7 +39,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
-  partials: [Partials.Channel],
+  partials: [Partials.Channel, Partials.Message],
 });
 
 const supabase = createClient(
@@ -80,32 +80,32 @@ process.on('SIGTERM', async () => {
             .setDescription("Spin the wheel to win $HAROLD or other tokens"),
           new SlashCommandBuilder()
             .setName("mywallet")
-            .setDescription("Link your Solana wallet address")
+            .setDescription("Link or update your Solana wallet address")
             .addStringOption(option =>
               option.setName("address")
-                .setDescription("Your Solana wallet address")
-                .setRequired(true)),
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
           new SlashCommandBuilder()
             .setName("addmywallet")
-            .setDescription("Link your Solana wallet address")
+            .setDescription("Link or update your Solana wallet address")
             .addStringOption(option =>
               option.setName("address")
-                .setDescription("Your Solana wallet address")
-                .setRequired(true)),
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
           new SlashCommandBuilder()
             .setName("myaddr")
-            .setDescription("Link your Solana wallet address")
+            .setDescription("Link or update your Solana wallet address")
             .addStringOption(option =>
               option.setName("address")
-                .setDescription("Your Solana wallet address")
-                .setRequired(true)),
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
           new SlashCommandBuilder()
             .setName("myaddress")
-            .setDescription("Link your Solana wallet address")
+            .setDescription("Link or update your Solana wallet address")
             .addStringOption(option =>
               option.setName("address")
-                .setDescription("Your Solana wallet address")
-                .setRequired(true)),
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
           new SlashCommandBuilder()
             .setName("leaders")
             .setDescription("View the current leaderboard"),
@@ -125,20 +125,12 @@ process.on('SIGTERM', async () => {
   }
 })();
 
-async function handleWalletCommand(user, channel, interaction, walletAddress) {
+async function handleWalletCommand(user, channel, interaction) {
   try {
     const discord_id = user.id;
-    console.log(`Processing wallet registration for discord_id: ${discord_id}`);
+    console.log(`Processing wallet command for discord_id: ${discord_id}`);
 
-    // Validate Solana wallet address (44 characters, base58)
-    const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{43,44}$/;
-    if (!walletRegex.test(walletAddress)) {
-      await channel.send(`❌ <@${discord_id}> Invalid Solana wallet address. Please provide a valid address.`);
-      if (interaction) {
-        await interaction.editReply({ content: 'Invalid address.' });
-      }
-      return;
-    }
+    const walletAddress = interaction.options.getString("address");
 
     // Check if wallet is already registered
     const { data: existingUser, error: userError } = await supabase
@@ -152,34 +144,75 @@ async function handleWalletCommand(user, channel, interaction, walletAddress) {
       throw new Error(`Database error: ${userError.message}`);
     }
 
-    if (existingUser) {
-      await channel.send(`❌ <@${discord_id}> Wallet already linked: ${existingUser.wallet_address}. To update, use /mywallet <new_address> again.`);
-      if (interaction) {
-        await interaction.editReply({ content: 'Wallet already linked.' });
-      }
+    if (!existingUser && !walletAddress) {
+      await interaction.editReply({ content: 'Please provide a Solana wallet address to link.' });
       return;
     }
 
-    // Register wallet
-    const { error: insertError } = await supabase
-      .from('users')
-      .upsert({ discord_id, wallet_address: walletAddress });
+    if (!existingUser && walletAddress) {
+      // Validate and register new wallet
+      const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{43,44}$/;
+      if (!walletRegex.test(walletAddress)) {
+        await interaction.editReply({ content: 'Invalid Solana wallet address. Please provide a valid address.' });
+        return;
+      }
 
-    if (insertError) {
-      console.error(`Wallet insert error: ${insertError.message}, code: ${insertError.code}`);
-      throw new Error(`Failed to link wallet: ${insertError.message}`);
+      const { error: insertError } = await supabase
+        .from('users')
+        .upsert({ discord_id, wallet_address: walletAddress });
+
+      if (insertError) {
+        console.error(`Wallet insert error: ${insertError.message}, code: ${insertError.code}`);
+        throw new Error(`Failed to link wallet: ${insertError.message}`);
+      }
+
+      await interaction.editReply({ content: `✅ Wallet linked: ${walletAddress}` });
+      return;
     }
 
-    await channel.send(`✅ <@${discord_id}> Wallet linked: ${walletAddress}`);
-    if (interaction) {
-      await interaction.editReply({ content: 'Wallet linked!' });
-    }
+    // Existing wallet found, prompt for update
+    await interaction.editReply({
+      content: `Your current wallet is: ${existingUser.wallet_address}\nReply with a new Solana address to update, or press Enter to keep it (30 seconds).`
+    });
+
+    const filter = m => m.author.id === user.id;
+    const collector = channel.createMessageCollector({ filter, time: 30000, max: 1 });
+
+    collector.on('collect', async (message) => {
+      const newAddress = message.content.trim();
+      if (!newAddress) {
+        await message.reply(`Keeping current wallet: ${existingUser.wallet_address}`);
+        return;
+      }
+
+      const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{43,44}$/;
+      if (!walletRegex.test(newAddress)) {
+        await message.reply('Invalid Solana wallet address. Wallet not updated.');
+        return;
+      }
+
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ wallet_address: newAddress })
+        .eq('discord_id', discord_id);
+
+      if (updateError) {
+        console.error(`Wallet update error: ${updateError.message}, code: ${updateError.code}`);
+        await message.reply('Failed to update wallet. Try again later.');
+        return;
+      }
+
+      await message.reply(`✅ Wallet updated to: ${newAddress}`);
+    });
+
+    collector.on('end', collected => {
+      if (collected.length === 0) {
+        channel.send(`<@${discord_id}> No response received. Keeping current wallet: ${existingUser.wallet_address}`);
+      }
+    });
   } catch (error) {
     console.error('handleWalletCommand error:', error.message, error.stack);
-    await channel.send(`❌ <@${discord_id}> Failed to link wallet. Try again later.`);
-    if (interaction) {
-      await interaction.editReply({ content: 'Error linking wallet.' });
-    }
+    await interaction.editReply({ content: '❌ Failed to process wallet command. Try again later.' });
   }
 }
 
@@ -343,9 +376,8 @@ client.on("interactionCreate", async (interaction) => {
     interaction.commandName === "myaddr" ||
     interaction.commandName === "myaddress"
   ) {
-    const walletAddress = interaction.options.getString("address");
     await interaction.deferReply({ ephemeral: true });
-    await handleWalletCommand(interaction.user, channel, interaction, walletAddress);
+    await handleWalletCommand(interaction.user, channel, interaction);
   }
 
   if (
