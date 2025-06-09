@@ -42,22 +42,9 @@
       font-size: 18px;
       cursor: pointer;
     }
-    .alert {
-      position: fixed;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: #f44336;
-      color: white;
-      padding: 10px 20px;
-      border-radius: 5px;
-      z-index: 100;
-      user-select: text;
-      cursor: pointer;
-    }
     #error-message {
       margin-top: 20px;
-      color: #f44336;
+      color: white;
       font-size: 16px;
     }
   </style>
@@ -79,7 +66,7 @@
 
       const token = new URLSearchParams(window.location.search).get("token");
       if (!token) {
-        showAlert("No token provided.");
+        document.getElementById("error-message").textContent = "No spin link provided.";
         document.getElementById("spin-button").disabled = true;
         return;
       }
@@ -95,8 +82,7 @@
           console.log("Initial API response:", data);
 
           if (!res.ok || !data.tokenConfig) {
-            const errorMsg = data.error || "Failed to load token configuration";
-            showAlert(errorMsg);
+            const errorMsg = data.error || "Failed to load spin configuration";
             document.getElementById("error-message").textContent = errorMsg;
             document.getElementById("spin-button").disabled = true;
             return;
@@ -119,30 +105,23 @@
               duration: 5,
               spins: 8,
               callbackFinished: function () {
-                showAlert(announcedPrize ? "You won: " + announcedPrize : "Error: No prize received");
+                if (announcedPrize) {
+                  document.getElementById("error-message").textContent = `You won: ${announcedPrize}`;
+                }
                 wheelSpinning = false;
-                document.getElementById("spin-button").disabled = false;
+                document.getElementById("spin-button").disabled = true;
               }
             }
           });
           document.getElementById("spin-button").disabled = false;
         } catch (err) {
           console.error("Initial fetch error:", err.message);
-          showAlert("Failed to initialize wheel: " + err.message);
-          document.getElementById("error-message").textContent = "Failed to initialize wheel: " + err.message;
+          document.getElementById("error-message").textContent = "Failed to initialize spin: " + err.message;
           document.getElementById("spin-button").disabled = true;
         }
       }
 
       initializeWheel();
-
-      function showAlert(message) {
-        const alert = document.createElement('div');
-        alert.className = 'alert';
-        alert.textContent = message;
-        alert.onclick = () => alert.remove();
-        document.body.appendChild(alert);
-      }
 
       document.getElementById("spin-button").addEventListener("click", async () => {
         if (wheelSpinning || !theWheel) return;
@@ -158,21 +137,23 @@
           const data = await res.json();
           console.log("Spin API response:", data);
           if (!res.ok || typeof data.segmentIndex !== "number" || !data.prize) {
-            showAlert("Spin failed: " + (data.error || "invalid result"));
+            if (data.error === "Token already used") {
+              document.getElementById("error-message").textContent = "You have already used your daily free spins.";
+            } else {
+              document.getElementById("error-message").textContent = data.error || "Spin failed";
+            }
             theWheel.stopAnimation(false);
-            document.getElementById("error-message").textContent = data.error || "Spin failed";
             wheelSpinning = false;
-            document.getElementById("spin-button").disabled = false;
+            document.getElementById("spin-button").disabled = true;
             return;
           }
           const segmentNumber = data.segmentIndex + 1;
           const seg = theWheel.segments[segmentNumber];
           if (!seg) {
-            showAlert("Spin failed: Segment missing.");
+            document.getElementById("error-message").textContent = "Spin failed: Segment missing";
             theWheel.stopAnimation(false);
-            document.getElementById("error-message").textContent = "Segment missing";
             wheelSpinning = false;
-            document.getElementById("spin-button").disabled = false;
+            document.getElementById("spin-button").disabled = true;
             return;
           }
           const center = (seg.startAngle + seg.endAngle) / 2;
@@ -181,11 +162,10 @@
           announcedPrize = data.prize;
         } catch (err) {
           console.error("Spin fetch error:", err.message);
-          showAlert("Spin failed: " + err.message);
           document.getElementById("error-message").textContent = "Spin failed: " + err.message;
           theWheel.stopAnimation(false);
           wheelSpinning = false;
-          document.getElementById("spin-button").disabled = false;
+          document.getElementById("spin-button").disabled = true;
         }
       });
     };
