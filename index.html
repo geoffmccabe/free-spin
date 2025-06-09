@@ -82,8 +82,11 @@
           console.log("Initial API response:", data);
 
           if (!res.ok || !data.tokenConfig) {
-            const errorMsg = data.error || "Failed to load spin configuration";
-            document.getElementById("error-message").textContent = errorMsg;
+            if (data.error === "Token already used") {
+              document.getElementById("error-message").textContent = "You have already used your daily free spins.";
+            } else {
+              document.getElementById("error-message").textContent = data.error || "Failed to load spin configuration";
+            }
             document.getElementById("spin-button").disabled = true;
             return;
           }
