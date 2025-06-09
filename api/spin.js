@@ -12,7 +12,6 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-const HAROLD_TOKEN_MINT = new PublicKey("3vgopg7xm3EWkXfxmWPUpcf7g939hecfqg18sLuXDzVt");
 
 const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -54,56 +53,50 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Token already used' });
     }
 
-    console.log("Fetching spin limit for wallet:", tokenRow.wallet_address);
-    const { data: limitRow, error: limitError } = await supabase
-      .from('spin_limits')
-      .select('daily_spin_limit')
-      .eq('wallet_address', tokenRow.wallet_address)
+    const { discord_id, wallet_address, contract_address } = tokenRow;
+
+    // Verify user has a registered wallet
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('wallet_address')
+      .eq('discord_id', discord_id)
       .single();
 
-    const dailySpinLimit = limitRow?.daily_spin_limit || 1;
-    console.log("Daily spin limit:", dailySpinLimit);
-
-    console.log("Checking recent spins for:", tokenRow.discord_id);
-    const { data: recentSpins, error: spinError } = await supabase
-      .from('daily_spins')
-      .select('id')
-      .eq('discord_id', tokenRow.discord_id)
-      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-      .limit(dailySpinLimit + 1);
-
-    if (spinError) {
-      console.error("Spin check error:", spinError.message);
-      return res.status(500).json({ error: 'Failed to check spin limit' });
+    if (userError || !userData) {
+      console.error("User not found for discord_id:", discord_id);
+      return res.status(400).json({ error: 'No wallet registered' });
     }
 
-    if (recentSpins.length >= dailySpinLimit) {
-      console.error("Daily spin limit reached for:", tokenRow.discord_id);
-      return res.status(400).json({ error: 'Daily spin limit reached' });
+    // Fetch token configuration
+    const { data: tokenConfig, error: configError } = await supabase
+      .from('wheel_configurations')
+      .select('payout_amounts, payout_weights, token_name')
+      .eq('contract_address', contract_address)
+      .eq('active', true)
+      .single();
+
+    if (configError || !tokenConfig) {
+      console.error("Token config error:", configError?.message || "No active token found");
+      return res.status(400).json({ error: 'Invalid token configuration' });
     }
 
-    const rewardOptions = [
-      { text: '3 HAROLD', amount: 3, weight: 10000 },
-      { text: '30 HAROLD', amount: 30, weight: 3000 },
-      { text: '100 HAROLD', amount: 100, weight: 300 },
-      { text: '300 HAROLD', amount: 300, weight: 100 },
-      { text: '3000 HAROLD', amount: 3000, weight: 10 },
-      { text: '30000 HAROLD', amount: 30000, weight: 1 }
-    ];
+    const { payout_amounts, payout_weights, token_name } = tokenConfig;
 
-    const totalWeight = rewardOptions.reduce((sum, r) => sum + r.weight, 0);
+    // Select reward
+    const totalWeight = payout_weights.reduce((sum, w) => sum + w, 0);
     let rand = Math.random() * totalWeight;
     let selectedIndex = 0;
-    for (let i = 0; i < rewardOptions.length; i++) {
-      rand -= rewardOptions[i].weight;
+    for (let i = 0; i < payout_weights.length; i++) {
+      rand -= payout_weights[i];
       if (rand <= 0) {
         selectedIndex = i;
         break;
       }
     }
 
-    const reward = rewardOptions[selectedIndex];
-    console.log("Selected reward:", { index: selectedIndex, text: reward.text, amount: reward.amount });
+    const rewardAmount = payout_amounts[selectedIndex];
+    const prizeText = `${rewardAmount} ${token_name}`;
+    console.log("Selected reward:", { index: selectedIndex, prize: prizeText, amount: rewardAmount });
 
     if (!FUNDING_WALLET_PRIVATE_KEY) {
       console.error("Missing FUNDING_WALLET_PRIVATE_KEY");
@@ -121,11 +114,20 @@ export default async function handler(req, res) {
 
     let userWallet;
     try {
-      userWallet = new PublicKey(tokenRow.wallet_address);
+      userWallet = new PublicKey(wallet_address);
       console.log("User wallet loaded:", userWallet.toString());
     } catch (err) {
-      console.error("Invalid user wallet address:", tokenRow.wallet_address, err.message);
+      console.error("Invalid user wallet address:", wallet_address, err.message);
       return res.status(400).json({ error: 'Invalid user wallet address' });
+    }
+
+    let tokenMint;
+    try {
+      tokenMint = new PublicKey(contract_address);
+      console.log("Token mint loaded:", tokenMint.toString());
+    } catch (err) {
+      console.error("Invalid token mint address:", contract_address, err.message);
+      return res.status(400).json({ error: 'Invalid token mint address' });
     }
 
     let fromTokenAccount, toTokenAccount;
@@ -133,13 +135,13 @@ export default async function handler(req, res) {
       fromTokenAccount = await getOrCreateAssociatedTokenAccount(
         connection,
         fundingWallet,
-        HAROLD_TOKEN_MINT,
+        tokenMint,
         fundingWallet.publicKey
       );
       toTokenAccount = await getOrCreateAssociatedTokenAccount(
         connection,
         fundingWallet,
-        HAROLD_TOKEN_MINT,
+        tokenMint,
         userWallet
       );
       console.log("Token accounts:", fromTokenAccount.address.toString(), toTokenAccount.address.toString());
@@ -153,7 +155,7 @@ export default async function handler(req, res) {
         fromTokenAccount.address,
         toTokenAccount.address,
         fundingWallet.publicKey,
-        reward.amount * 100000,
+        rewardAmount * 100000, // Adjust for token decimals (assumes 5 decimals)
         [],
         TOKEN_PROGRAM_ID
       )
@@ -173,22 +175,22 @@ export default async function handler(req, res) {
     console.log("Updating spin token:", token);
     await supabase
       .from('spin_tokens')
-      .update({ used: true, reward: reward.amount })
+      .update({ used: true, reward: rewardAmount })
       .eq('token', token);
 
-    console.log("Inserting daily spin:", tokenRow.discord_id);
+    console.log("Inserting daily spin:", discord_id);
     await supabase
       .from('daily_spins')
-      .insert({ discord_id: tokenRow.discord_id, reward: reward.amount });
+      .insert({ discord_id, reward: rewardAmount, contract_address });
 
-    console.log("Updating wallet totals:", tokenRow.wallet_address);
+    console.log("Updating wallet totals:", wallet_address);
     await supabase.rpc('increment_wallet_total', {
-      wallet_address: tokenRow.wallet_address,
-      reward_amount: reward.amount
+      wallet_address,
+      reward_amount: rewardAmount
     });
 
-    console.log("Returning response:", { segmentIndex: selectedIndex, prize: reward.text });
-    return res.status(200).json({ segmentIndex: selectedIndex, prize: reward.text });
+    console.log("Returning response:", { segmentIndex: selectedIndex, prize: prizeText });
+    return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText });
   } catch (err) {
     console.error("API error:", err.message, err.stack);
     return res.status(500).json({ error: 'Internal server error: ' + err.message });
