@@ -174,7 +174,7 @@ async function handleWalletCommand(user, channel, interaction, walletAddress) {
     await interaction.reply({ content: `✅ Wallet ${action}: ${walletAddress}`, ephemeral: true });
   } catch (error) {
     console.error('handleWalletCommand error:', error.message, error.stack);
-    await interaction.reply({ content: '❌ Unexpected error processing wallet. Contact support.', ephemeral: true });
+    await interaction.reply({ content: '❌ Unexpected error processing wallet: ' + error.message, ephemeral: true });
   }
 }
 
@@ -284,8 +284,8 @@ async function handleVerifyCommand(user, channel, interaction) {
     await interaction.reply({ content: 'Spin link sent!', ephemeral: true });
   } catch (error) {
     console.error(`handleVerifyCommand error for discord_id: ${discord_id}:`, error.message, error.stack);
-    await channel.send(`❌ <@${discord_id}> Failed to generate spin link: ${error.message}`);
     await interaction.reply({ content: `Error processing spin: ${error.message}`, ephemeral: true });
+    await channel.send(`❌ <@${discord_id}> Failed to generate spin link: ${error.message}`);
   }
 }
 
