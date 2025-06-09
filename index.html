@@ -38,6 +38,7 @@
       top: 0;
       left: 0;
       z-index: 1;
+      opacity: 0; /* Invisible Winwheel canvas */
     }
     #wheel-overlay {
       position: absolute;
@@ -47,6 +48,24 @@
       height: 500px;
       z-index: 2;
       pointer-events: none;
+    }
+    #text-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 500px;
+      height: 500px;
+      z-index: 3;
+      pointer-events: none;
+    }
+    .segment-text {
+      position: absolute;
+      color: black;
+      font-size: 18px;
+      font-family: Arial, sans-serif;
+      text-align: center;
+      width: 100px;
+      transform-origin: center 250px;
     }
     #spin-button {
       margin-top: 30px;
@@ -66,6 +85,7 @@
     <div id="pointer"></div>
     <canvas id="wheelcanvas" width="500" height="500"></canvas>
     <img id="wheel-overlay" src="" alt="Wheel Overlay" />
+    <div id="text-layer"></div>
   </div>
   <button id="spin-button">SPIN</button>
   <div id="error-message"></div>
@@ -107,13 +127,7 @@
           tokenName = data.tokenConfig.token_name;
           const payouts = data.tokenConfig.payout_amounts || [];
           segments = payouts.map((amount, index) => ({
-            fillStyle: ["#f39c12", "#1abc9c", "#2ecc71", "#3498db", "#e74c3c", "#f1c40f"][index % 6],
-            text: `${amount} ${tokenName}`,
-            textFillStyle: 'black',
-            textFontSize: 18,
-            textFontFamily: 'Arial',
-            textAlignment: 'center',
-            textMargin: 0
+            text: `${amount} ${tokenName}` // Minimal segment for mechanics
           }));
 
           if (segments.length === 0) {
@@ -126,16 +140,12 @@
           const overlay = document.getElementById("wheel-overlay");
           overlay.src = data.tokenConfig.image_url || '/img/default_wheel.webp';
 
+          // Initialize Winwheel (invisible, for mechanics only)
           theWheel = new Winwheel({
             canvasId: "wheelcanvas",
             numSegments: segments.length,
             segments: segments,
             outerRadius: 250,
-            textOrientation: 'curved',
-            textFontSize: 18,
-            textFontFamily: 'Arial',
-            textFillStyle: 'black',
-            textAlignment: 'center',
             pointerAngle: 0,
             animation: {
               type: "spinToStop",
@@ -153,11 +163,26 @@
             }
           });
 
-          // Sync overlay with wheel animation
+          // Create text layer
+          const textLayer = document.getElementById("text-layer");
+          const numSegments = segments.length;
+          const anglePerSegment = 360 / numSegments;
+          segments.forEach((segment, index) => {
+            const textDiv = document.createElement("div");
+            textDiv.className = "segment-text";
+            textDiv.textContent = segment.text;
+            const angle = (index * anglePerSegment) - (anglePerSegment / 2);
+            textDiv.style.transform = `rotate(${angle}deg) translateY(-230px)`;
+            textLayer.appendChild(textDiv);
+          });
+
+          // Sync overlay and text layer with wheel animation
           theWheel.animation.callbackBefore = () => {
             if (wheelSpinning) {
               TweenMax.set("#wheel-overlay", { rotation: theWheel.rotationAngle });
+              TweenMax.set("#text-layer", { rotation: theWheel.rotationAngle });
               TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut });
+              TweenMax.to("#text-layer", 5, { rotation: "+=3600", ease: Power2.easeOut });
             }
           };
 
