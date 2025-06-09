@@ -68,39 +68,67 @@
   <button id="spin-button">SPIN</button>
   <script>
     window.onload = function () {
-      const segments = [
-        { fillStyle: "#f39c12", text: "3 $HAROLD" },
-        { fillStyle: "#1abc9c", text: "30 $HAROLD" },
-        { fillStyle: "#2ecc71", text: "100 $HAROLD" },
-        { fillStyle: "#3498db", text: "300 $HAROLD" },
-        { fillStyle: "#e74c3c", text: "3000 $HAROLD" },
-        { fillStyle: "#f1c40f", text: "30000 $HAROLD" }
-      ];
+      let segments = [];
+      let tokenName = '';
       let announcedPrize = null;
-      const theWheel = new Winwheel({
-        canvasId: "wheelcanvas",
-        numSegments: segments.length,
-        segments: segments,
-        pointerAngle: 0,
-        animation: {
-          type: "spinToStop",
-          duration: 5,
-          spins: 8,
-          callbackFinished: function () {
-            showAlert(announcedPrize ? "You won: " + announcedPrize : "Error: No prize received");
-            wheelSpinning = false;
-            document.getElementById("spin-button").disabled = false;
-          }
-        }
-      });
+      let theWheel = null;
 
-      let wheelSpinning = false;
       const token = new URLSearchParams(window.location.search).get("token");
       if (!token) {
         showAlert("No token provided.");
         document.getElementById("spin-button").disabled = true;
         return;
       }
+
+      // Fetch token configuration to initialize wheel
+      async function initializeWheel() {
+        try {
+          const res = await fetch("https://solspin.lightningworks.io/api/spin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token })
+          });
+          const data = await res.json();
+          console.log("Initial API response:", data);
+          if (!res.ok || !data.tokenConfig) {
+            showAlert("Failed to load token configuration: " + (data.error || "invalid response"));
+            document.getElementById("spin-button").disabled = true;
+            return;
+          }
+
+          tokenName = data.tokenConfig.token_name;
+          const payouts = data.tokenConfig.payout_amounts;
+          segments = payouts.map((amount, index) => ({
+            fillStyle: ["#f39c12", "#1abc9c", "#2ecc71", "#3498db", "#e74c3c", "#f1c40f"][index],
+            text: `${amount} ${tokenName}`
+          }));
+
+          theWheel = new Winwheel({
+            canvasId: "wheelcanvas",
+            numSegments: segments.length,
+            segments: segments,
+            pointerAngle: 0,
+            animation: {
+              type: "spinToStop",
+              duration: 5,
+              spins: 8,
+              callbackFinished: function () {
+                showAlert(announcedPrize ? "You won: " + announcedPrize : "Error: No prize received");
+                wheelSpinning = false;
+                document.getElementById("spin-button").disabled = false;
+              }
+            }
+          });
+        } catch (err) {
+          console.error("Initial fetch error:", err.message);
+          showAlert("Failed to initialize wheel: " + err.message);
+          document.getElementById("spin-button").disabled = true;
+        }
+      }
+
+      initializeWheel();
+
+      let wheelSpinning = false;
 
       function showAlert(message) {
         const alert = document.createElement('div');
@@ -111,7 +139,7 @@
       }
 
       document.getElementById("spin-button").addEventListener("click", async () => {
-        if (wheelSpinning) return;
+        if (wheelSpinning || !theWheel) return;
         wheelSpinning = true;
         document.getElementById("spin-button").disabled = true;
         theWheel.startAnimation();
@@ -122,7 +150,7 @@
             body: JSON.stringify({ token })
           });
           const data = await res.json();
-          console.log("API response:", data);
+          console.log("Spin API response:", data);
           if (!res.ok || typeof data.segmentIndex !== "number" || !data.prize) {
             showAlert("Spin failed: " + (data.error || "invalid result"));
             if (theWheel.animation) theWheel.stopAnimation(false);
@@ -144,7 +172,7 @@
           theWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
         } catch (err) {
-          console.error("Fetch error:", err.message);
+          console.error("Spin fetch error:", err.message);
           showAlert("Spin crashed: " + err.message);
           if (theWheel.animation) theWheel.stopAnimation(false);
           wheelSpinning = false;
