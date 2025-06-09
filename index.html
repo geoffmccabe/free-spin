@@ -105,33 +105,47 @@
           }
 
           tokenName = data.tokenConfig.token_name;
-          const payouts = data.tokenConfig.payout_amounts;
+          const payouts = data.tokenConfig.payout_amounts || [];
           segments = payouts.map((amount, index) => ({
             fillStyle: ["#f39c12", "#1abc9c", "#2ecc71", "#3498db", "#e74c3c", "#f1c40f"][index % 6],
             text: `${amount} ${tokenName}`,
-            textFillStyle: 'white',
-            textFontSize: 16
+            textFillStyle: 'black', // Changed to black for visibility on transparent overlay
+            textFontSize: 18,
+            textFontFamily: 'Arial',
+            textAlignment: 'center',
+            textMargin: 0
           }));
+
+          if (segments.length === 0) {
+            document.getElementById("error-message").textContent = "No payout amounts configured.";
+            document.getElementById("spin-button").disabled = true;
+            return;
+          }
 
           // Set overlay image
           const overlay = document.getElementById("wheel-overlay");
-          overlay.src = data.tokenConfig.image_url || '/img/default_wheel.webp';
+          overlay.src = data.tokenConfig.image_url || '/img/default_image.webp';
 
           theWheel = new Winwheel({
             canvasId: "wheelcanvas",
             numSegments: segments.length,
             segments: segments,
-            pointerAngle: 0,
-            textAlignment: 'center',
+            outerRadius: 250,
             textOrientation: 'curved',
+            textFontSize: 18,
             textFontFamily: 'Arial',
+            textFillStyle: 'black',
+            textAlignment: 'center',
+            pointerAngle: 0,
             animation: {
               type: "spinToStop",
               duration: 5,
-              spins: 8,
+              spins: 3600 / 360, // Preserve existing spins (10 full rotations)
               callbackFinished: function () {
                 if (announcedPrize) {
                   document.getElementById("error-message").textContent = `You won: ${announcedPrize}`;
+                } else {
+                  document.getElementById("error-message").textContent = "Spin completed, but no prize received.";
                 }
                 wheelSpinning = false;
                 document.getElementById("spin-button").disabled = true;
@@ -141,7 +155,8 @@
 
           // Sync overlay with wheel animation
           theWheel.animation.callbackBefore = () => {
-            TweenMax.to("#wheel-overlay", 5, { rotation: "+=2880", ease: Power2.easeOut });
+            TweenMax.set("#wheel-overlay", { rotation: theWheel.rotationAngle });
+            TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut }); // Match 10 spins
           };
 
           document.getElementById("spin-button").disabled = false;
@@ -167,7 +182,7 @@
           });
           const data = await res.json();
           console.log("Spin API response:", data);
-          if (!res.ok || typeof data.segmentIndex !== "number" || !data.prize) {
+          if (!res.ok || typeof data.segmentIndex !== 'number' || !data.prize) {
             if (data.error === "Token already used") {
               document.getElementById("error-message").textContent = "You have already used your daily free spins.";
             } else {
