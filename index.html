@@ -14,6 +14,7 @@
       text-align: center;
       margin: 0;
       padding: 0;
+      overflow-y: hidden; /* Prevent vertical scrollbar */
     }
     #wheel-container {
       position: relative;
@@ -60,12 +61,13 @@
     }
     .segment-text {
       position: absolute;
-      color: black;
+      color: white; /* Visible against graphic */
       font-size: 18px;
       font-family: Arial, sans-serif;
       text-align: center;
       width: 100px;
       transform-origin: center 250px;
+      left: 200px; /* Center text horizontally */
     }
     #spin-button {
       margin-top: 30px;
@@ -126,8 +128,8 @@
 
           tokenName = data.tokenConfig.token_name;
           const payouts = data.tokenConfig.payout_amounts || [];
-          segments = payouts.map((amount, index) => ({
-            text: `${amount} ${tokenName}` // Minimal segment for mechanics
+          segments = payouts.map((amount) => ({
+            text: `${amount} ${tokenName}`
           }));
 
           if (segments.length === 0) {
@@ -171,8 +173,8 @@
             const textDiv = document.createElement("div");
             textDiv.className = "segment-text";
             textDiv.textContent = segment.text;
-            const angle = (index * anglePerSegment) - (anglePerSegment / 2);
-            textDiv.style.transform = `rotate(${angle}deg) translateY(-230px)`;
+            const angle = index * anglePerSegment;
+            textDiv.style.transform = `rotate(${angle}deg) translateY(-230px) rotate(-${angle}deg)`;
             textLayer.appendChild(textDiv);
           });
 
@@ -198,7 +200,7 @@
 
       // Single event listener to prevent double spins
       const spinButton = document.getElementById("spin-button");
-      let spinHandler = async () => {
+      const spinHandler = async () => {
         if (wheelSpinning || !theWheel) return;
         wheelSpinning = true;
         spinButton.disabled = true;
