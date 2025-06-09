@@ -179,8 +179,8 @@ async function handleWalletCommand(user, channel, interaction, walletAddress) {
 }
 
 async function handleVerifyCommand(user, channel, interaction) {
+  const discord_id = user.id;
   try {
-    const discord_id = user.id;
     console.log(`Processing spin for discord_id: ${discord_id}`);
 
     // Check if user has a registered wallet
@@ -193,13 +193,12 @@ async function handleVerifyCommand(user, channel, interaction) {
     if (userError || !userData) {
       console.error(`User lookup error: ${userError?.message || 'No wallet found'}, code: ${userError?.code}`);
       await channel.send(`❌ <@${discord_id}> Please link your wallet first with /mywallet <your_solana_address>!`);
-      if (interaction) {
-        await interaction.reply({ content: 'No wallet linked.', ephemeral: true });
-      }
+      await interaction.reply({ content: 'No wallet linked.', ephemeral: true });
       return;
     }
 
     const wallet_address = userData.wallet_address;
+    console.log(`Wallet for spin: ${wallet_address}`);
 
     // Select a random active token from wheel_configurations
     const { data: tokens, error: tokenError } = await supabase
@@ -231,6 +230,7 @@ async function handleVerifyCommand(user, channel, interaction) {
     }
 
     const dailySpinLimit = limitRow?.daily_spin_limit || 1;
+    console.log(`Daily spin limit: ${dailySpinLimit}`);
 
     const { data: recentSpins, error: spinError } = await supabase
       .from('daily_spins')
@@ -246,6 +246,7 @@ async function handleVerifyCommand(user, channel, interaction) {
     }
 
     if (recentSpins.length >= dailySpinLimit) {
+      console.log(`Spin limit reached for discord_id: ${discord_id}`);
       await channel.send(`❌ <@${discord_id}> You've reached your daily spin limit for this token. Try again tomorrow!`);
       await interaction.reply({ content: 'Daily spin limit reached.', ephemeral: true });
       return;
@@ -282,7 +283,7 @@ async function handleVerifyCommand(user, channel, interaction) {
     await channel.send(`🎯 <@${discord_id}> Click to spin the wheel:\n🔗 ${spinUrl}`);
     await interaction.reply({ content: 'Spin link sent!', ephemeral: true });
   } catch (error) {
-    console.error('handleVerifyCommand error:', error.message, error.stack);
+    console.error(`handleVerifyCommand error for discord_id: ${discord_id}:`, error.message, error.stack);
     await channel.send(`❌ <@${discord_id}> Failed to generate spin link: ${error.message}`);
     await interaction.reply({ content: `Error processing spin: ${error.message}`, ephemeral: true });
   }
@@ -299,7 +300,7 @@ async function fetchLeaderboardText() {
     }
     return data || 'No leaderboard data available.';
   } catch (error) {
-    console.error('Leaderboard fetch error:', error.message);
+    console.error('Leaderboard fetch error:', error.message, error.stack);
     return 'Error fetching leaderboard: ' + error.message;
   }
 }
@@ -378,7 +379,7 @@ setInterval(
         lastLeaderboardPost = leaderboardText;
       }
     } catch (error) {
-      console.error('Leaderboard post error:', error.message);
+      console.error('Leaderboard post error:', error.message, error.stack);
     }
   },
   60 * 60 * 1000,
