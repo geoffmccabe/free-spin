@@ -156,26 +156,16 @@ async function handleVerifyCommand(user, channel, interaction) {
 async function fetchLeaderboardText() {
   try {
     const { data, error } = await supabase
-      .from("wallet_totals")
-      .select("*")
-      .order("total", { ascending: false })
-      .limit(10);
+      .rpc('fetch_leaderboard_text');
 
     if (error) {
       console.error(`Leaderboard error: ${error.message}, code: ${error.code}`);
       throw new Error(`Database error: ${error.message}`);
     }
-    if (!data) return "Error fetching leaderboard.";
-
-    return data
-      .map(
-        (entry, i) =>
-          `#${i + 1}: ${entry.wallet_address} — ${entry.total} $HAROLD`,
-      )
-      .join("\n");
+    return data || 'No leaderboard data available.';
   } catch (error) {
     console.error('Leaderboard fetch error:', error.message);
-    return "Error fetching leaderboard.";
+    return 'Error fetching leaderboard.';
   }
 }
 
