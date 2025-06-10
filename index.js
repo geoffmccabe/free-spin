@@ -273,8 +273,10 @@ async function fetchLeaderboardText() {
     const { data, error } = await supabase.rpc('fetch_leaderboard_text');
     if (error) throw error;
     
+    if (!data) return 'No leaderboard data available.';
+    
     // Parse leaderboard text and replace discord_id with usernames
-    const lines = data ? data.split('\n') : [];
+    const lines = data.split('\n');
     const guild = client.guilds.cache.get(process.env.DISCORD_GUILD);
     const updatedLines = await Promise.all(lines.map(async (line) => {
       const match = line.match(/: (\d{17,19}) —/);
@@ -284,10 +286,11 @@ async function fetchLeaderboardText() {
       try {
         const member = await guild.members.fetch(discord_id);
         const username = member.nickname || member.user.username;
+        console.log(`Fetched username for discord_id: ${discord_id}: ${username}`);
         return line.replace(discord_id, username);
       } catch (err) {
         console.error(`Failed to fetch username for discord_id: ${discord_id}`, err);
-        return line.replace(discord_id, `User_${discord_id}`); // Fallback to generic name
+        return line.replace(discord_id, `User_${discord_id}`);
       }
     }));
     
@@ -307,7 +310,9 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (["spin", "freespin", "dailyspin"].includes(interaction.commandName)) {
-    if (interaction.channel.name !== SPIN_CHANNEL_NAME) {
+    console.log(`Received command: ${interaction.commandName}, channel: ${interaction.channel.name}`);
+    if (interaction.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) {
+      console.log(`Channel mismatch: expected ${SPIN_CHANNEL_NAME}, got ${interaction.channel.name}`);
       return interaction.reply({ content: `Please use this command in the #${SPIN_CHANNEL_NAME} channel.`, ephemeral: true });
     }
     await interaction.deferReply({ ephemeral: true });
@@ -334,7 +339,7 @@ client.on("interactionCreate", async (interaction) => {
 setInterval(async () => {
   try {
     const channel = client.channels.cache.find(
-      (c) => c.name === SPIN_CHANNEL_NAME,
+      (c) => c.name.toLowerCase() === SPIN_CHANNEL_NAME.toLowerCase(),
     );
     if (!channel || !channel.isTextBased()) return;
 
