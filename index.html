@@ -18,7 +18,7 @@
       height: 100vh;
     }
     .container {
-      max-height: 95vh;
+      max-height: 100vh;
       overflow: hidden;
       display: flex;
       flex-direction: column;
@@ -105,7 +105,6 @@
       let mechanicsWheel = null;
       let textWheel = null;
       let wheelSpinning = false;
-      let spinTimeout = null;
       let spinLock = false;
 
       const token = new URLSearchParams(window.location.search).get("token");
@@ -194,10 +193,6 @@
                 wheelSpinning = false;
                 spinLock = false;
                 document.getElementById("spin-button").disabled = true;
-                if (spinTimeout) {
-                  clearTimeout(spinTimeout);
-                  spinTimeout = null;
-                }
               }
             }
           });
@@ -242,7 +237,6 @@
               TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
               textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
               textWheel.draw();
-              TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut });
             }
           };
 
@@ -264,8 +258,8 @@
         spinButton.disabled = true;
         spinButton.removeEventListener("click", spinHandler);
         spinHandler = null;
+        mechanicsWheel.stopAnimation(false); // Clear any queued animations
         try {
-          mechanicsWheel.startAnimation();
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -285,6 +279,7 @@
             spinButton.disabled = true;
             return;
           }
+          mechanicsWheel.startAnimation();
           const segmentNumber = data.segmentIndex + 1;
           const seg = mechanicsWheel.segments[segmentNumber];
           if (!seg) {
