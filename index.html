@@ -1,316 +1,361 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Spin the Wheel</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.4/TweenMax.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
-  <style>
-    html, body {
-      background: #111;
-      color: white;
-      font-family: sans-serif;
-      text-align: center;
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      height: 100vh;
-    }
-    .container {
-      max-height: 100vh;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-    }
-    #wheel-container {
-      position: relative;
-      width: 80vmin;
-      height: 80vmin;
-      margin: 10px auto;
-    }
-    #pointer {
-      position: absolute;
-      top: -20px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 0;
-      height: 0;
-      border-left: 15px solid transparent;
-      border-right: 15px solid transparent;
-      border-top: 20px solid red;
-      z-index: 10;
-    }
-    #canvas-mechanics {
-      position: absolute;
-      top: 0;
-      left: 0;
-      z-index: 1;
-      opacity: 0;
-      width: 100%;
-      height: 100%;
-    }
-    #wheel-overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      z-index: 2;
-      pointer-events: none;
-    }
-    #canvas-text {
-      position: absolute;
-      top: 0;
-      left: 0;
-      z-index: 3;
-      pointer-events: none;
-      width: 100%;
-      height: 100%;
-    }
-    #spin-button {
-      margin-top: 10px;
-      padding: 8px 16px;
-      font-size: 14px;
-      cursor: pointer;
-    }
-    #error-message {
-      margin-top: 10px;
-      color: white;
-      font-size: 14px;
-      z-index: 11;
-      position: relative;
-      max-width: 80vmin;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div id="wheel-container">
-      <div id="pointer"></div>
-      <canvas id="canvas-mechanics"></canvas>
-      <img id="wheel-overlay" src="" alt="Wheel Overlay" />
-      <canvas id="canvas-text"></canvas>
-    </div>
-    <button id="spin-button">SPIN</button>
-    <div id="error-message"></div>
-  </div>
-  <script>
-    window.onload = function () {
-      let segments = [];
-      let tokenName = '';
-      let announcedPrize = null;
-      let mechanicsWheel = null;
-      let textWheel = null;
-      let wheelSpinning = false;
+import {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+} from "discord.js";
+import dotenv from "dotenv";
+import { createClient } from "@supabase/supabase-js";
+import { v4 as uuidv4 } from "uuid";
+import http from "http";
 
-      const token = new URLSearchParams(window.location.search).get("token");
-      if (!token) {
-        document.getElementById("error-message").textContent = "No spin link provided.";
-        document.getElementById("spin-button").disabled = true;
-        return;
+dotenv.config();
+
+const requiredEnv = [
+  'DISCORD_APP_ID',
+  'DISCORD_TOKEN',
+  'DISCORD_GUILD',
+  'API_URL',
+  'SUPABASE_URL',
+  'SUPABASE_SERVICE_ROLE_KEY'
+];
+requiredEnv.forEach(key => {
+  if (!process.env[key]) {
+    console.error(`Missing environment variable: ${key}`);
+    process.exit(1);
+  }
+});
+
+const server = http.createServer((req, res) => {
+  console.log(`Health check received: ${req.url}`);
+  res.writeHead(200);
+  res.end('Bot is running');
+}).listen(process.env.PORT || 8080, () => {
+  console.log(`HTTP server listening on port ${process.env.PORT || 8080}`);
+});
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+  ],
+  partials: [Partials.Channel],
+});
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+);
+const SPIN_CHANNEL_NAME = "🔄│free-spin";
+let lastLeaderboardPost = "";
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled promise rejection:', error.message, error.stack);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('Received SIGTERM. Shutting down gracefully...');
+  try {
+    await client.destroy();
+    server.close(() => {
+      console.log('HTTP server closed');
+      process.exit(0);
+    });
+  } catch (err) {
+    console.error('Error during shutdown:', err.message);
+    process.exit(1);
+  }
+});
+
+(async () => {
+  try {
+    const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
+    await rest.put(
+      Routes.applicationGuildCommands(
+        process.env.DISCORD_APP_ID,
+        process.env.DISCORD_GUILD,
+      ),
+      {
+        body: [
+          new SlashCommandBuilder()
+            .setName("spin")
+            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
+          new SlashCommandBuilder()
+            .setName("freespin")
+            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
+          new SlashCommandBuilder()
+            .setName("dailyspin")
+            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
+          new SlashCommandBuilder()
+            .setName("mywallet")
+            .setDescription("Link or view your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
+          new SlashCommandBuilder()
+            .setName("addmywallet")
+            .setDescription("Link or view your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
+          new SlashCommandBuilder()
+            .setName("myaddr")
+            .setDescription("Link or view your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
+          new SlashCommandBuilder()
+            .setName("myaddress")
+            .setDescription("Link or view your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
+          new SlashCommandBuilder()
+            .setName("leaders")
+            .setDescription("View the current leaderboard (use /spinleaders instead)"),
+          new SlashCommandBuilder()
+            .setName("leaderboard")
+            .setDescription("Alias for /leaders (use /spinleaders instead)"),
+          new SlashCommandBuilder()
+            .setName("spinleaders")
+            .setDescription("View the current leaderboard"),
+          new SlashCommandBuilder()
+            .setName("spinhelp")
+            .setDescription("View available commands"),
+        ],
+      },
+    );
+    console.log('Slash commands registered successfully');
+  } catch (error) {
+    console.error('Failed to register slash commands:', error.message, error.stack);
+    process.exit(1);
+  }
+})();
+
+async function handleWalletCommand(interaction, walletAddress) {
+  try {
+    const discord_id = interaction.user.id;
+    console.log(`Processing wallet command for discord_id: ${discord_id}, address: ${walletAddress || 'none'}`);
+
+    const { data: existingUser, error: userError } = await supabase
+      .from('users')
+      .select('wallet_address')
+      .eq('discord_id', discord_id)
+      .single();
+
+    if (userError && userError.code !== 'PGRST116') {
+      console.error(`User query error: ${userError.message}`);
+      return interaction.reply({ content: '❌ Database error querying user data.', ephemeral: true });
+    }
+
+    if (!walletAddress) {
+      if (existingUser) {
+        return interaction.reply({ content: `Your current wallet is: \`${existingUser.wallet_address}\`\nTo update, use \`/mywallet <new_address>\`.`, ephemeral: true });
+      } else {
+        return interaction.reply({ content: '❌ No wallet linked. Use `/mywallet <your_solana_address>` to link one.', ephemeral: true });
       }
+    }
 
-      function resizeCanvas() {
-        const container = document.getElementById('wheel-container');
-        const size = Math.min(container.offsetWidth, container.offsetHeight);
-        const canvases = [document.getElementById('canvas-mechanics'), document.getElementById('canvas-text')];
-        canvases.forEach(canvas => {
-          canvas.width = size;
-          canvas.height = size;
-        });
+    const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{32,44}$/;
+    if (!walletRegex.test(walletAddress)) {
+      return interaction.reply({ content: '❌ Invalid Solana wallet address.', ephemeral: true });
+    }
+
+    const { error: upsertError } = await supabase
+      .from('users')
+      .upsert({ discord_id, wallet_address: walletAddress }, { onConflict: 'discord_id' });
+
+    if (upsertError) {
+      console.error(`Wallet upsert error: ${upsertError.message}`);
+      return interaction.reply({ content: '❌ Failed to save wallet due to database error.', ephemeral: true });
+    }
+
+    const action = existingUser ? 'updated' : 'linked';
+    await interaction.reply({ content: `✅ Wallet ${action}: \`${walletAddress}\``, ephemeral: true });
+  } catch (error) {
+    console.error('handleWalletCommand error:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: '❌ An unexpected error occurred.', ephemeral: true });
+    }
+  }
+}
+
+async function handleVerifyCommand(interaction) {
+  const discord_id = interaction.user.id;
+  try {
+    console.log(`Processing spin for discord_id: ${discord_id}`);
+    
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('wallet_address')
+      .eq('discord_id', discord_id)
+      .single();
+
+    if (userError || !userData?.wallet_address) {
+      return interaction.editReply({ content: `❌ Please link your wallet first with \`/mywallet <your_solana_address>\`!`, ephemeral: true });
+    }
+
+    const wallet_address = userData.wallet_address;
+    console.log(`Wallet for spin: ${wallet_address}`);
+
+    const { data: tokens, error: tokenError } = await supabase
+      .from('wheel_configurations')
+      .select('contract_address')
+      .eq('active', true);
+
+    if (tokenError || !tokens || tokens.length === 0) {
+      return interaction.editReply({ content: '❌ No active prize tokens available. Try again later.', ephemeral: true });
+    }
+
+    const randomToken = tokens[Math.floor(Math.random() * tokens.length)];
+    const contract_address = randomToken.contract_address;
+    console.log(`Selected token: ${contract_address}`);
+    
+    const { data: limitRow, error: limitError } = await supabase
+      .from('spin_limits')
+      .select('daily_spin_limit')
+      .eq('wallet_address', wallet_address)
+      .single();
+
+    if (limitError && limitError.code !== 'PGRST116') throw new Error(`Failed to check spin limit.`);
+    
+    const dailySpinLimit = limitRow?.daily_spin_limit || 1;
+    console.log(`Daily spin limit: ${dailySpinLimit}`);
+
+    const { data: recentSpins, error: spinError } = await supabase
+      .from('daily_spins')
+      .select('id', { count: 'exact' })
+      .eq('discord_id', discord_id)
+      .eq('contract_address', contract_address)
+      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+
+    if (spinError) throw new Error(`Failed to check recent spins.`);
+
+    if (recentSpins.length >= dailySpinLimit) {
+      console.log(`Spin limit reached for discord_id: ${discord_id}`);
+      return interaction.editReply({ content: `❌ You've reached your daily spin limit for this token. Try again tomorrow!`, ephemeral: true });
+    }
+
+    const token = uuidv4();
+    const { error: insertError } = await supabase
+      .from("spin_tokens")
+      .insert({ token, discord_id, wallet_address, contract_address });
+      
+    if (insertError) throw new Error(`Failed to save spin token.`);
+
+    const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/index.html?token=${token}`;
+    console.log(`Generated spin URL: ${spinUrl}`);
+    
+    await interaction.editReply({ content: `🎯 Click to spin the wheel:\n🔗 ${spinUrl}`, ephemeral: true });
+
+  } catch (error) {
+    console.error(`handleVerifyCommand error for discord_id: ${discord_id}:`, error);
+    if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: `❌ Failed to generate spin link.`, ephemeral: true });
+    } else {
+        await interaction.editReply({ content: `❌ Failed to generate spin link.`, ephemeral: true });
+    }
+  }
+}
+
+async function fetchLeaderboardText() {
+  try {
+    const { data, error } = await supabase.rpc('fetch_leaderboard_text');
+    if (error) throw error;
+    
+    if (!data) return 'No leaderboard data available.';
+    
+    const lines = data.split('\n');
+    const guild = client.guilds.cache.get(process.env.DISCORD_GUILD);
+    const updatedLines = await Promise.all(lines.map(async (line) => {
+      const match = line.match(/: (\d{17,19}) —/);
+      if (!match) return line;
+      const discord_id = match[1];
+      
+      try {
+        const member = await guild.members.fetch(discord_id);
+        const username = member.nickname || member.user.username;
+        console.log(`Fetched username for discord_id: ${discord_id}: ${username}`);
+        return line.replace(discord_id, username);
+      } catch (err) {
+        console.error(`Failed to fetch username for discord_id: ${discord_id}`, err);
+        return line.replace(discord_id, `User_${discord_id}`);
       }
+    }));
+    
+    return updatedLines.join('\n') || 'No leaderboard data available.';
+  } catch (error) {
+    console.error('Leaderboard fetch error:', error);
+    return 'Error fetching leaderboard: ' + error.message;
+  }
+}
 
-      window.addEventListener('resize', resizeCanvas);
-      resizeCanvas();
+client.on("messageCreate", async (message) => {
+  if (message.author.bot || !message.content.toLowerCase().startsWith("!verify")) return;
+  if (message.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) return;
+});
 
-      async function initializeWheel() {
-        try {
-          const res = await fetch("https://solspin.lightningworks.io/api/spin", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token })
-          });
-          const data = await res.json();
-          console.log("Initial API response:", data);
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
 
-          if (!res.ok || !data.tokenConfig) {
-            if (data.error === "Token already used") {
-              document.getElementById("error-message").textContent = "You have already used your daily free spins.";
-            } else {
-              document.getElementById("error-message").textContent = data.error || "Failed to load spin configuration";
-            }
-            document.getElementById("spin-button").disabled = true;
-            return;
-          }
+  if (["spin", "freespin", "dailyspin"].includes(interaction.commandName)) {
+    console.log(`Received command: ${interaction.commandName}, channel: ${interaction.channel.name}`);
+    if (interaction.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) {
+      console.log(`Channel mismatch: expected ${SPIN_CHANNEL_NAME}, got ${interaction.channel.name}`);
+      return interaction.reply({ content: `Please use this command in the #${SPIN_CHANNEL_NAME} channel.`, ephemeral: true });
+    }
+    await interaction.deferReply({ ephemeral: true });
+    await handleVerifyCommand(interaction);
+  }
 
-          tokenName = data.tokenConfig.token_name;
-          const payouts = data.tokenConfig.payout_amounts || [];
-          segments = payouts.map((amount) => ({
-            fillStyle: 'transparent',
-            text: `${amount}`,
-            text2: `${tokenName}`,
-            textFillStyle: 'white',
-            textFontSize: 72,
-            textFontSize2: 36,
-            textFontFamily: 'Arial',
-            textAlignment: 'center'
-          }));
+  if (["mywallet", "addmywallet", "myaddr", "myaddress"].includes(interaction.commandName)) {
+    const walletAddress = interaction.options.getString("address");
+    await handleWalletCommand(interaction, walletAddress);
+  }
 
-          if (segments.length === 0) {
-            document.getElementById("error-message").textContent = "No payout amounts configured.";
-            document.getElementById("spin-button").disabled = true;
-            return;
-          }
+  if (["leaders", "leaderboard", "spinleaders"].includes(interaction.commandName)) {
+    await interaction.deferReply();
+    const leaderboard = await fetchLeaderboardText();
+    await interaction.editReply({ content: `🏆 **Current Top 10 Winners:**\n\n${leaderboard}` });
+  }
 
-          const overlay = document.getElementById("wheel-overlay");
-          overlay.src = data.tokenConfig.image_url || '/img/default_wheel.webp';
+  if (interaction.commandName === "spinhelp") {
+    const helpText = "**/mywallet <address>**: Link your Solana wallet.\n**/spin**: Get a link to spin the wheel.\n**/spinleaders**: View the leaderboard.";
+    await interaction.reply({ content: helpText, ephemeral: true });
+  }
+});
 
-          const container = document.getElementById('wheel-container');
-          const size = Math.min(container.offsetWidth, container.offsetHeight);
-          const radius = size / 2;
-          const quantityRadius = radius * 1.62;
-          const tokenRadius = radius * 1.44;
+setInterval(async () => {
+  try {
+    const channel = client.channels.cache.find(
+      (c) => c.name.toLowerCase() === SPIN_CHANNEL_NAME.toLowerCase(),
+    );
+    if (!channel || !channel.isTextBased()) return;
 
-          mechanicsWheel = new Winwheel({
-            canvasId: "canvas-mechanics",
-            numSegments: segments.length,
-            segments: segments,
-            outerRadius: radius,
-            pointerAngle: 0,
-            animation: {
-              type: "spinToStop",
-              duration: 5,
-              spins: 3600 / 360,
-              callbackFinished: function () {
-                if (announcedPrize) {
-                  document.getElementById("error-message").textContent = `You won: ${announcedPrize}`;
-                } else {
-                  document.getElementById("error-message").textContent = "Spin completed, but no prize received.";
-                }
-                wheelSpinning = false;
-                document.getElementById("spin-button").disabled = true;
-              }
-            }
-          });
+    const leaderboardText = await fetchLeaderboardText();
+    if (leaderboardText !== lastLeaderboardPost) {
+      channel.send(`🏆 **Updated Leaderboard:**\n\n${leaderboardText}`);
+      lastLeaderboardPost = leaderboardText;
+    }
+  } catch (error) {
+    console.error('Leaderboard post error:', error.message, error.stack);
+  }
+}, 60 * 60 * 1000);
 
-          textWheel = new Winwheel({
-            canvasId: "canvas-text",
-            numSegments: segments.length,
-            segments: segments.map(seg => ({
-              text: seg.text,
-              text2: seg.text2,
-              textFillStyle: 'white',
-              textFontSize: 72,
-              textFontSize2: 36,
-              textFontFamily: 'Arial',
-              textAlignment: 'center'
-            })),
-            outerRadius: quantityRadius,
-            textRadius2: tokenRadius,
-            pointerAngle: 0,
-            drawMode: 'text',
-            textOrientation: 'curved',
-            textFillStyle: 'white',
-            textAlignment: 'center',
-            lineWidth: 0
-          });
-
-          textWheel.draw = function () {
-            const ctx = this.ctx;
-            ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            const centerX = this.canvas.width / 2;
-            const centerY = this.canvas.height / 2;
-            const segmentAngle = (2 * Math.PI) / this.numSegments;
-
-            for (let i = 1; i <= this.numSegments; i++) {
-              const seg = this.segments[i];
-              const angle = this.rotationAngle * (Math.PI / 180) + (i - 1) * segmentAngle + segmentAngle / 2;
-
-              ctx.save();
-              ctx.translate(centerX, centerY);
-              ctx.rotate(angle);
-              ctx.fillStyle = seg.textFillStyle;
-              ctx.font = `${seg.textFontSize}px ${seg.textFontFamily}`;
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              ctx.fillText(seg.text, 0, -quantityRadius);
-              ctx.font = `${seg.textFontSize2}px ${seg.textFontFamily}`;
-              ctx.fillText(seg.text2, 0, -tokenRadius);
-              ctx.restore();
-            }
-          };
-
-          mechanicsWheel.animation.callbackBefore = () => {
-            if (wheelSpinning) {
-              TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle;
-              textWheel.draw();
-              TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut });
-            }
-          };
-
-          document.getElementById("spin-button").disabled = false;
-        } catch (err) {
-          console.error("Initial fetch error:", err.message);
-          document.getElementById("error-message").textContent = "Failed to initialize spin: " + err.message;
-          document.getElementById("spin-button").disabled = true;
-        }
-      }
-
-      initializeWheel();
-
-      const spinButton = document.getElementById("spin-button");
-      const spinHandler = async () => {
-        if (wheelSpinning || !mechanicsWheel) return;
-        wheelSpinning = true;
-        spinButton.disabled = true;
-        spinButton.removeEventListener("click", spinHandler);
-        try {
-          mechanicsWheel.startAnimation();
-          const res = await fetch("https://solspin.lightningworks.io/api/spin", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token, spin: true })
-          });
-          const data = await res.json();
-          console.log("Spin API response:", data);
-          if (!res.ok || typeof data.segmentIndex !== 'number' || !data.prize) {
-            if (data.error === "Token already used") {
-              document.getElementById("error-message").textContent = "You have already used your daily free spins.";
-            } else {
-              document.getElementById("error-message").textContent = data.error || "Spin failed";
-            }
-            mechanicsWheel.stopAnimation(false);
-            wheelSpinning = false;
-            spinButton.disabled = true;
-            return;
-          }
-          const segmentNumber = data.segmentIndex + 1;
-          const seg = mechanicsWheel.segments[segmentNumber];
-          if (!seg) {
-            document.getElementById("error-message").textContent = "Spin failed: Segment missing";
-            mechanicsWheel.stopAnimation(false);
-            wheelSpinning = false;
-            spinButton.disabled = true;
-            return;
-          }
-          const center = (seg.startAngle + seg.endAngle) / 2;
-          const stopAngle = (center + 360) % 360;
-          mechanicsWheel.animation.stopAngle = stopAngle;
-          announcedPrize = data.prize;
-        } catch (err) {
-          console.error("Spin fetch error:", err.message);
-          document.getElementById("error-message").textContent = "Spin failed: " + err.message;
-          mechanicsWheel.stopAnimation(false);
-          wheelSpinning = false;
-          spinButton.disabled = true;
-        }
-      };
-      spinButton.addEventListener("click", spinHandler);
-    };
-  </script>
-</body>
-</html>
+(async () => {
+  try {
+    await client.login(process.env.DISCORD_TOKEN);
+    console.log('Bot logged in successfully');
+  } catch (error) {
+    console.error('Discord login error:', error);
+    process.exit(1);
+  }
+})();
