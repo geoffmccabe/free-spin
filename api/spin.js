@@ -57,6 +57,23 @@ export default async function handler(req, res) {
     const { discord_id, wallet_address, contract_address } = tokenRow;
     console.log(`Spin token data: discord_id=${discord_id}, wallet=${wallet_address}, contract=${contract_address}`);
 
+    // Verify user has a registered wallet
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('wallet_address')
+      .eq('discord_id', discord_id)
+      .single();
+
+    if (userError || !userData) {
+      console.error("User not found for discord_id:", discord_id);
+      return res.status(400).json({ error: 'No wallet registered' });
+    }
+
+    if (userData.wallet_address !== wallet_address) {
+      console.error("Wallet mismatch for discord_id:", discord_id, "stored:", userData.wallet_address, "token:", wallet_address);
+      return res.status(400).json({ error: 'Wallet address mismatch' });
+    }
+
     // Fetch token configuration
     const { data: tokenConfig, error: configError } = await supabase
       .from('wheel_configurations')
@@ -78,18 +95,6 @@ export default async function handler(req, res) {
 
     const { payout_amounts, payout_weights, token_name, token_id } = tokenConfig;
     console.log(`Token config: name=${token_name}, payouts=${payout_amounts}, token_id=${token_id}`);
-
-    // Verify user has a registered wallet
-    const { data: userData, error: userError } = await supabase
-      .from('users')
-      .select('wallet_address')
-      .eq('discord_id', discord_id)
-      .single();
-
-    if (userError || !userData) {
-      console.error("User not found for discord_id:", discord_id);
-      return res.status(400).json({ error: 'No wallet registered' });
-    }
 
     // Select reward
     const totalWeight = payout_weights.reduce((sum, w) => sum + w, 0);
