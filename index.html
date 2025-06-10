@@ -18,7 +18,7 @@
       height: 100vh;
     }
     .container {
-      max-height: 100vh;
+      max-height: 95vh;
       overflow: hidden;
       display: flex;
       flex-direction: column;
@@ -201,7 +201,7 @@
             canvas: document.getElementById("canvas-text"),
             numSegments: segments.length,
             segments: segments,
-            rotationAngle: -240, // Rotate 180 degrees from -60
+            rotationAngle: 180, // Rotate to 180 degrees
             quantityRadius: quantityRadius,
             tokenRadius: tokenRadius,
             draw: function () {
@@ -235,7 +235,7 @@
           mechanicsWheel.animation.callbackBefore = () => {
             if (wheelSpinning) {
               TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 240;
+              textWheel.rotationAngle = mechanicsWheel.rotationAngle + 180;
               textWheel.draw();
             }
           };
