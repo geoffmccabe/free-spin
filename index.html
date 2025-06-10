@@ -178,7 +178,7 @@
           mechanicsWheel = new Winwheel({
             canvasId: "canvas-mechanics",
             numSegments: segments.length,
-            segments: segments.map(() => ({ fillStyle: 'transparent' })),
+            segments: segments.map(() => ({ fillStyle: 'transparent', strokeStyle: 'none' })),
             outerRadius: radius,
             pointerAngle: 0,
             animation: {
@@ -264,16 +264,6 @@
         spinButton.disabled = true;
         spinButton.removeEventListener("click", spinHandler);
         spinHandler = null;
-        mechanicsWheel.clearAnimations(); // Clear any queued animations
-        spinTimeout = setTimeout(() => {
-          if (spinLock) {
-            console.error("Spin timeout triggered");
-            mechanicsWheel.stopAnimation(false);
-            wheelSpinning = false;
-            spinLock = false;
-            spinButton.disabled = true;
-          }
-        }, 6000);
         try {
           mechanicsWheel.startAnimation();
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
@@ -293,7 +283,6 @@
             wheelSpinning = false;
             spinLock = false;
             spinButton.disabled = true;
-            clearTimeout(spinTimeout);
             return;
           }
           const segmentNumber = data.segmentIndex + 1;
@@ -304,7 +293,6 @@
             wheelSpinning = false;
             spinLock = false;
             spinButton.disabled = true;
-            clearTimeout(spinTimeout);
             return;
           }
           const center = (seg.startAngle + seg.endAngle) / 2;
@@ -318,7 +306,6 @@
           wheelSpinning = false;
           spinLock = false;
           spinButton.disabled = true;
-          clearTimeout(spinTimeout);
         }
       };
       spinButton.addEventListener("click", spinHandler);
