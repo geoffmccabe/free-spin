@@ -106,6 +106,7 @@
       let textWheel = null;
       let wheelSpinning = false;
       let spinTimeout = null;
+      let spinLock = false;
 
       const token = new URLSearchParams(window.location.search).get("token");
       if (!token) {
@@ -154,7 +155,7 @@
             text: `${amount}`,
             text2: `${tokenName}`,
             textFillStyle: 'white',
-            textFontSize: 35,
+            textFontSize: 45,
             textFontSize2: 36,
             textFontFamily: 'Arial',
             textAlignment: 'center'
@@ -172,7 +173,7 @@
           const container = document.getElementById('wheel-container');
           const size = Math.min(container.offsetWidth, container.offsetHeight);
           const radius = size / 2;
-          const quantityRadius = radius * 0.405;
+          const quantityRadius = radius * 0.8;
           const tokenRadius = quantityRadius * 0.85;
 
           mechanicsWheel = new Winwheel({
@@ -192,6 +193,7 @@
                   document.getElementById("error-message").textContent = "Spin completed, but no prize received.";
                 }
                 wheelSpinning = false;
+                spinLock = false;
                 document.getElementById("spin-button").disabled = true;
                 if (spinTimeout) {
                   clearTimeout(spinTimeout);
@@ -208,7 +210,7 @@
               text: seg.text,
               text2: seg.text2,
               textFillStyle: 'white',
-              textFontSize: 35,
+              textFontSize: 45,
               textFontSize2: 36,
               textFontFamily: 'Arial',
               textAlignment: 'center'
@@ -221,7 +223,8 @@
             textFillStyle: 'white',
             textAlignment: 'center',
             lineWidth: 0,
-            strokeStyle: 'none'
+            strokeStyle: 'none',
+            fillStyle: 'transparent'
           });
 
           textWheel.draw = function () {
@@ -270,16 +273,18 @@
 
       const spinButton = document.getElementById("spin-button");
       let spinHandler = async () => {
-        if (wheelSpinning || !mechanicsWheel) return;
+        if (wheelSpinning || spinLock || !mechanicsWheel) return;
+        spinLock = true;
         wheelSpinning = true;
         spinButton.disabled = true;
         spinButton.removeEventListener("click", spinHandler);
         spinHandler = null;
         spinTimeout = setTimeout(() => {
-          if (wheelSpinning) {
+          if (spinLock) {
             console.error("Spin timeout triggered");
             mechanicsWheel.stopAnimation(false);
             wheelSpinning = false;
+            spinLock = false;
             spinButton.disabled = true;
           }
         }, 6000);
@@ -300,6 +305,7 @@
             }
             mechanicsWheel.stopAnimation(false);
             wheelSpinning = false;
+            spinLock = false;
             spinButton.disabled = true;
             clearTimeout(spinTimeout);
             return;
@@ -310,6 +316,7 @@
             document.getElementById("error-message").textContent = "Spin failed: Segment missing";
             mechanicsWheel.stopAnimation(false);
             wheelSpinning = false;
+            spinLock = false;
             spinButton.disabled = true;
             clearTimeout(spinTimeout);
             return;
@@ -323,6 +330,7 @@
           document.getElementById("error-message").textContent = "Spin failed: " + err.message;
           mechanicsWheel.stopAnimation(false);
           wheelSpinning = false;
+          spinLock = false;
           spinButton.disabled = true;
           clearTimeout(spinTimeout);
         }
