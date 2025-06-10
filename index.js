@@ -50,7 +50,7 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
-const SPIN_CHANNEL_NAME = "🔄|free-spin";
+const SPIN_CHANNEL_NAME = "🔄│free-spin";
 let lastLeaderboardPost = "";
 
 process.on('unhandledRejection', (error) => {
@@ -303,7 +303,7 @@ async function fetchLeaderboardText() {
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot || !message.content.toLowerCase().startsWith("!verify")) return;
-  if (message.channel.name !== SPIN_CHANNEL_NAME) return;
+  if (message.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) return;
 });
 
 client.on("interactionCreate", async (interaction) => {
