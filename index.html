@@ -150,12 +150,13 @@
           const payouts = data.tokenConfig.payout_amounts || [];
           segments = payouts.map((amount) => ({
             fillStyle: 'transparent',
-            text: `${amount} ${tokenName}`,
+            text: `${amount}`,
+            text2: `${tokenName}`,
             textFillStyle: 'white',
-            textFontSize: 36,
+            textFontSize: 72,
+            textFontSize2: 36,
             textFontFamily: 'Arial',
-            textAlignment: 'center',
-            textMargin: 0
+            textAlignment: 'center'
           }));
 
           if (segments.length === 0) {
@@ -170,7 +171,8 @@
           const container = document.getElementById('wheel-container');
           const size = Math.min(container.offsetWidth, container.offsetHeight);
           const radius = size / 2;
-          const textRadius = radius * 1.8;
+          const quantityRadius = radius * 1.62;
+          const tokenRadius = radius * 1.44;
 
           mechanicsWheel = new Winwheel({
             canvasId: "canvas-mechanics",
@@ -197,17 +199,49 @@
           textWheel = new Winwheel({
             canvasId: "canvas-text",
             numSegments: segments.length,
-            segments: segments,
-            outerRadius: textRadius,
+            segments: segments.map(seg => ({
+              text: seg.text,
+              text2: seg.text2,
+              textFillStyle: 'white',
+              textFontSize: 72,
+              textFontSize2: 36,
+              textFontFamily: 'Arial',
+              textAlignment: 'center'
+            })),
+            outerRadius: quantityRadius,
+            textRadius2: tokenRadius,
             pointerAngle: 0,
             drawMode: 'text',
             textOrientation: 'curved',
-            textFontSize: 36,
-            textFontFamily: 'Arial',
             textFillStyle: 'white',
             textAlignment: 'center',
             lineWidth: 0
           });
+
+          textWheel.draw = function () {
+            const ctx = this.ctx;
+            ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            const centerX = this.canvas.width / 2;
+            const centerY = this.canvas.height / 2;
+            const segmentAngle = (2 * Math.PI) / this.numSegments;
+
+            for (let i = 1; i <= this.numSegments; i++) {
+              const seg = this.segments[i];
+              const angle = this.rotationAngle * (Math.PI / 180) + (i - 1) * segmentAngle + segmentAngle / 2;
+
+              ctx.save();
+              ctx.translate(centerX, centerY);
+              ctx.rotate(angle);
+              ctx.fillStyle = seg.textFillStyle;
+              ctx.font = `${seg.textFontSize}px ${seg.textFontFamily}`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(seg.text, 0, -quantityRadius);
+              ctx.font = `${seg.textFontSize2}px ${seg.textFontFamily}`;
+              ctx.fillText(seg.text2, 0, -tokenRadius);
+              ctx.restore();
+            }
+          };
 
           mechanicsWheel.animation.callbackBefore = () => {
             if (wheelSpinning) {
