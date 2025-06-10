@@ -14,13 +14,14 @@
       text-align: center;
       margin: 0;
       padding: 0;
-      overflow: hidden; /* Prevent scrollbars */
+      overflow: hidden;
+      height: 100vh;
     }
     #wheel-container {
       position: relative;
       width: 800px;
       height: 800px;
-      margin: 50px auto 0;
+      margin: 20px auto 0;
     }
     #pointer {
       position: absolute;
@@ -39,7 +40,7 @@
       top: 0;
       left: 0;
       z-index: 1;
-      opacity: 0; /* Invisible mechanics canvas */
+      opacity: 0;
     }
     #wheel-overlay {
       position: absolute;
@@ -58,34 +59,48 @@
       pointer-events: none;
     }
     #spin-button {
-      margin-top: 30px;
-      padding: 12px 24px;
-      font-size: 18px;
+      margin-top: 10px;
+      padding: 8px 16px;
+      font-size: 14px;
       cursor: pointer;
     }
     #error-message {
-      margin-top: 20px;
+      margin-top: 10px;
       color: white;
-      font-size: 16px;
+      font-size: 14px;
+      z-index: 11;
+      position: relative;
+      max-width: 800px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .container {
+      max-height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
   </style>
 </head>
 <body>
-  <div id="wheel-container">
-    <div id="pointer"></div>
-    <canvas id="canvas-mechanics" width="800" height="800"></canvas>
-    <img id="wheel-overlay" src="" alt="Wheel Overlay" />
-    <canvas id="canvas-text" width="800" height="800"></canvas>
+  <div class="container">
+    <div id="wheel-container">
+      <div id="pointer"></div>
+      <canvas id="canvas-mechanic" width="800" height="800"></canvas>
+      <img id="wheel-overlay" src="" alt="Wheel Overlay" />
+      <canvas id="canvas-text" width="800" height="800"></canvas>
+    </div>
+    <button id="spin-button">SPIN</button>
+    <div id="error-message"></div>
   </div>
-  <button id="spin-button">SPIN</button>
-  <div id="error-message"></div>
   <script>
     window.onload = function () {
       let segments = [];
       let tokenName = '';
       let announcedPrize = null;
-      let mechanicsWheel = null;
-      let textWheel = null;
+      let mechanics = null;
+      let textCanvas = null;
       let wheelSpinning = false;
 
       const token = new URLSearchParams(window.location.search).get("token");
@@ -118,13 +133,13 @@
           tokenName = data.tokenConfig.token_name;
           const payouts = data.tokenConfig.payout_amounts || [];
           segments = payouts.map((amount) => ({
-            fillStyle: 'transparent', // No graphics for mechanics
+            fillStyle: 'transparent',
             text: `${amount} ${tokenName}`,
             textFillStyle: 'white',
-            textFontSize: 18,
+            textFontSize: 36,
             textFontFamily: 'Arial',
             textAlignment: 'center',
-            textMargin: 0
+            textMargin: 80
           }));
 
           if (segments.length === 0) {
@@ -133,13 +148,11 @@
             return;
           }
 
-          // Set overlay image
           const overlay = document.getElementById("wheel-overlay");
           overlay.src = data.tokenConfig.image_url || '/img/default_wheel.webp';
 
-          // Initialize mechanics wheel (invisible)
-          mechanicsWheel = new Winwheel({
-            canvasId: "canvas-mechanics",
+          mechanics = new Winwheel({
+            canvasId: "canvas-mechanic",
             numSegments: segments.length,
             segments: segments,
             outerRadius: 400,
@@ -160,27 +173,27 @@
             }
           });
 
-          // Initialize text wheel (visible text only)
-          textWheel = new Winwheel({
+          textCanvas = new Winwheel({
             canvasId: "canvas-text",
             numSegments: segments.length,
             segments: segments,
-            outerRadius: 400,
+            outerRadius: 720,
             pointerAngle: 0,
-            drawMode: 'text', // Only draw text
+            drawMode: 'text',
             textOrientation: 'curved',
-            textFontSize: 18,
+            textFontSize: 36,
             textFontFamily: 'Arial',
             textFillStyle: 'white',
-            textAlignment: 'center'
+            textAlignment: 'center',
+            drawText: true,
+            lineWidth: 0
           });
 
-          // Sync overlay and text wheel with mechanics wheel
-          mechanicsWheel.animation.callbackBefore = () => {
+          mechanics.animation.callbackBefore = () => {
             if (wheelSpinning) {
-              TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle;
-              textWheel.draw();
+              TweenMax.set("#wheel-overlay", { rotation: mechanics.rotationAngle });
+              textCanvas.rotationAngle = mechanics.rotationAngle;
+              textCanvas.draw();
               TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut });
             }
           };
@@ -195,14 +208,14 @@
 
       initializeWheel();
 
-      // Single event listener to prevent double spins
       const spinButton = document.getElementById("spin-button");
       const spinHandler = async () => {
-        if (wheelSpinning || !mechanicsWheel) return;
+        if (wheelSpinning || !mechanics) return;
         wheelSpinning = true;
         spinButton.disabled = true;
+        spinButton.removeEventListener("click", spinHandler);
         try {
-          mechanicsWheel.startAnimation();
+          mechanics.startAnimation();
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -216,28 +229,28 @@
             } else {
               document.getElementById("error-message").textContent = data.error || "Spin failed";
             }
-            mechanicsWheel.stopAnimation(false);
+            mechanics.stopAnimation(false);
             wheelSpinning = false;
             spinButton.disabled = true;
             return;
           }
           const segmentNumber = data.segmentIndex + 1;
-          const seg = mechanicsWheel.segments[segmentNumber];
+          const seg = mechanics.segments[segmentNumber];
           if (!seg) {
             document.getElementById("error-message").textContent = "Spin failed: Segment missing";
-            mechanicsWheel.stopAnimation(false);
+            mechanics.stopAnimation(false);
             wheelSpinning = false;
             spinButton.disabled = true;
             return;
           }
           const center = (seg.startAngle + seg.endAngle) / 2;
           const stopAngle = (center + 360) % 360;
-          mechanicsWheel.animation.stopAngle = stopAngle;
+          mechanics.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
         } catch (err) {
           console.error("Spin fetch error:", err.message);
           document.getElementById("error-message").textContent = "Spin failed: " + err.message;
-          mechanicsWheel.stopAnimation(false);
+          mechanics.stopAnimation(false);
           wheelSpinning = false;
           spinButton.disabled = true;
         }
