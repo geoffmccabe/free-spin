@@ -190,7 +190,6 @@ async function handleWalletCommand(interaction, walletAddress) {
 
 async function handleVerifyCommand(interaction) {
   const discord_id = interaction.user.id;
-  const channel = interaction.channel;
   try {
     console.log(`Processing spin for discord_id: ${discord_id}`);
     
@@ -201,7 +200,7 @@ async function handleVerifyCommand(interaction) {
       .single();
 
     if (userError || !userData?.wallet_address) {
-      return interaction.editReply({ content: `❌ Please link your wallet first with \`/mywallet <your_solana_address>\`!`});
+      return interaction.editReply({ content: `❌ Please link your wallet first with \`/mywallet <your_solana_address>\`!`, ephemeral: true });
     }
 
     const wallet_address = userData.wallet_address;
@@ -213,7 +212,7 @@ async function handleVerifyCommand(interaction) {
       .eq('active', true);
 
     if (tokenError || !tokens || tokens.length === 0) {
-      return interaction.editReply({ content: '❌ No active prize tokens available. Try again later.' });
+      return interaction.editReply({ content: '❌ No active prize tokens available. Try again later.', ephemeral: true });
     }
 
     const randomToken = tokens[Math.floor(Math.random() * tokens.length)];
@@ -242,7 +241,7 @@ async function handleVerifyCommand(interaction) {
 
     if (recentSpins.length >= dailySpinLimit) {
       console.log(`Spin limit reached for discord_id: ${discord_id}`);
-      return interaction.editReply({ content: `❌ You've reached your daily spin limit for this token. Try again tomorrow!` });
+      return interaction.editReply({ content: `❌ You've reached your daily spin limit for this token. Try again tomorrow!`, ephemeral: true });
     }
 
     const token = uuidv4();
@@ -255,15 +254,14 @@ async function handleVerifyCommand(interaction) {
     const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/index.html?token=${token}`;
     console.log(`Generated spin URL: ${spinUrl}`);
     
-    await interaction.editReply({ content: 'Your spin link is ready!' });
-    await channel.send(`🎯 <@${discord_id}> Click to spin the wheel:\n🔗 ${spinUrl}`);
+    await interaction.editReply({ content: `🎯 Click to spin the wheel:\n🔗 ${spinUrl}`, ephemeral: true });
 
   } catch (error) {
     console.error(`handleVerifyCommand error for discord_id: ${discord_id}:`, error);
     if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: `❌ Failed to generate spin link.`, ephemeral: true });
     } else {
-        await interaction.editReply({ content: `❌ Failed to generate spin link.` });
+        await interaction.editReply({ content: `❌ Failed to generate spin link.`, ephemeral: true });
     }
   }
 }
@@ -275,7 +273,6 @@ async function fetchLeaderboardText() {
     
     if (!data) return 'No leaderboard data available.';
     
-    // Parse leaderboard text and replace discord_id with usernames
     const lines = data.split('\n');
     const guild = client.guilds.cache.get(process.env.DISCORD_GUILD);
     const updatedLines = await Promise.all(lines.map(async (line) => {
