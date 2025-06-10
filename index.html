@@ -153,7 +153,7 @@
             text: `${amount}`,
             text2: `${tokenName}`,
             textFillStyle: 'white',
-            textFontSize: 50,
+            textFontSize: 35,
             textFontSize2: 36,
             textFontFamily: 'Arial',
             textAlignment: 'center'
@@ -171,7 +171,7 @@
           const container = document.getElementById('wheel-container');
           const size = Math.min(container.offsetWidth, container.offsetHeight);
           const radius = size / 2;
-          const quantityRadius = radius * 1.62;
+          const quantityRadius = radius * 0.81;
           const tokenRadius = quantityRadius * 0.85;
 
           mechanicsWheel = new Winwheel({
@@ -203,7 +203,7 @@
               text: seg.text,
               text2: seg.text2,
               textFillStyle: 'white',
-              textFontSize: 50,
+              textFontSize: 35,
               textFontSize2: 36,
               textFontFamily: 'Arial',
               textAlignment: 'center'
@@ -215,7 +215,8 @@
             textOrientation: 'curved',
             textFillStyle: 'white',
             textAlignment: 'center',
-            lineWidth: 0
+            lineWidth: 0,
+            strokeStyle: 'transparent'
           });
 
           textWheel.draw = function () {
@@ -263,11 +264,12 @@
       initializeWheel();
 
       const spinButton = document.getElementById("spin-button");
-      const spinHandler = async () => {
+      let spinHandler = async () => {
         if (wheelSpinning || !mechanicsWheel) return;
         wheelSpinning = true;
         spinButton.disabled = true;
         spinButton.removeEventListener("click", spinHandler);
+        spinHandler = null; // Nullify to prevent retrigger
         try {
           mechanicsWheel.startAnimation();
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
