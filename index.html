@@ -105,6 +105,7 @@
       let mechanicsWheel = null;
       let textWheel = null;
       let wheelSpinning = false;
+      let spinTimeout = null;
 
       const token = new URLSearchParams(window.location.search).get("token");
       if (!token) {
@@ -171,7 +172,7 @@
           const container = document.getElementById('wheel-container');
           const size = Math.min(container.offsetWidth, container.offsetHeight);
           const radius = size / 2;
-          const quantityRadius = radius * 0.81;
+          const quantityRadius = radius * 0.405;
           const tokenRadius = quantityRadius * 0.85;
 
           mechanicsWheel = new Winwheel({
@@ -192,6 +193,10 @@
                 }
                 wheelSpinning = false;
                 document.getElementById("spin-button").disabled = true;
+                if (spinTimeout) {
+                  clearTimeout(spinTimeout);
+                  spinTimeout = null;
+                }
               }
             }
           });
@@ -216,7 +221,7 @@
             textFillStyle: 'white',
             textAlignment: 'center',
             lineWidth: 0,
-            strokeStyle: 'transparent'
+            strokeStyle: 'none'
           });
 
           textWheel.draw = function () {
@@ -269,7 +274,15 @@
         wheelSpinning = true;
         spinButton.disabled = true;
         spinButton.removeEventListener("click", spinHandler);
-        spinHandler = null; // Nullify to prevent retrigger
+        spinHandler = null;
+        spinTimeout = setTimeout(() => {
+          if (wheelSpinning) {
+            console.error("Spin timeout triggered");
+            mechanicsWheel.stopAnimation(false);
+            wheelSpinning = false;
+            spinButton.disabled = true;
+          }
+        }, 6000);
         try {
           mechanicsWheel.startAnimation();
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
@@ -288,6 +301,7 @@
             mechanicsWheel.stopAnimation(false);
             wheelSpinning = false;
             spinButton.disabled = true;
+            clearTimeout(spinTimeout);
             return;
           }
           const segmentNumber = data.segmentIndex + 1;
@@ -297,6 +311,7 @@
             mechanicsWheel.stopAnimation(false);
             wheelSpinning = false;
             spinButton.disabled = true;
+            clearTimeout(spinTimeout);
             return;
           }
           const center = (seg.startAngle + seg.endAngle) / 2;
@@ -309,6 +324,7 @@
           mechanicsWheel.stopAnimation(false);
           wheelSpinning = false;
           spinButton.disabled = true;
+          clearTimeout(spinTimeout);
         }
       };
       spinButton.addEventListener("click", spinHandler);
