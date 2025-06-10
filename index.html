@@ -206,7 +206,7 @@
             canvas: document.getElementById("canvas-text"),
             numSegments: segments.length,
             segments: segments,
-            rotationAngle: 0,
+            rotationAngle: -60, // Rotate 60 degrees counter-clockwise
             quantityRadius: quantityRadius,
             tokenRadius: tokenRadius,
             draw: function () {
@@ -240,7 +240,7 @@
           mechanicsWheel.animation.callbackBefore = () => {
             if (wheelSpinning) {
               TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle;
+              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
               textWheel.draw();
               TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut });
             }
@@ -264,6 +264,7 @@
         spinButton.disabled = true;
         spinButton.removeEventListener("click", spinHandler);
         spinHandler = null;
+        mechanicsWheel.clearAnimations(); // Clear any queued animations
         spinTimeout = setTimeout(() => {
           if (spinLock) {
             console.error("Spin timeout triggered");
