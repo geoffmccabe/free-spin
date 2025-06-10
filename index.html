@@ -201,7 +201,7 @@
             canvas: document.getElementById("canvas-text"),
             numSegments: segments.length,
             segments: segments,
-            rotationAngle: -60, // Rotate 60 degrees counter-clockwise
+            rotationAngle: -240, // Rotate 180 degrees from -60
             quantityRadius: quantityRadius,
             tokenRadius: tokenRadius,
             draw: function () {
@@ -235,7 +235,7 @@
           mechanicsWheel.animation.callbackBefore = () => {
             if (wheelSpinning) {
               TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
+              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 240;
               textWheel.draw();
             }
           };
@@ -259,6 +259,7 @@
         spinButton.removeEventListener("click", spinHandler);
         spinHandler = null;
         mechanicsWheel.stopAnimation(false); // Clear any queued animations
+        mechanicsWheel.startAnimation(); // Start spinning immediately
         try {
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
@@ -279,7 +280,6 @@
             spinButton.disabled = true;
             return;
           }
-          mechanicsWheel.startAnimation();
           const segmentNumber = data.segmentIndex + 1;
           const seg = mechanicsWheel.segments[segmentNumber];
           if (!seg) {
