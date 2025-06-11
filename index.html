@@ -18,7 +18,7 @@
       height: 100vh;
     }
     .container {
-      max-height: 95vh;
+      max-height: 100vh;
       overflow: hidden;
       display: flex;
       flex-direction: column;
@@ -201,7 +201,7 @@
             canvas: document.getElementById("canvas-text"),
             numSegments: segments.length,
             segments: segments,
-            rotationAngle: 180, // Rotate to 180 degrees
+            rotationAngle: -60, // Reverted to working angle
             quantityRadius: quantityRadius,
             tokenRadius: tokenRadius,
             draw: function () {
@@ -235,7 +235,7 @@
           mechanicsWheel.animation.callbackBefore = () => {
             if (wheelSpinning) {
               TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle + 180;
+              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
               textWheel.draw();
             }
           };
@@ -258,8 +258,8 @@
         spinButton.disabled = true;
         spinButton.removeEventListener("click", spinHandler);
         spinHandler = null;
-        mechanicsWheel.stopAnimation(false); // Clear any queued animations
-        mechanicsWheel.startAnimation(); // Start spinning immediately
+        mechanicsWheel.stopAnimation(false);
+        mechanicsWheel.startAnimation();
         try {
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
