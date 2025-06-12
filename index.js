@@ -16,7 +16,7 @@ dotenv.config();
 const requiredEnv = [
   'DISCORD_APP_ID',
   'DISCORD_TOKEN',
-  'DISCORD_GUILD_ID',
+  'DISCORD_GUILD',
   'API_URL',
   'SUPABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY'
@@ -40,6 +40,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
   ],
   partials: [Partials.Channel],
@@ -49,7 +50,7 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
-const SPIN_CHANNEL_NAME = "spin";
+const SPIN_CHANNEL_NAME = "🔄│free-spin";
 let lastLeaderboardPost = "";
 
 process.on('unhandledRejection', (error) => {
@@ -76,7 +77,7 @@ process.on('SIGTERM', async () => {
     await rest.put(
       Routes.applicationGuildCommands(
         process.env.DISCORD_APP_ID,
-        process.env.DISCORD_GUILD_ID,
+        process.env.DISCORD_GUILD,
       ),
       {
         body: [
@@ -178,7 +179,7 @@ async function handleWalletCommand(interaction, walletAddress) {
     }
 
     const action = existingUser ? 'updated' : 'linked';
-    await interaction.reply({ content: `✅ Wallet ${action}: \`${walletAddress}\``, ephemeral: true });
+    await interaction.reply({ content: `✅ Wallet ${action}: \`${walletAddress}\`, ephemeral: true });
   } catch (error) {
     console.error('handleWalletCommand error:', error);
     if (!interaction.replied && !interaction.deferred) {
@@ -273,7 +274,7 @@ async function fetchLeaderboardText() {
     if (!data) return 'No leaderboard data available.';
     
     const lines = data.split('\n');
-    const guild = client.guilds.cache.get(process.env.DISCORD_GUILD_ID);
+    const guild = client.guilds.cache.get(process.env.DISCORD_GUILD);
     const updatedLines = await Promise.all(lines.map(async (line) => {
       const match = line.match(/: (\d{17,19}) —/);
       if (!match) return line;
