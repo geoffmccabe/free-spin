@@ -1,17 +1,20 @@
 {
   "name": "free-spin-bot",
-  "type": "module",
   "version": "1.0.0",
+  "description": "A Discord bot for spinning a wheel to win $HAROLD tokens",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
+    "@solana/spl-token": "^1.0.0",
+    "@solana/web3.js": "^1.0.0",
     "@supabase/supabase-js": "^2.45.4",
-    "discord.js": "^14.16.1",
+    "discord.js": "^14.16.2",
     "dotenv": "^16.4.5",
-    "uuid": "^10.0.0",
-    "@solana/web3.js": "^1.95.3",
-    "@solana/spl-token": "^0.4.8"
+    "uuid": "^10.0.0"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }
