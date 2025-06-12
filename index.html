@@ -105,7 +105,7 @@
       let mechanicsWheel = null;
       let textWheel = null;
       let wheelSpinning = false;
-      let spinLock = false;
+      let spinTimeout = null;
 
       const token = new URLSearchParams(window.location.search).get("token");
       if (!token) {
@@ -150,10 +150,11 @@
           tokenName = data.tokenConfig.token_name;
           const payouts = data.tokenConfig.payout_amounts || [];
           segments = payouts.map((amount) => ({
+            fillStyle: 'transparent',
             text: `${amount}`,
             text2: `${tokenName}`,
             textFillStyle: 'white',
-            textFontSize: 45,
+            textFontSize: 35,
             textFontSize2: 36,
             textFontFamily: 'Arial',
             textAlignment: 'center'
@@ -171,13 +172,13 @@
           const container = document.getElementById('wheel-container');
           const size = Math.min(container.offsetWidth, container.offsetHeight);
           const radius = size / 2;
-          const quantityRadius = radius * 0.8;
+          const quantityRadius = radius * 0.81;
           const tokenRadius = quantityRadius * 0.85;
 
           mechanicsWheel = new Winwheel({
             canvasId: "canvas-mechanics",
             numSegments: segments.length,
-            segments: segments.map(() => ({ fillStyle: 'transparent', strokeStyle: 'none' })),
+            segments: segments,
             outerRadius: radius,
             pointerAngle: 0,
             animation: {
@@ -191,52 +192,65 @@
                   document.getElementById("error-message").textContent = "Spin completed, but no prize received.";
                 }
                 wheelSpinning = false;
-                spinLock = false;
                 document.getElementById("spin-button").disabled = true;
               }
             }
           });
 
-          textWheel = {
-            canvas: document.getElementById("canvas-text"),
+          textWheel = new Winwheel({
+            canvasId: "canvas-text",
             numSegments: segments.length,
-            segments: segments,
-            rotationAngle: 60, // Corrected to 60 degrees
-            quantityRadius: quantityRadius,
-            tokenRadius: tokenRadius,
-            draw: function () {
-              const ctx = this.canvas.getContext('2d');
-              ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-              const centerX = this.canvas.width / 2;
-              const centerY = this.canvas.height / 2;
-              const segmentAngle = (2 * Math.PI) / this.numSegments;
+            segments: segments.map(seg => ({
+              text: seg.text,
+              text2: seg.text2,
+              textFillStyle: 'white',
+              textFontSize: 35,
+              textFontSize2: 36,
+              textFontFamily: 'Arial',
+              textAlignment: 'center'
+            })),
+            outerRadius: quantityRadius,
+            textRadius2: tokenRadius,
+            pointerAngle: 0,
+            drawMode: 'text',
+            textOrientation: 'curved',
+            textFillStyle: 'white',
+            textAlignment: 'center',
+            lineWidth: 0,
+            strokeStyle: 'transparent'
+          });
 
-              for (let i = 1; i <= this.numSegments; i++) {
-                const seg = this.segments[i - 1];
-                const angle = this.rotationAngle * (Math.PI / 180) + (i - 1) * segmentAngle + segmentAngle / 2;
+          textWheel.draw = function () {
+            const ctx = this.ctx;
+            ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            const centerX = this.canvas.width / 2;
+            const centerY = this.canvas.height / 2;
+            const segmentAngle = (2 * Math.PI) / this.numSegments;
 
-                ctx.save();
-                ctx.translate(centerX, centerY);
-                ctx.rotate(angle);
-                ctx.fillStyle = seg.textFillStyle;
-                ctx.font = `${seg.textFontSize}px ${seg.textFontFamily}`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(seg.text, 0, -this.quantityRadius);
-                ctx.font = `${seg.textFontSize2}px ${seg.textFontFamily}`;
-                ctx.fillText(seg.text2, 0, -this.tokenRadius);
-                ctx.restore();
-              }
+            for (let i = 1; i <= this.numSegments; i++) {
+              const seg = this.segments[i];
+              const angle = this.rotationAngle * (Math.PI / 180) + (i - 1) * segmentAngle + segmentAngle / 2;
+
+              ctx.save();
+              ctx.translate(centerX, centerY);
+              ctx.rotate(angle);
+              ctx.fillStyle = seg.textFillStyle;
+              ctx.font = `${seg.textFontSize}px ${seg.textFontFamily}`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(seg.text, 0, -quantityRadius);
+              ctx.font = `${seg.textFontSize2}px ${seg.textFontFamily}`;
+              ctx.fillText(seg.text2, 0, -tokenRadius);
+              ctx.restore();
             }
           };
-
-          textWheel.draw();
 
           mechanicsWheel.animation.callbackBefore = () => {
             if (wheelSpinning) {
               TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle + 60;
+              textWheel.rotationAngle = mechanicsWheel.rotationAngle;
               textWheel.draw();
+              TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut });
             }
           };
 
@@ -252,15 +266,12 @@
 
       const spinButton = document.getElementById("spin-button");
       let spinHandler = async () => {
-        if (wheelSpinning || spinLock || !mechanicsWheel) return;
-        spinLock = true;
+        if (wheelSpinning || !mechanicsWheel) return;
         wheelSpinning = true;
         spinButton.disabled = true;
         spinButton.removeEventListener("click", spinHandler);
-        spinHandler = null;
-        mechanicsWheel.stopAnimation(false);
-        mechanicsWheel.startAnimation();
         try {
+          mechanicsWheel.startAnimation();
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -276,7 +287,6 @@
             }
             mechanicsWheel.stopAnimation(false);
             wheelSpinning = false;
-            spinLock = false;
             spinButton.disabled = true;
             return;
           }
@@ -286,7 +296,6 @@
             document.getElementById("error-message").textContent = "Spin failed: Segment missing";
             mechanicsWheel.stopAnimation(false);
             wheelSpinning = false;
-            spinLock = false;
             spinButton.disabled = true;
             return;
           }
@@ -299,7 +308,6 @@
           document.getElementById("error-message").textContent = "Spin failed: " + err.message;
           mechanicsWheel.stopAnimation(false);
           wheelSpinning = false;
-          spinLock = false;
           spinButton.disabled = true;
         }
       };
