@@ -201,7 +201,7 @@
             canvas: document.getElementById("canvas-text"),
             numSegments: segments.length,
             segments: segments,
-            rotationAngle: -60, // Reverted to working angle
+            rotationAngle: 60, // Corrected to 60 degrees
             quantityRadius: quantityRadius,
             tokenRadius: tokenRadius,
             draw: function () {
@@ -235,7 +235,7 @@
           mechanicsWheel.animation.callbackBefore = () => {
             if (wheelSpinning) {
               TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
+              textWheel.rotationAngle = mechanicsWheel.rotationAngle + 60;
               textWheel.draw();
             }
           };
