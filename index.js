@@ -269,16 +269,20 @@ async function fetchLeaderboardText() {
   try {
     const { data, error } = await supabase.rpc('fetch_leaderboard_text');
     if (error) throw error;
-    
     if (!data) return 'No leaderboard data available.';
-    
+
     const lines = data.split('\n');
     const guild = client.guilds.cache.get(process.env.DISCORD_GUILD);
+    if (!guild) {
+      console.error('Guild not found for DISCORD_GUILD:', process.env.DISCORD_GUILD);
+      return 'Error: Cannot find Discord server.';
+    }
+
     const updatedLines = await Promise.all(lines.map(async (line) => {
       const match = line.match(/: (\d{17,19}) —/);
       if (!match) return line;
+
       const discord_id = match[1];
-      
       try {
         const member = await guild.members.fetch(discord_id);
         const username = member.nickname || member.user.username;
@@ -286,10 +290,10 @@ async function fetchLeaderboardText() {
         return line.replace(discord_id, username);
       } catch (err) {
         console.error(`Failed to fetch username for discord_id: ${discord_id}`, err);
-        return line.replace(discord_id, `User_${discord_id}`);
+        return line.replace(discord_id, `User_${discord_id.slice(-4)}`);
       }
     }));
-    
+
     return updatedLines.join('\n') || 'No leaderboard data available.';
   } catch (error) {
     console.error('Leaderboard fetch error:', error);
@@ -309,7 +313,7 @@ client.on("interactionCreate", async (interaction) => {
     console.log(`Received command: ${interaction.commandName}, channel: ${interaction.channel.name}`);
     if (interaction.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) {
       console.log(`Channel mismatch: expected ${SPIN_CHANNEL_NAME}, got ${interaction.channel.name}`);
-      return interaction.reply({ content: `Please use this command in the #${SPIN_CHANNEL_NAME} channel.`, ephemeral: true });
+      return interaction.reply({ content: `Please use this command in the #${SPIN_CHANNEL_NAME} channel.`, flags: 64 });
     }
     await interaction.deferReply({ ephemeral: true });
     await handleVerifyCommand(interaction);
@@ -341,7 +345,7 @@ setInterval(async () => {
 
     const leaderboardText = await fetchLeaderboardText();
     if (leaderboardText !== lastLeaderboardPost) {
-      channel.send(`🏆 **Updated Leaderboard:**\n\n${leaderboardText}`);
+      await channel.send(`🏆 **Updated Leaderboard:**\n\n${leaderboardText}`);
       lastLeaderboardPost = leaderboardText;
     }
   } catch (error) {
