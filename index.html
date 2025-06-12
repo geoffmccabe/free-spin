@@ -105,7 +105,7 @@
       let mechanicsWheel = null;
       let textWheel = null;
       let wheelSpinning = false;
-      let spinTimeout = null;
+      let spinLock = false;
 
       const token = new URLSearchParams(window.location.search).get("token");
       if (!token) {
@@ -191,11 +191,8 @@
                   document.getElementById("error-message").textContent = "Spin completed, but no prize received.";
                 }
                 wheelSpinning = false;
+                spinLock = false;
                 document.getElementById("spin-button").disabled = true;
-                if (spinTimeout) {
-                  clearTimeout(spinTimeout);
-                  spinTimeout = null;
-                }
               }
             }
           });
@@ -256,20 +253,15 @@
 
       const spinButton = document.getElementById("spin-button");
       let spinHandler = async () => {
-        if (wheelSpinning || !mechanicsWheel) return;
+        if (wheelSpinning || spinLock || !mechanicsWheel) return;
+        spinLock = true;
         wheelSpinning = true;
         spinButton.disabled = true;
         spinButton.removeEventListener("click", spinHandler);
-        spinTimeout = setTimeout(() => {
-          if (wheelSpinning) {
-            console.error("Spin timeout triggered");
-            mechanicsWheel.stopAnimation(false);
-            wheelSpinning = false;
-            spinButton.disabled = true;
-          }
-        }, 6000);
+        mechanicsWheel.stopAnimation(false); // Clear queue
+        document.getElementById("error-message").textContent = "Spinning...";
+
         try {
-          mechanicsWheel.startAnimation();
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -278,38 +270,35 @@
           const data = await res.json();
           console.log("Spin API response:", data);
           if (!res.ok || typeof data.segmentIndex !== 'number' || !data.prize) {
-            if (data.error === "Token already used") {
-              document.getElementById("error-message").textContent = "You have already used your daily free spins.";
-            } else {
-              document.getElementById("error-message").textContent = data.error || "Spin failed";
-            }
-            mechanicsWheel.stopAnimation(false);
-            wheelSpinning = false;
-            spinButton.disabled = true;
-            clearTimeout(spinTimeout);
-            return;
+            throw new Error(data.error || "Spin failed");
           }
+
           const segmentNumber = data.segmentIndex + 1;
           const seg = mechanicsWheel.segments[segmentNumber];
           if (!seg) {
-            document.getElementById("error-message").textContent = "Spin failed: Segment missing";
-            mechanicsWheel.stopAnimation(false);
-            wheelSpinning = false;
-            spinButton.disabled = true;
-            clearTimeout(spinTimeout);
-            return;
+            throw new Error("Spin failed: Segment missing");
           }
+
           const center = (seg.startAngle + seg.endAngle) / 2;
-          const stopAngle = (center + 360) % 360;
+          const stopAngle = (center + 360 - 30) % 360; // 30° offset for boundary
+          console.log(`Segment: ${segmentNumber}, Stop Angle: ${stopAngle}`);
           mechanicsWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
+
+          mechanicsWheel.startAnimation();
+          setTimeout(() => {
+            if (announcedPrize) {
+              document.getElementById("error-message").textContent = `You won: ${announcedPrize}`;
+            }
+          }, 5100); // Delay for animation
+
         } catch (err) {
           console.error("Spin fetch error:", err.message);
           document.getElementById("error-message").textContent = "Spin failed: " + err.message;
           mechanicsWheel.stopAnimation(false);
           wheelSpinning = false;
+          spinLock = false;
           spinButton.disabled = true;
-          clearTimeout(spinTimeout);
         }
       };
       spinButton.addEventListener("click", spinHandler);
