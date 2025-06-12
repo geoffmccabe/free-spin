@@ -40,7 +40,6 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
   ],
   partials: [Partials.Channel],
@@ -179,7 +178,7 @@ async function handleWalletCommand(interaction, walletAddress) {
     }
 
     const action = existingUser ? 'updated' : 'linked';
-    await interaction.reply({ content: `✅ Wallet ${action}: \`${walletAddress}\`, ephemeral: true });
+    await interaction.reply({ content: `✅ Wallet ${action}: \`${walletAddress}\``, ephemeral: true });
   } catch (error) {
     console.error('handleWalletCommand error:', error);
     if (!interaction.replied && !interaction.deferred) {
@@ -259,9 +258,9 @@ async function handleVerifyCommand(interaction) {
   } catch (error) {
     console.error(`handleVerifyCommand error for discord_id: ${discord_id}:`, error);
     if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: `❌ Failed to generate spin link.`, ephemeral: true });
+      await interaction.reply({ content: `❌ Failed to generate spin link.`, ephemeral: true });
     } else {
-        await interaction.editReply({ content: `❌ Failed to generate spin link.`, ephemeral: true });
+      await interaction.editReply({ content: `❌ Failed to generate spin link.`, ephemeral: true });
     }
   }
 }
