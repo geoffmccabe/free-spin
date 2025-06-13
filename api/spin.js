@@ -130,7 +130,7 @@ export default async function handler(req, res) {
       const { data: walletTotal, error: walletTotalError } = await supabase
         .from('wallet_totals')
         .select('total_won')
-        .eq('wallet_address', wallet_address)
+        .eq('wallet', wallet_address)
         .eq('contract_address', contract_address)
         .single();
 
@@ -142,7 +142,7 @@ export default async function handler(req, res) {
       const newTotal = walletTotal ? walletTotal.total_won + rewardAmount : rewardAmount;
       const { error: walletUpdateError } = await supabase
         .from('wallet_totals')
-        .upsert({ wallet_address, contract_address, total_won: newTotal }, { onConflict: 'wallet_address,contract_address' });
+        .upsert({ wallet: wallet_address, contract_address, total_won: newTotal }, { onConflict: 'wallet,contract_address' });
 
       if (walletUpdateError) {
         console.error("Wallet update error:", walletUpdateError);
