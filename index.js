@@ -325,13 +325,14 @@ async function fetchLeaderboardText() {
     }
 
     const updatedLines = await Promise.all(lines.map(async (line) => {
-      const match = line.match(/#(\d+): (\d{17,19}) — (\d+) \$HAROLD/);
-      if (!match) {
-        console.log(`No match for line: ${line}`);
+      const parts = line.split(' ');
+      const discord_id = parts.find(p => /^\d{17,19}$/.test(p));
+
+      if (!discord_id) {
+        console.log(`No discord_id found in line: ${line}`);
         return line;
       }
 
-      const discord_id = match[2];
       try {
         const member = await guild.members.fetch(discord_id);
         const username = member.nickname || member.user.username;
