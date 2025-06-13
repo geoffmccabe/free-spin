@@ -131,7 +131,7 @@ export default async function handler(req, res) {
         .from('wallet_totals')
         .select('total_won')
         .eq('wallet', wallet_address)
-        .eq('contract_address', contract_address)
+        .eq('token_id', config.token_id)
         .single();
 
       if (walletTotalError && walletTotalError.code !== 'PGRST116') {
@@ -142,7 +142,7 @@ export default async function handler(req, res) {
       const newTotal = walletTotal ? walletTotal.total_won + rewardAmount : rewardAmount;
       const { error: walletUpdateError } = await supabase
         .from('wallet_totals')
-        .upsert({ wallet: wallet_address, contract_address, total_won: newTotal }, { onConflict: 'wallet,contract_address' });
+        .upsert({ wallet: wallet_address, token_id: config.token_id, total_won: newTotal }, { onConflict: 'wallet,token_id' });
 
       if (walletUpdateError) {
         console.error("Wallet update error:", walletUpdateError);
