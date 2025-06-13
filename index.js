@@ -274,6 +274,7 @@ async function handleVerifyCommand(interaction) {
       throw new Error(`Failed to check recent spins.`);
     }
 
+    console.log(`Recent spins count: ${recentSpins.length}`);
     if (recentSpins.length >= dailySpinLimit) {
       console.log(`Spin limit reached for discord_id: ${discord_id}`);
       return interaction.editReply({ content: `❌ You've reached your daily spin limit for this token. Try again tomorrow!`, flags: 64 });
@@ -317,6 +318,7 @@ async function fetchLeaderboardText() {
     }
     if (!data) return 'No leaderboard data available.';
 
+    console.log(`Raw leaderboard data: ${data}`);
     const lines = data.split('\n');
     const guild = client.guilds.cache.get(process.env.DISCORD_GUILD);
     if (!guild) {
@@ -325,14 +327,35 @@ async function fetchLeaderboardText() {
     }
 
     const updatedLines = await Promise.all(lines.map(async (line) => {
-      const parts = line.split(' ');
-      const discord_id = parts.find(p => /^\d{17,19}$/.test(p));
-
-      if (!discord_id) {
-        console.log(`No discord_id found in line: ${line}`);
+      const match = line.match(/: (\d{17,19}) —/);
+      if (!match) {
+        console.log(`No discord_id match in line: ${line}`);
+        const walletMatch = line.match(/: ([A-HJ-NP-Za-km-z1-9]{32,44}) —/);
+        if (walletMatch) {
+          const wallet = walletMatch[1];
+          const { data: userData, error: userError } = await supabase
+            .from('users')
+            .select('discord_id')
+            .eq('wallet_address', wallet)
+            .single();
+          if (userError || !userData) {
+            console.error(`No discord_id for wallet: ${wallet}`);
+            return line.replace(wallet, `User_${wallet.slice(-4)}`);
+          }
+          try {
+            const member = await guild.members.fetch(userData.discord_id);
+            const username = member.nickname || member.user.username;
+            console.log(`Mapped wallet ${wallet} to discord_id: ${userData.discord_id}, username: ${username}`);
+            return line.replace(wallet, username);
+          } catch (err) {
+            console.error(`Failed to fetch username for discord_id: ${userData.discord_id}`, err);
+            return line.replace(wallet, `User_${userData.discord_id.slice(-4)}`);
+          }
+        }
         return line;
       }
 
+      const discord_id = match[1];
       try {
         const member = await guild.members.fetch(discord_id);
         const username = member.nickname || member.user.username;
