@@ -26,13 +26,18 @@ export default async function handler(req, res) {
 
     const { data: tokenData, error: tokenError } = await supabase
       .from('spin_tokens')
-      .select('discord_id, wallet_address, contract_address')
+      .select('discord_id, wallet_address, contract_address, used, signature')
       .eq('token', token)
-      .eq('used', false)
       .single();
 
     if (tokenError || !tokenData) {
+      console.error('Token query error:', tokenError?.message || 'No token found');
       return res.status(400).json({ error: 'Invalid or used token' });
+    }
+
+    if (tokenData.used) {
+      console.log(`Token already used: ${token}`);
+      return res.status(400).json({ error: 'Token already used' });
     }
 
     const { discord_id, wallet_address, contract_address } = tokenData;
@@ -45,6 +50,7 @@ export default async function handler(req, res) {
       .single();
 
     if (configError || !config) {
+      console.error('Config query error:', configError?.message || 'No config found');
       return res.status(400).json({ error: 'Invalid wheel configuration' });
     }
 
@@ -88,21 +94,28 @@ export default async function handler(req, res) {
         )
       );
 
-      const signature = await sendAndConfirmTransaction(connection, transaction, [fundingWallet], {
-        commitment: 'confirmed',
-        preflightCommitment: 'confirmed',
-        maxRetries: 3,
-      });
-      console.log("Transaction confirmed with signature:", signature);
+      let signature;
+      try {
+        signature = await sendAndConfirmTransaction(connection, transaction, [fundingWallet], {
+          commitment: 'confirmed',
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        });
+        console.log("Transaction confirmed with signature:", signature);
+      } catch (txError) {
+        console.error('Transaction error:', txError.message);
+        throw new Error(`Transaction failed: ${txError.message}`);
+      }
 
       const { error: tokenUpdateError } = await supabase
         .from('spin_tokens')
         .update({ used: true, signature })
-        .eq('token', token);
+        .eq('token', token)
+        .eq('used', false);
 
       if (tokenUpdateError) {
-        console.error("Token update error:", tokenUpdateError);
-        return res.status(500).json({ error: 'Failed to update spin token' });
+        console.error("Token update error:", tokenUpdateError.message, tokenUpdateError);
+        throw new Error('Failed to update spin token');
       }
 
       const { error: spinInsertError } = await supabase
@@ -110,8 +123,8 @@ export default async function handler(req, res) {
         .insert({ discord_id, reward: rewardAmount, contract_address, signature });
 
       if (spinInsertError) {
-        console.error("Spin insert error:", spinInsertError);
-        return res.status(500).json({ error: 'Failed to record spin' });
+        console.error("Spin insert error:", spinInsertError.message);
+        throw new Error('Failed to record spin');
       }
 
       const { data: walletTotal, error: walletTotalError } = await supabase
@@ -123,7 +136,7 @@ export default async function handler(req, res) {
 
       if (walletTotalError && walletTotalError.code !== 'PGRST116') {
         console.error("Wallet total error:", walletTotalError);
-        return res.status(500).json({ error: 'Failed to update wallet total' });
+        throw new Error('Failed to update wallet total');
       }
 
       const newTotal = walletTotal ? walletTotal.total_won + rewardAmount : rewardAmount;
@@ -133,7 +146,7 @@ export default async function handler(req, res) {
 
       if (walletUpdateError) {
         console.error("Wallet update error:", walletUpdateError);
-        return res.status(500).json({ error: 'Failed to update wallet total' });
+        throw new Error('Failed to update wallet total');
       }
 
       return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText });
