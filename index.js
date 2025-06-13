@@ -139,136 +139,182 @@ process.on('SIGTERM', async () => {
   }
 })();
 
+async function retryQuery(queryFn, maxRetries = 3, delayMs = 1000) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await queryFn();
+    } catch (error) {
+      console.error(`Query attempt ${attempt} failed: ${error.message}`);
+      if (attempt === maxRetries) throw error;
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 async function handleWalletCommand(interaction, walletAddress) {
   try {
+    await interaction.deferReply({ ephemeral: true });
     const discord_id = interaction.user.id;
     console.log(`Processing wallet command for discord_id: ${discord_id}, address: ${walletAddress || 'none'}`);
 
-    const { data: existingUser, error: userError } = await supabase
-      .from('users')
-      .select('wallet_address')
-      .eq('discord_id', discord_id)
-      .single();
+    const { data: existingUser, error: userError } = await retryQuery(() =>
+      supabase
+        .from('users')
+        .select('wallet_address')
+        .eq('discord_id', discord_id)
+        .single()
+    );
 
     if (userError && userError.code !== 'PGRST116') {
-      console.error(`User query error: ${userError.message}`);
-      return interaction.reply({ content: '❌ Database error querying user data.', ephemeral: true });
+      console.error(`User query error: ${userError.message}, code: ${userError.code}`);
+      return interaction.editReply({ content: '❌ Database error querying user data. Please try again.', flags: 64 });
     }
 
     if (!walletAddress) {
       if (existingUser) {
-        return interaction.reply({ content: `Your current wallet is: \`${existingUser.wallet_address}\`\nTo update, use \`/mywallet <new_address>\`.`, ephemeral: true });
+        return interaction.editReply({ content: `Your current wallet is: \`${existingUser.wallet_address}\`\nTo update, use \`/mywallet <new_address>\`.`, flags: 64 });
       } else {
-        return interaction.reply({ content: '❌ No wallet linked. Use `/mywallet <your_solana_address>` to link one.', ephemeral: true });
+        return interaction.editReply({ content: '❌ No wallet linked. Use `/mywallet <your_solana_address>` to link one.', flags: 64 });
       }
     }
 
     const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{32,44}$/;
     if (!walletRegex.test(walletAddress)) {
-      return interaction.reply({ content: '❌ Invalid Solana wallet address.', ephemeral: true });
+      return interaction.editReply({ content: '❌ Invalid Solana wallet address.', flags: 64 });
     }
 
-    const { error: upsertError } = await supabase
-      .from('users')
-      .upsert({ discord_id, wallet_address: walletAddress }, { onConflict: 'discord_id' });
+    const { error: upsertError } = await retryQuery(() =>
+      supabase
+        .from('users')
+        .upsert({ discord_id, wallet_address: walletAddress }, { onConflict: 'discord_id' })
+    );
 
     if (upsertError) {
-      console.error(`Wallet upsert error: ${upsertError.message}`);
-      return interaction.reply({ content: '❌ Failed to save wallet due to database error.', ephemeral: true });
+      console.error(`Wallet upsert error: ${upsertError.message}, code: ${upsertError.code}`);
+      return interaction.editReply({ content: '❌ Failed to save wallet due to database error.', flags: 64 });
     }
 
     const action = existingUser ? 'updated' : 'linked';
-    await interaction.reply({ content: `✅ Wallet ${action}: \`${walletAddress}\``, ephemeral: true });
+    await interaction.editReply({ content: `✅ Wallet ${action}: \`${walletAddress}\``, flags: 64 });
   } catch (error) {
-    console.error('handleWalletCommand error:', error);
+    console.error('handleWalletCommand error:', error.message, error.stack);
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: '❌ An unexpected error occurred.', ephemeral: true });
+      await interaction.reply({ content: '❌ An unexpected error occurred.', flags: 64 }).catch(err => console.error('Reply error:', err));
+    } else if (!interaction.replied) {
+      await interaction.editReply({ content: '❌ An unexpected error occurred.', flags: 64 }).catch(err => console.error('Edit reply error:', err));
     }
   }
 }
 
 async function handleVerifyCommand(interaction) {
-  const discord_id = interaction.user.id;
   try {
+    await interaction.deferReply({ ephemeral: true });
+    const discord_id = interaction.user.id;
     console.log(`Processing spin for discord_id: ${discord_id}`);
     
-    const { data: userData, error: userError } = await supabase
-      .from('users')
-      .select('wallet_address')
-      .eq('discord_id', discord_id)
-      .single();
+    const { data: userData, error: userError } = await retryQuery(() =>
+      supabase
+        .from('users')
+        .select('wallet_address')
+        .eq('discord_id', discord_id)
+        .single()
+    );
 
     if (userError || !userData?.wallet_address) {
-      return interaction.editReply({ content: `❌ Please link your wallet first with \`/mywallet <your_solana_address>\`!`, ephemeral: true });
+      console.error(`User query error: ${userError?.message || 'No wallet found'}, code: ${userError?.code || 'N/A'}`);
+      return interaction.editReply({ content: `❌ Please link your wallet first with \`/mywallet <your_solana_address>\`!`, flags: 64 });
     }
 
     const wallet_address = userData.wallet_address;
     console.log(`Wallet for spin: ${wallet_address}`);
 
-    const { data: tokens, error: tokenError } = await supabase
-      .from('wheel_configurations')
-      .select('contract_address')
-      .eq('active', true);
+    const { data: tokens, error: tokenError } = await retryQuery(() =>
+      supabase
+        .from('wheel_configurations')
+        .select('contract_address')
+        .eq('active', true)
+    );
 
     if (tokenError || !tokens || tokens.length === 0) {
-      return interaction.editReply({ content: '❌ No active prize tokens available. Try again later.', ephemeral: true });
+      console.error(`Token query error: ${tokenError?.message || 'No tokens'}, code: ${tokenError?.code || 'N/A'}`);
+      return interaction.editReply({ content: '❌ No active prize tokens available. Try again later.', flags: 64 });
     }
 
     const randomToken = tokens[Math.floor(Math.random() * tokens.length)];
     const contract_address = randomToken.contract_address;
     console.log(`Selected token: ${contract_address}`);
     
-    const { data: limitRow, error: limitError } = await supabase
-      .from('spin_limits')
-      .select('daily_spin_limit')
-      .eq('wallet_address', wallet_address)
-      .single();
+    const { data: limitRow, error: limitError } = await retryQuery(() =>
+      supabase
+        .from('spin_limits')
+        .select('daily_spin_limit')
+        .eq('wallet_address', wallet_address)
+        .single()
+    );
 
-    if (limitError && limitError.code !== 'PGRST116') throw new Error(`Failed to check spin limit.`);
+    if (limitError && limitError.code !== 'PGRST116') {
+      console.error(`Limit query error: ${limitError.message}, code: ${limitError.code}`);
+      throw new Error(`Failed to check spin limit.`);
+    }
     
     const dailySpinLimit = limitRow?.daily_spin_limit || 1;
     console.log(`Daily spin limit: ${dailySpinLimit}`);
 
-    const { data: recentSpins, error: spinError } = await supabase
-      .from('daily_spins')
-      .select('id', { count: 'exact' })
-      .eq('discord_id', discord_id)
-      .eq('contract_address', contract_address)
-      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+    const { data: recentSpins, error: spinError } = await retryQuery(() =>
+      supabase
+        .from('daily_spins')
+        .select('id', { count: 'exact' })
+        .eq('discord_id', discord_id)
+        .eq('contract_address', contract_address)
+        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+    );
 
-    if (spinError) throw new Error(`Failed to check recent spins.`);
+    if (spinError) {
+      console.error(`Spin query error: ${spinError.message}, code: ${spinError.code}`);
+      throw new Error(`Failed to check recent spins.`);
+    }
 
     if (recentSpins.length >= dailySpinLimit) {
       console.log(`Spin limit reached for discord_id: ${discord_id}`);
-      return interaction.editReply({ content: `❌ You've reached your daily spin limit for this token. Try again tomorrow!`, ephemeral: true });
+      return interaction.editReply({ content: `❌ You've reached your daily spin limit for this token. Try again tomorrow!`, flags: 64 });
     }
 
     const token = uuidv4();
-    const { error: insertError } = await supabase
-      .from("spin_tokens")
-      .insert({ token, discord_id, wallet_address, contract_address });
+    const { error: insertError } = await retryQuery(() =>
+      supabase
+        .from("spin_tokens")
+        .insert({ token, discord_id, wallet_address, contract_address })
+    );
       
-    if (insertError) throw new Error(`Failed to save spin token.`);
+    if (insertError) {
+      console.error(`Token insert error: ${insertError.message}, code: ${insertError.code}`);
+      throw new Error(`Failed to save spin token.`);
+    }
 
     const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/index.html?token=${token}`;
     console.log(`Generated spin URL: ${spinUrl}`);
     
-    await interaction.editReply({ content: `🎯 Click to spin the wheel:\n🔗 ${spinUrl}`, ephemeral: true });
+    await interaction.editReply({ content: `🎯 Click to spin the wheel:\n🔗 ${spinUrl}`, flags: 64 });
 
   } catch (error) {
-    console.error(`handleVerifyCommand error for discord_id: ${discord_id}:`, error);
+    console.error(`handleVerifyCommand error for discord_id: ${discord_id}:`, error.message, error.stack);
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: `❌ Failed to generate spin link.`, ephemeral: true });
-    } else {
-      await interaction.editReply({ content: `❌ Failed to generate spin link.`, ephemeral: true });
+      await interaction.reply({ content: `❌ Failed to generate spin link: ${error.message}`, flags: 64 }).catch(err => console.error('Reply error:', err));
+    } else if (!interaction.replied) {
+      await interaction.editReply({ content: `❌ Failed to generate spin link: ${error.message}`, flags: 64 }).catch(err => console.error('Edit reply error:', err));
     }
   }
 }
 
 async function fetchLeaderboardText() {
   try {
-    const { data, error } = await supabase.rpc('fetch_leaderboard_text');
-    if (error) throw error;
+    const { data, error } = await retryQuery(() =>
+      supabase.rpc('fetch_leaderboard_text')
+    );
+    if (error) {
+      console.error(`Leaderboard query error: ${error.message}, code: ${error.code}`);
+      throw error;
+    }
     if (!data) return 'No leaderboard data available.';
 
     const lines = data.split('\n');
@@ -279,10 +325,13 @@ async function fetchLeaderboardText() {
     }
 
     const updatedLines = await Promise.all(lines.map(async (line) => {
-      const match = line.match(/: (\d{17,19}) —/);
-      if (!match) return line;
+      const match = line.match(/#(\d+): (\d{17,19}) — (\d+) \$HAROLD/);
+      if (!match) {
+        console.log(`No match for line: ${line}`);
+        return line;
+      }
 
-      const discord_id = match[1];
+      const discord_id = match[2];
       try {
         const member = await guild.members.fetch(discord_id);
         const username = member.nickname || member.user.username;
@@ -296,7 +345,7 @@ async function fetchLeaderboardText() {
 
     return updatedLines.join('\n') || 'No leaderboard data available.';
   } catch (error) {
-    console.error('Leaderboard fetch error:', error);
+    console.error('Leaderboard fetch error:', error.message, error.stack);
     return 'Error fetching leaderboard: ' + error.message;
   }
 }
@@ -315,7 +364,6 @@ client.on("interactionCreate", async (interaction) => {
       console.log(`Channel mismatch: expected ${SPIN_CHANNEL_NAME}, got ${interaction.channel.name}`);
       return interaction.reply({ content: `Please use this command in the #${SPIN_CHANNEL_NAME} channel.`, flags: 64 });
     }
-    await interaction.deferReply({ ephemeral: true });
     await handleVerifyCommand(interaction);
   }
 
@@ -332,7 +380,7 @@ client.on("interactionCreate", async (interaction) => {
 
   if (interaction.commandName === "spinhelp") {
     const helpText = "**/mywallet <address>**: Link your Solana wallet.\n**/spin**: Get a link to spin the wheel.\n**/spinleaders**: View the leaderboard.";
-    await interaction.reply({ content: helpText, ephemeral: true });
+    await interaction.reply({ content: helpText, flags: 64 });
   }
 });
 
