@@ -101,16 +101,17 @@
     window.onload = function () {
       let segments = [];
       let tokenName = '';
-      let announcedPrize = null;
       let mechanicsWheel = null;
       let textWheel = null;
-      let wheelSpinning = false;
-      let spinLock = false;
+      let hasSpun = false;
 
       const token = new URLSearchParams(window.location.search).get("token");
+      const spinButton = document.getElementById("spin-button");
+      const messageDiv = document.getElementById("error-message");
+
       if (!token) {
-        document.getElementById("error-message").textContent = "No spin link provided.";
-        document.getElementById("spin-button").disabled = true;
+        messageDiv.textContent = "No spin link provided.";
+        spinButton.disabled = true;
         return;
       }
 
@@ -139,11 +140,11 @@
 
           if (!res.ok || !data.tokenConfig) {
             if (data.error === "Token already used") {
-              document.getElementById("error-message").textContent = "You have already used your daily free spins.";
+              messageDiv.textContent = "You have already used your daily free spins.";
             } else {
-              document.getElementById("error-message").textContent = data.error || "Failed to load spin configuration";
+              messageDiv.textContent = data.error || "Failed to load spin configuration";
             }
-            document.getElementById("spin-button").disabled = true;
+            spinButton.disabled = true;
             return;
           }
 
@@ -160,13 +161,12 @@
           }));
 
           if (segments.length === 0) {
-            document.getElementById("error-message").textContent = "No payout amounts configured.";
-            document.getElementById("spin-button").disabled = true;
+            messageDiv.textContent = "No payout amounts configured.";
+            spinButton.disabled = true;
             return;
           }
 
-          const overlay = document.getElementById("wheel-overlay");
-          overlay.src = data.tokenConfig.image_url || '/img/default_wheel.webp';
+          document.getElementById("wheel-overlay").src = data.tokenConfig.image_url || '/img/default_wheel.webp';
 
           const container = document.getElementById('wheel-container');
           const size = Math.min(container.offsetWidth, container.offsetHeight);
@@ -175,24 +175,19 @@
           const tokenRadius = quantityRadius * 0.85;
 
           mechanicsWheel = new Winwheel({
-            canvasId: "canvas-mechanics",
+            canvasId: 'canvas-mechanics',
             numSegments: segments.length,
             segments: segments.map(() => ({ fillStyle: 'transparent', strokeStyle: 'none' })),
             outerRadius: radius,
             pointerAngle: 0,
             animation: {
-              type: "spinToStop",
+              type: 'spinToStop',
               duration: 5,
               spins: 3600 / 360,
-              callbackFinished: function () {
-                if (announcedPrize) {
-                  document.getElementById("error-message").textContent = `You won: ${announcedPrize}`;
-                } else {
-                  document.getElementById("error-message").textContent = "Spin completed, but no prize received.";
-                }
-                wheelSpinning = false;
-                spinLock = false;
-                document.getElementById("spin-button").disabled = true;
+              callbackFinished: () => {
+                messageDiv.textContent = hasSpun && announcedPrize ? `You won: ${announcedPrize}` : 'Spin completed, but no prize received.';
+                hasSpun = false;
+                spinButton.disabled = true;
               }
             }
           });
@@ -233,7 +228,7 @@
           textWheel.draw();
 
           mechanicsWheel.animation.callbackBefore = () => {
-            if (wheelSpinning) {
+            if (hasSpun) {
               TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
               textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
               textWheel.draw();
@@ -241,26 +236,24 @@
             }
           };
 
-          document.getElementById("spin-button").disabled = false;
+          spinButton.disabled = false;
         } catch (err) {
           console.error("Initial fetch error:", err.message);
-          document.getElementById("error-message").textContent = "Failed to initialize spin: " + err.message;
-          document.getElementById("spin-button").disabled = true;
+          messageDiv.textContent = "Failed to initialize spin: " + err.message;
+          spinButton.disabled = true;
         }
       }
 
       initializeWheel();
 
-      const spinButton = document.getElementById("spin-button");
-      let spinHandler = async () => {
-        if (wheelSpinning || spinLock || !mechanicsWheel) return;
-        spinLock = true;
-        wheelSpinning = true;
+      const spinHandler = async () => {
+        if (hasSpun) return;
+        hasSpun = true;
         spinButton.disabled = true;
-        spinButton.removeEventListener("click", spinHandler);
-        mechanicsWheel.stopAnimation(false); // Clear queue
-        document.getElementById("error-message").textContent = "Spinning...";
+        spinButton.style.display = 'none';
+        messageDiv.textContent = "Spinning...";
 
+        mechanicsWheel.stopAnimation(false);
         try {
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
@@ -269,38 +262,32 @@
           });
           const data = await res.json();
           console.log("Spin API response:", data);
-          if (!res.ok || typeof data.segmentIndex !== 'number' || !data.prize) {
-            throw new Error(data.error || "Spin failed");
-          }
+          if (!res.ok) throw new Error(data.error || "Server error during spin");
 
           const segmentNumber = data.segmentIndex + 1;
           const seg = mechanicsWheel.segments[segmentNumber];
-          if (!seg) {
-            throw new Error("Spin failed: Segment missing");
-          }
+          if (!seg) throw new Error("Segment missing");
 
           const center = (seg.startAngle + seg.endAngle) / 2;
-          const stopAngle = (center + 360 - 30) % 360; // 30° offset for boundary
+          const stopAngle = (center + 360 - 120) % 360; // 120° offset for alignment
           console.log(`Segment: ${segmentNumber}, Stop Angle: ${stopAngle}`);
           mechanicsWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
 
           mechanicsWheel.startAnimation();
           setTimeout(() => {
-            if (announcedPrize) {
-              document.getElementById("error-message").textContent = `You won: ${announcedPrize}`;
-            }
-          }, 5100); // Delay for animation
+            messageDiv.textContent = `You won: ${data.prize}`;
+          }, 5500);
 
         } catch (err) {
-          console.error("Spin fetch error:", err.message);
-          document.getElementById("error-message").textContent = "Spin failed: " + err.message;
+          console.error("Spin error:", err.message);
+          messageDiv.textContent = `Spin failed: ${err.message}`;
           mechanicsWheel.stopAnimation(false);
-          wheelSpinning = false;
-          spinLock = false;
+          hasSpun = false;
           spinButton.disabled = true;
         }
       };
+
       spinButton.addEventListener("click", spinHandler);
     };
   </script>
