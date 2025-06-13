@@ -101,6 +101,7 @@
     window.onload = function () {
       let segments = [];
       let tokenName = '';
+      let announcedPrize = null;
       let mechanicsWheel = null;
       let textWheel = null;
       let hasSpun = false;
@@ -120,8 +121,8 @@
         const size = Math.min(container.offsetWidth, container.offsetHeight);
         const canvases = [document.getElementById('canvas-mechanics'), document.getElementById('canvas-text')];
         canvases.forEach(canvas => {
-          canvas.width = size;
-          canvas.height = size;
+          canvas.width = Math.max(size, 1); // Ensure non-zero
+          canvas.height = Math.max(size, 1);
         });
       }
 
@@ -247,13 +248,12 @@
       initializeWheel();
 
       const spinHandler = async () => {
-        if (hasSpun) return;
+        if (hasSpun || !mechanicsWheel) return;
         hasSpun = true;
         spinButton.disabled = true;
         spinButton.style.display = 'none';
         messageDiv.textContent = "Spinning...";
 
-        mechanicsWheel.stopAnimation(false);
         try {
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
             method: "POST",
@@ -276,13 +276,17 @@
 
           mechanicsWheel.startAnimation();
           setTimeout(() => {
-            messageDiv.textContent = `You won: ${data.prize}`;
+            if (announcedPrize) {
+              messageDiv.textContent = `You won: ${data.prize}`;
+            }
           }, 5500);
 
         } catch (err) {
           console.error("Spin error:", err.message);
           messageDiv.textContent = `Spin failed: ${err.message}`;
-          mechanicsWheel.stopAnimation(false);
+          if (mechanicsWheel && mechanicsWheel.animation) {
+            mechanicsWheel.stopAnimation(false);
+          }
           hasSpun = false;
           spinButton.disabled = true;
         }
