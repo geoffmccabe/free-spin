@@ -1,12 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
-import { Connection, PublicKey, Keypair, Transaction } from '@solana/web3.js';
-let getAssociatedTokenAddress, getOrCreateAssociatedTokenAccount, createTransferInstruction, TOKEN_PROGRAM_ID;
-
-const splToken = await import('@solana/spl-token');
-getAssociatedTokenAddress = splToken.getAssociatedTokenAddress;
-getOrCreateAssociatedTokenAccount = splToken.getOrCreateAssociatedTokenAccount;
-createTransferInstruction = splToken.createTransferInstruction;
-TOKEN_PROGRAM_ID = splToken.TOKEN_PROGRAM_ID;
+import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -17,197 +11,138 @@ const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 export default async function handler(req, res) {
-  console.log('Spin API request received:', req.method, req.body);
-  res.setHeader('Access-Control-Allow-Origin', 'https://solspin.lightningworks.io');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
   if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+    return res.status(200).json({});
+  }
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    if (req.method !== 'POST') {
-      console.error("Invalid method:", req.method);
-      return res.status(405).json({ error: 'Method not allowed' });
-    }
-
     const { token, spin } = req.body;
     if (!token) {
-      console.error("No token provided");
-      return res.status(400).json({ error: 'No token provided' });
+      return res.status(400).json({ error: 'Token required' });
     }
 
-    console.log("Fetching spin token:", token);
-    const { data: tokenRow, error: tokenError } = await supabase
+    const { data: tokenData, error: tokenError } = await supabase
       .from('spin_tokens')
       .select('discord_id, wallet_address, contract_address')
       .eq('token', token)
+      .eq('used', false)
       .single();
 
-    if (tokenError || !tokenRow) {
-      console.error("Token query error:", tokenError?.message || "No token found");
+    if (tokenError || !tokenData) {
       return res.status(400).json({ error: 'Invalid or used token' });
     }
-    if (tokenRow.used && spin) {
-      console.error("Token already used:", token);
-      return res.status(400).json({ error: 'Token already used' });
-    }
 
-    const { discord_id, wallet_address, contract_address } = tokenRow;
-    console.log(`Spin token data: discord_id=${discord_id}, wallet=${wallet_address}, contract=${contract_address}`);
+    const { discord_id, wallet_address, contract_address } = tokenData;
 
-    // Verify user has a registered wallet
-    const { data: userData, error: userError } = await supabase
-      .from('users')
-      .select('wallet_address')
-      .eq('discord_id', discord_id)
-      .single();
-
-    if (userError || !userData) {
-      console.error("User not found for discord_id:", discord_id);
-      return res.status(400).json({ error: 'No wallet registered' });
-    }
-
-    if (userData.wallet_address !== wallet_address) {
-      console.error("Wallet mismatch for discord_id:", discord_id, "stored:", userData.wallet_address, "token:", wallet_address);
-      return res.status(400).json({ error: 'Wallet address mismatch' });
-    }
-
-    // Fetch token configuration
-    const { data: tokenConfig, error: configError } = await supabase
+    const { data: config, error: configError } = await supabase
       .from('wheel_configurations')
-      .select('payout_amounts, payout_weights, token_name, token_id, image_url')
+      .select('token_name, payout_amounts, image_url, token_id')
       .eq('contract_address', contract_address)
       .eq('active', true)
       .single();
 
-    if (configError || !tokenConfig) {
-      console.error("Token config error:", configError?.message || "No active token found");
-      return res.status(400).json({ error: 'Invalid token configuration' });
+    if (configError || !config) {
+      return res.status(400).json({ error: 'Invalid wheel configuration' });
     }
 
-    // Return tokenConfig for initial wheel load
-    if (!spin) {
-      console.log('Returning token config for wheel initialization');
+    const tokenConfig = {
+      token_name: config.token_name,
+      payout_amounts: config.payout_amounts,
+      image_url: config.image_url,
+      token_id: config.token_id,
+    };
+
+    if (spin) {
+      const weights = config.payout_amounts.map((_, i) => 1 / (i + 1));
+      const totalWeight = weights.reduce((a, b) => a + b, 0);
+      const normalizedWeights = weights.map(w => w / totalWeight);
+      let random = Math.random();
+      let selectedIndex = 0;
+      for (let i = 0; i < normalizedWeights.length; i++) {
+        random -= normalizedWeights[i];
+        if (random <= 0) {
+          selectedIndex = i;
+          break;
+        }
+      }
+
+      const rewardAmount = config.payout_amounts[selectedIndex];
+      const prizeText = `${rewardAmount} ${config.token_name}`;
+
+      const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+      const userWallet = new PublicKey(wallet_address);
+      const tokenMint = new PublicKey(contract_address);
+
+      const fromTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, fundingWallet.publicKey);
+      const toTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, userWallet);
+
+      const transaction = new Transaction().add(
+        createTransferInstruction(
+          fromTokenAccount.address,
+          toTokenAccount.address,
+          fundingWallet.publicKey,
+          rewardAmount * (10 ** 5)
+        )
+      );
+
+      const signature = await sendAndConfirmTransaction(connection, transaction, [fundingWallet], {
+        commitment: 'confirmed',
+        preflightCommitment: 'confirmed',
+        maxRetries: 3,
+      });
+      console.log("Transaction confirmed with signature:", signature);
+
+      const { error: tokenUpdateError } = await supabase
+        .from('spin_tokens')
+        .update({ used: true, signature })
+        .eq('token', token);
+
+      if (tokenUpdateError) {
+        console.error("Token update error:", tokenUpdateError);
+        return res.status(500).json({ error: 'Failed to update spin token' });
+      }
+
+      const { error: spinInsertError } = await supabase
+        .from('daily_spins')
+        .insert({ discord_id, reward: rewardAmount, contract_address, signature });
+
+      if (spinInsertError) {
+        console.error("Spin insert error:", spinInsertError);
+        return res.status(500).json({ error: 'Failed to record spin' });
+      }
+
+      const { data: walletTotal, error: walletTotalError } = await supabase
+        .from('wallet_totals')
+        .select('total_won')
+        .eq('wallet_address', wallet_address)
+        .eq('contract_address', contract_address)
+        .single();
+
+      if (walletTotalError && walletTotalError.code !== 'PGRST116') {
+        console.error("Wallet total error:", walletTotalError);
+        return res.status(500).json({ error: 'Failed to update wallet total' });
+      }
+
+      const newTotal = walletTotal ? walletTotal.total_won + rewardAmount : rewardAmount;
+      const { error: walletUpdateError } = await supabase
+        .from('wallet_totals')
+        .upsert({ wallet_address, contract_address, total_won: newTotal }, { onConflict: 'wallet_address,contract_address' });
+
+      if (walletUpdateError) {
+        console.error("Wallet update error:", walletUpdateError);
+        return res.status(500).json({ error: 'Failed to update wallet total' });
+      }
+
+      return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText });
+    } else {
       return res.status(200).json({ tokenConfig });
     }
-
-    const { payout_amounts, payout_weights, token_name, token_id } = tokenConfig;
-    console.log(`Token config: name=${token_name}, payouts=${payout_amounts}, token_id=${token_id}`);
-
-    // Select reward
-    const totalWeight = payout_weights.reduce((sum, w) => sum + w, 0);
-    let rand = Math.random() * totalWeight;
-    let selectedIndex = 0;
-    for (let i = 0; i < payout_weights.length; i++) {
-      rand -= payout_weights[i];
-      if (rand <= 0) {
-        selectedIndex = i;
-        break;
-      }
-    }
-
-    const rewardAmount = payout_amounts[selectedIndex];
-    const prizeText = `${rewardAmount} ${token_name}`;
-    console.log("Selected reward:", { index: selectedIndex, prize: prizeText, amount: rewardAmount });
-
-    if (!FUNDING_WALLET_PRIVATE_KEY) {
-      console.error("Missing FUNDING_WALLET_PRIVATE_KEY");
-      return res.status(500).json({ error: 'Server configuration error' });
-    }
-
-    let fundingWallet;
-    try {
-      fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-      console.log("Funding wallet loaded:", fundingWallet.publicKey.toString());
-    } catch (err) {
-      console.error("Invalid FUNDING_WALLET_PRIVATE_KEY:", err.message);
-      return res.status(500).json({ error: 'Invalid wallet configuration' });
-    }
-
-    let userWallet;
-    try {
-      userWallet = new PublicKey(wallet_address);
-      console.log("User wallet loaded:", userWallet.toString());
-    } catch (err) {
-      console.error("Invalid user wallet address:", wallet_address, err.message);
-      return res.status(400).json({ error: 'Invalid user wallet address' });
-    }
-
-    let tokenMint;
-    try {
-      tokenMint = new PublicKey(contract_address);
-      console.log("Token mint loaded:", tokenMint.toString());
-    } catch (err) {
-      console.error("Invalid token mint address:", contract_address, err.message);
-      return res.status(400).json({ error: 'Invalid token mint address' });
-    }
-
-    let fromTokenAccount, toTokenAccount;
-    try {
-      fromTokenAccount = await getOrCreateAssociatedTokenAccount(
-        connection,
-        fundingWallet,
-        tokenMint,
-        fundingWallet.publicKey
-      );
-      toTokenAccount = await getOrCreateAssociatedTokenAccount(
-        connection,
-        fundingWallet,
-        tokenMint,
-        userWallet
-      );
-      console.log("Token accounts:", fromTokenAccount.address.toString(), toTokenAccount.address.toString());
-    } catch (err) {
-      console.error("Token account error:", err.message);
-      return res.status(500).json({ error: 'Failed to create token account: ' + err.message });
-    }
-
-    const tx = new Transaction().add(
-      createTransferInstruction(
-        fromTokenAccount.address,
-        toTokenAccount.address,
-        fundingWallet.publicKey,
-        rewardAmount * 100000, // Adjust for token decimals
-        [],
-        TOKEN_PROGRAM_ID
-      )
-    );
-
-    let txSignature;
-    try {
-      txSignature = await connection.sendTransaction(tx, [fundingWallet], { skipPreflight: true });
-      console.log("Transaction sent:", txSignature);
-      await connection.confirmTransaction(txSignature, 'confirmed');
-      console.log("Transaction confirmed:", txSignature);
-    } catch (err) {
-      console.error("Transaction error:", err.message);
-      return res.status(500).json({ error: 'Transaction failed: ' + err.message });
-    }
-
-    console.log("Updating spin token:", token);
-    await supabase
-      .from('spin_tokens')
-      .update({ used: true, reward: rewardAmount })
-      .eq('token', token);
-
-    console.log("Inserting daily spin:", discord_id);
-    await supabase
-      .from('daily_spins')
-      .insert({ discord_id, reward: rewardAmount, contract_address });
-
-    console.log("Updating wallet totals:", wallet_address, token_id);
-    await supabase.rpc('increment_wallet_total', {
-      wallet_address,
-      reward_amount: rewardAmount,
-      token_id
-    });
-
-    console.log("Returning response:", { segmentIndex: selectedIndex, prize: prizeText });
-    return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText });
   } catch (err) {
     console.error("API error:", err.message, err.stack);
-    return res.status(500).json({ error: 'Internal server error: ' + err.message });
+    const errorMessage = err.message || 'An unknown error occurred.';
+    return res.status(500).json({ error: `Transaction failed: ${errorMessage}` });
   }
 }
