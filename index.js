@@ -163,4 +163,210 @@ async function handleWalletCommand(interaction, walletAddress) {
 
     const action = existingUser ? 'updated' : 'linked';
     await interaction.editReply({ content: `✅ Wallet ${action}: \`${walletAddress}\``, flags: 64 });
-  } catch
+  } catch (error) {
+    console.error('handleWalletCommand error:', error.message, error.stack);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: '❌ An unexpected error occurred.', flags: 64 }).catch(err => console.error('Reply error:', err));
+    } else if (!interaction.replied) {
+      await interaction.editReply({ content: '❌ An unexpected error occurred.', flags: 64 }).catch(err => console.error('Edit reply error:', err));
+    }
+  }
+}
+
+async function fetchLeaderboardText() {
+  try {
+    const { data, error } = await retryQuery(() =>
+      supabase.rpc('fetch_leaderboard_text')
+    );
+    if (error) {
+      console.error(`Leaderboard query error: ${error.message}, code: ${error.code}`);
+      throw error;
+    }
+    if (!data) return 'No leaderboard data available.';
+
+    console.log(`Raw leaderboard data: ${data}`);
+    const lines = data.split('\n');
+    const guild = client.guilds.cache.get(process.env.DISCORD_GUILD);
+    if (!guild) {
+      console.error('Guild not found for DISCORD_GUILD:', process.env.DISCORD_GUILD);
+      return 'Error: Cannot find Discord server.';
+    }
+
+    const updatedLines = await Promise.all(lines.map(async (line) => {
+      const match = line.match(/: (\d{17,19}) —/);
+      if (!match) {
+        console.log(`No discord_id match in line: ${line}`);
+        const walletMatch = line.match(/: ([A-HJ-NP-Za-km-z1-9]{32,44}) —/);
+        if (walletMatch) {
+          const wallet = walletMatch[1];
+          const { data: userData, error: userError } = await supabase
+            .from('users')
+            .select('discord_id')
+            .eq('wallet_address', wallet)
+            .single();
+          if (userError || !userData) {
+            console.error(`No discord_id for wallet: ${wallet}`);
+            return line.replace(wallet, `User_${wallet.slice(-4)}`);
+          }
+          try {
+            const member = await guild.members.fetch(userData.discord_id);
+            const username = member.nickname || member.user.username;
+            console.log(`Mapped wallet ${wallet} to discord_id: ${userData.discord_id}, username: ${username}`);
+            return line.replace(wallet, username);
+          } catch (err) {
+            console.error(`Failed to fetch username for discord_id: ${userData.discord_id}`, err);
+            return line.replace(wallet, `User_${userData.discord_id.slice(-4)}`);
+          }
+        }
+        return line;
+      }
+
+      const discord_id = match[1];
+      try {
+        const member = await guild.members.fetch(discord_id);
+        const username = member.nickname || member.user.username;
+        console.log(`Fetched username for discord_id: ${discord_id}: ${username}`);
+        return line.replace(discord_id, username);
+      } catch (err) {
+        console.error(`Failed to fetch username for discord_id: ${discord_id}`, err);
+        return line.replace(discord_id, `User_${discord_id.slice(-4)}`);
+      }
+    }));
+
+    return updatedLines.join('\n') || 'No leaderboard data available.';
+  } catch (error) {
+    console.error('Leaderboard fetch error:', error.message, error.stack);
+    return 'Error fetching leaderboard: ' + error.message;
+  }
+}
+
+// --- DISCORD EVENT HANDLERS ---
+
+client.on("messageCreate", async (message) => {
+  if (message.author.bot || !message.content.toLowerCase().startsWith("!verify")) return;
+  if (message.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) return;
+});
+
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+
+  if (["spin", "freespin", "dailyspin"].includes(interaction.commandName)) {
+    console.log(`Received command: ${interaction.commandName}, channel: ${interaction.channel.name}`);
+    if (interaction.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) {
+      console.log(`Channel mismatch: expected ${SPIN_CHANNEL_NAME}, got ${interaction.channel.name}`);
+      return interaction.reply({ content: `Please use this command in the #${SPIN_CHANNEL_NAME} channel.`, flags: 64 });
+    }
+    await handleSpinCommand(interaction);
+  }
+
+  if (["mywallet", "addmywallet", "myaddr", "myaddress"].includes(interaction.commandName)) {
+    const walletAddress = interaction.options.getString("address");
+    await handleWalletCommand(interaction, walletAddress);
+  }
+
+  if (["leaders", "leaderboard", "spinleaders"].includes(interaction.commandName)) {
+    await interaction.deferReply();
+    const leaderboard = await fetchLeaderboardText();
+    await interaction.editReply({ content: `🏆 **Current Top 10 Winners:**\n\n${leaderboard}` });
+  }
+
+  if (interaction.commandName === "spinhelp") {
+    const helpText = "**/mywallet <address>**: Link your Solana wallet.\n**/spin**: Get a link to spin the wheel.\n**/spinleaders**: View the leaderboard.";
+    await interaction.reply({ content: helpText, flags: 64 });
+  }
+});
+
+setInterval(async () => {
+  try {
+    const channel = client.channels.cache.find(
+      (c) => c.name.toLowerCase() === SPIN_CHANNEL_NAME.toLowerCase(),
+    );
+    if (!channel || !channel.isTextBased()) return;
+
+    const leaderboardText = await fetchLeaderboardText();
+    if (leaderboardText !== lastLeaderboardPost) {
+      await channel.send(`🏆 **Updated Leaderboard:**\n\n${leaderboardText}`);
+      lastLeaderboardPost = leaderboardText;
+    }
+  } catch (error) {
+    console.error('Leaderboard post error:', error.message, error.stack);
+  }
+}, 60 * 60 * 1000);
+
+// --- STARTUP ---
+(async () => {
+  try {
+    const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
+    await rest.put(
+      Routes.applicationGuildCommands(
+        process.env.DISCORD_APP_ID,
+        process.env.DISCORD_GUILD,
+      ),
+      {
+        body: [
+          new SlashCommandBuilder()
+            .setName("spin")
+            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
+          new SlashCommandBuilder()
+            .setName("freespin")
+            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
+          new SlashCommandBuilder()
+            .setName("dailyspin")
+            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
+          new SlashCommandBuilder()
+            .setName("mywallet")
+            .setDescription("Link or view your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
+          new SlashCommandBuilder()
+            .setName("addmywallet")
+            .setDescription("Link or view your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
+          new SlashCommandBuilder()
+            .setName("myaddr")
+            .setDescription("Link or view your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
+          new SlashCommandBuilder()
+            .setName("myaddress")
+            .setDescription("Link or view your Solana wallet address")
+            .addStringOption(option =>
+              option.setName("address")
+                .setDescription("Your Solana wallet address (optional)")
+                .setRequired(false)),
+          new SlashCommandBuilder()
+            .setName("leaders")
+            .setDescription("View the current leaderboard (use /spinleaders instead)"),
+          new SlashCommandBuilder()
+            .setName("leaderboard")
+            .setDescription("Alias for /leaders (use /spinleaders instead)"),
+          new SlashCommandBuilder()
+            .setName("spinleaders")
+            .setDescription("View the current leaderboard"),
+          new SlashCommandBuilder()
+            .setName("spinhelp")
+            .setDescription("View available commands"),
+        ],
+      },
+    );
+    console.log('Slash commands registered successfully');
+  } catch (error) {
+    console.error('Failed to register slash commands:', error.message, error.stack);
+    process.exit(1);
+  }
+
+  try {
+    await client.login(process.env.DISCORD_TOKEN);
+    console.log('Bot logged in successfully');
+  } catch (error) {
+    console.error('Discord login error:', error);
+    process.exit(1);
+  }
+})();
