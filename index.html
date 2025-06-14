@@ -238,8 +238,6 @@
         }
       }
 
-      initializeWheel();
-
       const spinHandler = async () => {
         if (hasSpun || isSpinning || !mechanicsWheel) {
           console.log('Spin blocked: hasSpun=', hasSpun, 'isSpinning=', isSpinning);
@@ -261,16 +259,16 @@
           console.log("Spin API response:", data);
           if (!res.ok) throw new Error(data.error || "Server error during spin");
 
-          const segmentNumber = data.segmentIndex + 1;
-          const seg = mechanicsWheel.segments[segmentNumber];
+          const segmentIndex = data.segmentIndex; // Use 0-based index directly
+          const seg = mechanicsWheel.segments[segmentIndex + 1]; // Winwheel is 1-based
           if (!seg) throw new Error("Segment missing");
 
           const center = (seg.startAngle + seg.endAngle) / 2;
           const segmentWidth = seg.endAngle - seg.startAngle;
           const safeZone = segmentWidth * 0.43; // 43% from edges
           const randomOffset = (Math.random() * (safeZone * 2)) - safeZone;
-          const stopAngle = (center + randomOffset - 30) % 360; // Subtract 30°
-          console.log(`Segment: ${segmentNumber}, Center: ${center}, Offset: ${randomOffset}, Stop Angle: ${stopAngle}`);
+          const stopAngle = (center + randomOffset) % 360; // No offset, align with pointer
+          console.log(`Segment: ${segmentIndex}, Center: ${center}, Offset: ${randomOffset}, Stop Angle: ${stopAngle}`);
           mechanicsWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
 
@@ -287,6 +285,12 @@
           ctx.clearRect(0, 0, mechanicsWheel.canvas.width, mechanicsWheel.canvas.height);
           console.log('Triggering Winwheel animation');
           mechanicsWheel.startAnimation();
+
+          setTimeout(() => {
+            if (announcedPrize) {
+              messageDiv.textContent = `You won: ${announcedPrize}`;
+            }
+          }, 5100);
         } catch (err) {
           console.error("Spin error:", err.message);
           messageDiv.textContent = `Spin failed: ${err.message}`;
@@ -301,6 +305,7 @@
 
       spinButton.removeEventListener("click", spinHandler);
       spinButton.addEventListener("click", spinHandler);
+      initializeWheel();
     };
   </script>
 </body>
