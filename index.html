@@ -272,13 +272,14 @@
           mechanicsWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
 
-          mechanicsWheel.animation.callbackBefore = () => {
-            if (hasSpun) {
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
-              textWheel.draw();
-              document.getElementById("wheel-overlay").style.transform = `rotate(${mechanicsWheel.rotationAngle}deg)`;
-            }
-          };
+mechanicsWheel.animation.callbackBefore = () => {
+  if (hasSpun) {
+    const adjustedAngle = mechanicsWheel.rotationAngle - 30; // Subtract 30°
+    textWheel.rotationAngle = adjustedAngle - 60;
+    textWheel.draw();
+    document.getElementById("wheel-overlay").style.transform = `rotate(${adjustedAngle}deg)`;
+  }
+};
 
           mechanicsWheel.stopAnimation(true);
           const ctx = mechanicsWheel.canvas.getContext('2d');
