@@ -162,7 +162,7 @@
             textAlignment: 'center'
           }));
 
-          if (segments.length === 0) {
+          if (segments.length == 0) {
             messageDiv.textContent = "No payout amounts configured.";
             spinButton.disabled = true;
             return;
@@ -247,7 +247,7 @@
         isSpinning = true;
         spinButton.disabled = true;
         spinButton.style.display = 'none';
-        messageDiv.textContent = "Preparing your spin..."; // Show instantly
+        messageDiv.textContent = "Preparing your spin...";
 
         try {
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
@@ -267,7 +267,7 @@
           const segmentWidth = seg.endAngle - seg.startAngle;
           const safeZone = segmentWidth * 0.43;
           const randomOffset = (Math.random() * (safeZone * 2)) - safeZone;
-          const stopAngle = (center + randomOffset + 270) % 360;
+          const stopAngle = (center + randomOffset) % 360;
           console.log(`Segment: ${segmentIndex}, Center: ${center}, Offset: ${randomOffset}, Stop Angle: ${stopAngle}`);
           mechanicsWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
@@ -285,7 +285,7 @@
           const ctx = mechanicsWheel.canvas.getContext('2d');
           ctx.clearRect(0, 0, mechanicsWheel.canvas.width, mechanicsWheel.canvas.height);
           console.log('Triggering Winwheel animation');
-          messageDiv.textContent = "Spinning..."; // Update before animation
+          messageDiv.textContent = "Spinning...";
           mechanicsWheel.startAnimation();
 
           setTimeout(() => {
