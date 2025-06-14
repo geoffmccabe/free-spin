@@ -105,6 +105,7 @@
       let mechanicsWheel = null;
       let textWheel = null;
       let hasSpun = false;
+      let isSpinning = false;
 
       const token = new URLSearchParams(window.location.search).get("token");
       const spinButton = document.getElementById("spin-button");
@@ -121,7 +122,7 @@
         const size = Math.min(container.offsetWidth, container.offsetHeight);
         const canvases = [document.getElementById('canvas-mechanics'), document.getElementById('canvas-text')];
         canvases.forEach(canvas => {
-          canvas.width = Math.max(size, 1); // Ensure non-zero
+          canvas.width = Math.max(size, 1);
           canvas.height = Math.max(size, 1);
         });
       }
@@ -186,8 +187,10 @@
               duration: 5,
               spins: 3600 / 360,
               callbackFinished: () => {
+                console.log('Winwheel animation finished');
                 messageDiv.textContent = hasSpun && announcedPrize ? `You won: ${announcedPrize}` : 'Spin completed, but no prize received.';
                 hasSpun = false;
+                isSpinning = false;
                 spinButton.disabled = true;
               }
             }
@@ -227,16 +230,6 @@
           };
 
           textWheel.draw();
-
-          mechanicsWheel.animation.callbackBefore = () => {
-            if (hasSpun) {
-              TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
-              textWheel.draw();
-              TweenMax.to("#wheel-overlay", 5, { rotation: "+=3600", ease: Power2.easeOut });
-            }
-          };
-
           spinButton.disabled = false;
         } catch (err) {
           console.error("Initial fetch error:", err.message);
@@ -248,8 +241,12 @@
       initializeWheel();
 
       const spinHandler = async () => {
-        if (hasSpun || !mechanicsWheel) return;
+        if (hasSpun || isSpinning || !mechanicsWheel) {
+          console.log('Spin blocked: hasSpun=', hasSpun, 'isSpinning=', isSpinning);
+          return;
+        }
         hasSpun = true;
+        isSpinning = true;
         spinButton.disabled = true;
         spinButton.style.display = 'none';
         messageDiv.textContent = "Spinning...";
@@ -274,24 +271,42 @@
           mechanicsWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
 
-          mechanicsWheel.startAnimation();
-          setTimeout(() => {
-            if (announcedPrize) {
-              messageDiv.textContent = `You won: ${data.prize}`;
+          // Synchronize GSAP and Winwheel animations
+          mechanicsWheel.animation.callbackBefore = () => {
+            if (hasSpun) {
+              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
+              textWheel.draw();
             }
-          }, 5500);
+          };
 
+          TweenMax.killTweensOf("#wheel-overlay"); // Clear any existing GSAP animations
+          TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
+          TweenMax.to("#wheel-overlay", 5, {
+            rotation: mechanicsWheel.rotationAngle + 3600,
+            ease: Power2.easeOut,
+            onUpdate: () => {
+              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
+              textWheel.draw();
+            }
+          });
+
+          console.log('Triggering Winwheel animation');
+          mechanicsWheel.startAnimation();
         } catch (err) {
           console.error("Spin error:", err.message);
           messageDiv.textContent = `Spin failed: ${err.message}`;
           if (mechanicsWheel && mechanicsWheel.animation) {
-            mechanicsWheel.stopAnimation(false);
+            mechanicsWheel.stopAnimation(true);
+            TweenMax.killTweensOf("#wheel-overlay");
           }
           hasSpun = false;
+          isSpinning = false;
           spinButton.disabled = true;
         }
       };
 
+      // Ensure single event listener
+      spinButton.removeEventListener("click", spinHandler);
       spinButton.addEventListener("click", spinHandler);
     };
   </script>
