@@ -70,7 +70,6 @@ async function handleSpinCommand(interaction) {
                 .select('*', { count: 'exact', head: true })
                 .eq('discord_id', discord_id)
                 .eq('contract_address', coin.contract_address)
-                .eq('is_test', false)
                 .gte('created_at', twentyFourHoursAgo)
                 .lte('created_at', now);
             
@@ -80,8 +79,7 @@ async function handleSpinCommand(interaction) {
             }
 
             console.log(`Spin count for ${coin.token_name} (contract: ${coin.contract_address}): ${count}`);
-            // Temporary: Set limit to 2 for debugging
-            if (count < 2) {
+            if (count < 1) {
                 availableCoinsToSpin.push(coin);
             }
         }
@@ -111,9 +109,7 @@ async function handleSpinCommand(interaction) {
         }
 
         const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/index.html?token=${spinToken}`;
-        await interaction.editReply({ content: `✅ Your spin link for the **${selectedCoin.token_name}** wheel is ready!`, flags: 64 });
-        await interaction.channel.send(`🎯 <@${discord_id}> Click to spin the wheel:\n🔗 ${spinUrl}`);
-
+        await interaction.editReply({ content: `Click Link for your Free Spin: ${spinUrl}`, flags: 64 });
     } catch (error) {
         console.error("Error in handleSpinCommand:", error.message, error.stack);
         await interaction.editReply({ content: `❌ An unexpected error occurred: ${error.message}`, flags: 64 });
