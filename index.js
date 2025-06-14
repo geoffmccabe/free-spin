@@ -26,10 +26,13 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 
 // --- CORE LOGIC ---
 
-async function retryQuery(queryFn, maxRetries = 3, delayMs = 1000) {
+async function retryQuery(queryFn, maxRetries = 3, delayMs = 1000, timeoutMs = 10000) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await queryFn();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Query timed out')), timeoutMs)
+      );
+      return await Promise.race([queryFn(), timeoutPromise]);
     } catch (error) {
       console.error(`Query attempt ${attempt} failed: ${error.message}`);
       if (attempt === maxRetries) throw error;
@@ -44,16 +47,25 @@ async function handleSpinCommand(interaction) {
 
     try {
         await interaction.deferReply({ ephemeral: true });
+        console.log('Deferred reply sent');
 
         // 1. Get user's registered wallet
-        const { data: userData, error: userError } = await supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single();
+        console.log('Querying users table');
+        const { data: userData, error: userError } = await retryQuery(() =>
+          supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
+        );
         if (userError || !userData?.wallet_address) {
+            console.error(`User query error: ${userError?.message || 'No wallet found'}`);
             return interaction.editReply({ content: `❌ Please link your Solana wallet first using the \`/mywallet\` command.`, flags: 64 });
         }
         const wallet_address = userData.wallet_address;
+        console.log(`Wallet found: ${wallet_address}`);
 
         // 2. Get all active coins from the wheel configurations
-        const { data: activeCoins, error: coinsError } = await supabase.from('wheel_configurations').select('contract_address, token_name').eq('active', true);
+        console.log('Querying wheel_configurations table');
+        const { data: activeCoins, error: coinsError } = await retryQuery(() =>
+          supabase.from('wheel_configurations').select('contract_address, token_name').eq('active', true)
+        );
         if (coinsError || !activeCoins || activeCoins.length === 0) {
             console.error(`Coins query error: ${coinsError?.message || 'No active coins'}`);
             return interaction.editReply({ content: '❌ Sorry, there are no active spin wheels at the moment.', flags: 64 });
@@ -67,12 +79,15 @@ async function handleSpinCommand(interaction) {
             const now = new Date().toISOString();
 
             for (const coin of activeCoins) {
-                const { count, error: spinCountError } = await supabase.from('daily_spins')
+                console.log(`Querying daily_spins for ${coin.token_name}`);
+                const { count, error: spinCountError } = await retryQuery(() =>
+                  supabase.from('daily_spins')
                     .select('*', { count: 'exact', head: true })
                     .eq('discord_id', discord_id)
                     .eq('contract_address', coin.contract_address)
                     .gte('created_at', twentyFourHoursAgo)
-                    .lte('created_at', now);
+                    .lte('created_at', now)
+                );
                 
                 if (spinCountError) {
                     console.error(`Spin count error for ${coin.token_name}: ${spinCountError.message}`);
@@ -101,12 +116,15 @@ async function handleSpinCommand(interaction) {
 
         // 5. Generate a unique spin token
         const spinToken = uuidv4();
-        const { error: insertError } = await supabase.from("spin_tokens").insert({
+        console.log(`Inserting spin token: ${spinToken}`);
+        const { error: insertError } = await retryQuery(() =>
+          supabase.from("spin_tokens").insert({
             token: spinToken,
             discord_id: discord_id,
             wallet_address: wallet_address,
             contract_address: selectedCoin.contract_address
-        });
+          })
+        );
 
         if (insertError) {
             console.error(`Token insert error: ${insertError.message}`);
@@ -114,6 +132,7 @@ async function handleSpinCommand(interaction) {
         }
 
         const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/index.html?token=${spinToken}`;
+        console.log(`Sending spin URL: ${spinUrl}`);
         await interaction.editReply({ content: `Click Link for your Free Spin: ${spinUrl}`, flags: 64 });
     } catch (error) {
         console.error("Error in handleSpinCommand:", error.message, error.stack);
