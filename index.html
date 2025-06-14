@@ -267,9 +267,9 @@
 
           const center = (seg.startAngle + seg.endAngle) / 2;
           const segmentWidth = seg.endAngle - seg.startAngle;
-          const safeZone = segmentWidth * 0.43; // 43% from edges (3-57% inward)
-          const randomOffset = (Math.random() * (safeZone * 2)) - safeZone; // Random offset within safe zone
-          const stopAngle = (center + randomOffset) % 360; // Center ± offset
+          const safeZone = segmentWidth * 0.43; // 43% from edges
+          const randomOffset = (Math.random() * (safeZone * 2)) - safeZone;
+          const stopAngle = (center + randomOffset - 30) % 360; // Subtract 30°
           console.log(`Segment: ${segmentNumber}, Center: ${center}, Offset: ${randomOffset}, Stop Angle: ${stopAngle}`);
           mechanicsWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
@@ -278,7 +278,7 @@
             if (hasSpun) {
               textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
               textWheel.draw();
-              document.getElementById("wheel-overlay").style.transform = `rotate(${mechanicsWheel.rotationAngle}deg)`; // Sync overlay
+              document.getElementById("wheel-overlay").style.transform = `rotate(${mechanicsWheel.rotationAngle}deg)`;
             }
           };
 
