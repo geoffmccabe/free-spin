@@ -247,7 +247,7 @@
         isSpinning = true;
         spinButton.disabled = true;
         spinButton.style.display = 'none';
-        messageDiv.textContent = "Spinning...";
+        messageDiv.textContent = "Preparing your spin..."; // Show instantly
 
         try {
           const res = await fetch("https://solspin.lightningworks.io/api/spin", {
@@ -259,32 +259,33 @@
           console.log("Spin API response:", data);
           if (!res.ok) throw new Error(data.error || "Server error during spin");
 
-          const segmentIndex = data.segmentIndex; // Use 0-based index directly
-          const seg = mechanicsWheel.segments[segmentIndex + 1]; // Winwheel is 1-based
+          const segmentIndex = data.segmentIndex;
+          const seg = mechanicsWheel.segments[segmentIndex + 1];
           if (!seg) throw new Error("Segment missing");
 
           const center = (seg.startAngle + seg.endAngle) / 2;
           const segmentWidth = seg.endAngle - seg.startAngle;
-          const safeZone = segmentWidth * 0.43; // 43% from edges
+          const safeZone = segmentWidth * 0.43;
           const randomOffset = (Math.random() * (safeZone * 2)) - safeZone;
-          const stopAngle = (center + randomOffset) % 360; // No offset, align with pointer
+          const stopAngle = (center + randomOffset + 270) % 360;
           console.log(`Segment: ${segmentIndex}, Center: ${center}, Offset: ${randomOffset}, Stop Angle: ${stopAngle}`);
           mechanicsWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
 
-mechanicsWheel.animation.callbackBefore = () => {
-  if (hasSpun) {
-    const adjustedAngle = mechanicsWheel.rotationAngle - 30; // Subtract 30°
-    textWheel.rotationAngle = adjustedAngle - 60;
-    textWheel.draw();
-    document.getElementById("wheel-overlay").style.transform = `rotate(${adjustedAngle}deg)`;
-  }
-};
+          mechanicsWheel.animation.callbackBefore = () => {
+            if (hasSpun) {
+              const adjustedAngle = mechanicsWheel.rotationAngle - 30;
+              textWheel.rotationAngle = adjustedAngle - 60;
+              textWheel.draw();
+              document.getElementById("wheel-overlay").style.transform = `rotate(${adjustedAngle}deg)`;
+            }
+          };
 
           mechanicsWheel.stopAnimation(true);
           const ctx = mechanicsWheel.canvas.getContext('2d');
           ctx.clearRect(0, 0, mechanicsWheel.canvas.width, mechanicsWheel.canvas.height);
           console.log('Triggering Winwheel animation');
+          messageDiv.textContent = "Spinning..."; // Update before animation
           mechanicsWheel.startAnimation();
 
           setTimeout(() => {
