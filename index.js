@@ -291,7 +291,7 @@ setInterval(async () => {
       await channel.send(`🏆 **Updated Leaderboard:**\n\n${leaderboardText}`);
       lastLeaderboardPost = leaderboardText;
     }
-  } from error) {
+  } catch (error) {
     console.error('Leaderboard post error:', error.message, error.stack);
   }
 }, 60 * 60 * 1000);
