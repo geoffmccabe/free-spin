@@ -181,7 +181,7 @@
             numSegments: segments.length,
             segments: segments.map(() => ({ fillStyle: 'transparent', strokeStyle: 'none' })),
             outerRadius: radius,
-            pointerAngle: 0,
+            pointerAngle: 90, // Align pointer with segment top
             animation: {
               type: 'spinToStop',
               duration: 5,
@@ -266,30 +266,22 @@
           if (!seg) throw new Error("Segment missing");
 
           const center = (seg.startAngle + seg.endAngle) / 2;
-          const stopAngle = (center + 360 - 120) % 360; // 120° offset for alignment
+          const stopAngle = center; // Center on segment, no offset
           console.log(`Segment: ${segmentNumber}, Stop Angle: ${stopAngle}`);
           mechanicsWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
 
-          // Synchronize GSAP and Winwheel animations
           mechanicsWheel.animation.callbackBefore = () => {
             if (hasSpun) {
               textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
               textWheel.draw();
+              document.getElementById("wheel-overlay").style.transform = `rotate(${mechanicsWheel.rotationAngle}deg)`; // Sync overlay
             }
           };
 
-          TweenMax.killTweensOf("#wheel-overlay"); // Clear any existing GSAP animations
-          TweenMax.set("#wheel-overlay", { rotation: mechanicsWheel.rotationAngle });
-          TweenMax.to("#wheel-overlay", 5, {
-            rotation: mechanicsWheel.rotationAngle + 3600,
-            ease: Power2.easeOut,
-            onUpdate: () => {
-              textWheel.rotationAngle = mechanicsWheel.rotationAngle - 60;
-              textWheel.draw();
-            }
-          });
-
+          mechanicsWheel.stopAnimation(true); // Clear any queued animations
+          const ctx = mechanicsWheel.canvas.getContext('2d');
+          ctx.clearRect(0, 0, mechanicsWheel.canvas.width, mechanicsWheel.canvas.height);
           console.log('Triggering Winwheel animation');
           mechanicsWheel.startAnimation();
         } catch (err) {
@@ -297,7 +289,6 @@
           messageDiv.textContent = `Spin failed: ${err.message}`;
           if (mechanicsWheel && mechanicsWheel.animation) {
             mechanicsWheel.stopAnimation(true);
-            TweenMax.killTweensOf("#wheel-overlay");
           }
           hasSpun = false;
           isSpinning = false;
@@ -305,7 +296,6 @@
         }
       };
 
-      // Ensure single event listener
       spinButton.removeEventListener("click", spinHandler);
       spinButton.addEventListener("click", spinHandler);
     };
