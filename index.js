@@ -70,6 +70,7 @@ async function handleSpinCommand(interaction) {
                 .select('*', { count: 'exact', head: true })
                 .eq('discord_id', discord_id)
                 .eq('contract_address', coin.contract_address)
+                .eq('is_test', false)
                 .gte('created_at', twentyFourHoursAgo)
                 .lte('created_at', now);
             
@@ -79,7 +80,8 @@ async function handleSpinCommand(interaction) {
             }
 
             console.log(`Spin count for ${coin.token_name} (contract: ${coin.contract_address}): ${count}`);
-            if (count < 1) {
+            // Temporary: Set limit to 2 for debugging
+            if (count < 2) {
                 availableCoinsToSpin.push(coin);
             }
         }
