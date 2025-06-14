@@ -181,7 +181,7 @@
             numSegments: segments.length,
             segments: segments.map(() => ({ fillStyle: 'transparent', strokeStyle: 'none' })),
             outerRadius: radius,
-            pointerAngle: 90, // Align pointer with segment top
+            pointerAngle: 90,
             animation: {
               type: 'spinToStop',
               duration: 5,
@@ -266,8 +266,11 @@
           if (!seg) throw new Error("Segment missing");
 
           const center = (seg.startAngle + seg.endAngle) / 2;
-          const stopAngle = center; // Center on segment, no offset
-          console.log(`Segment: ${segmentNumber}, Stop Angle: ${stopAngle}`);
+          const segmentWidth = seg.endAngle - seg.startAngle;
+          const safeZone = segmentWidth * 0.43; // 43% from edges (3-57% inward)
+          const randomOffset = (Math.random() * (safeZone * 2)) - safeZone; // Random offset within safe zone
+          const stopAngle = (center + randomOffset) % 360; // Center ± offset
+          console.log(`Segment: ${segmentNumber}, Center: ${center}, Offset: ${randomOffset}, Stop Angle: ${stopAngle}`);
           mechanicsWheel.animation.stopAngle = stopAngle;
           announcedPrize = data.prize;
 
@@ -279,7 +282,7 @@
             }
           };
 
-          mechanicsWheel.stopAnimation(true); // Clear any queued animations
+          mechanicsWheel.stopAnimation(true);
           const ctx = mechanicsWheel.canvas.getContext('2d');
           ctx.clearRect(0, 0, mechanicsWheel.canvas.width, mechanicsWheel.canvas.height);
           console.log('Triggering Winwheel animation');
