@@ -127,28 +127,6 @@ export default async function handler(req, res) {
         throw new Error('Failed to record spin');
       }
 
-      const { data: walletTotal, error: walletTotalError } = await supabase
-        .from('wallet_totals')
-        .select('total_won')
-        .eq('wallet', wallet_address)
-        .eq('token_id', config.token_id)
-        .single();
-
-      if (walletTotalError && walletTotalError.code !== 'PGRST116') {
-        console.error("Wallet total error:", walletTotalError);
-        throw new Error('Failed to update wallet total');
-      }
-
-      const newTotal = walletTotal ? walletTotal.total_won + rewardAmount : rewardAmount;
-      const { error: walletUpdateError } = await supabase
-        .from('wallet_totals')
-        .upsert({ wallet: wallet_address, token_id: config.token_id, total_won: newTotal }, { onConflict: 'wallet,token_id' });
-
-      if (walletUpdateError) {
-        console.error("Wallet update error:", walletUpdateError);
-        throw new Error('Failed to update wallet total');
-      }
-
       return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText });
     } else {
       return res.status(200).json({ tokenConfig });
