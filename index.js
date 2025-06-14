@@ -60,41 +60,46 @@ async function handleSpinCommand(interaction) {
         }
         console.log(`Active coins: ${JSON.stringify(activeCoins)}`);
 
-        // 3. Check spin limits for EACH coin
-        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        const now = new Date().toISOString();
+        // 3. Check spin limits for EACH coin (bypass for your discord_id)
         const availableCoinsToSpin = [];
+        if (discord_id !== '332676096531103775') {
+            const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+            const now = new Date().toISOString();
 
-        for (const coin of activeCoins) {
-            const { count, error: spinCountError } = await supabase.from('daily_spins')
-                .select('*', { count: 'exact', head: true })
-                .eq('discord_id', discord_id)
-                .eq('contract_address', coin.contract_address)
-                .gte('created_at', twentyFourHoursAgo)
-                .lte('created_at', now);
-            
-            if (spinCountError) {
-                console.error(`Spin count error for ${coin.token_name}: ${spinCountError.message}`);
-                throw new Error(`Database error checking spin count for ${coin.token_name}.`);
+            for (const coin of activeCoins) {
+                const { count, error: spinCountError } = await supabase.from('daily_spins')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('discord_id', discord_id)
+                    .eq('contract_address', coin.contract_address)
+                    .gte('created_at', twentyFourHoursAgo)
+                    .lte('created_at', now);
+                
+                if (spinCountError) {
+                    console.error(`Spin count error for ${coin.token_name}: ${spinCountError.message}`);
+                    throw new Error(`Database error checking spin count for ${coin.token_name}.`);
+                }
+
+                console.log(`Spin count for ${coin.token_name} (contract: ${coin.contract_address}): ${count}`);
+                if (count < 1) {
+                    availableCoinsToSpin.push(coin);
+                }
             }
 
-            console.log(`Spin count for ${coin.token_name} (contract: ${coin.contract_address}): ${count}`);
-            if (count < 1) {
-                availableCoinsToSpin.push(coin);
+            if (availableCoinsToSpin.length === 0) {
+                console.log(`User ${discord_id} has no available spins for any coin.`);
+                return interaction.editReply({ content: "❌ You have already used your daily spin for all available wheels today. Please try again tomorrow.", flags: 64 });
             }
+        } else {
+            // Bypass limit for your discord_id
+            availableCoinsToSpin.push(...activeCoins);
+            console.log(`Bypassing spin limit for discord_id: ${discord_id}`);
         }
 
-        // 4. If no available spins, inform the user
-        if (availableCoinsToSpin.length === 0) {
-            console.log(`User ${discord_id} has no available spins for any coin.`);
-            return interaction.editReply({ content: "❌ You have already used your daily spin for all available wheels today. Please try again tomorrow.", flags: 64 });
-        }
-
-        // 5. Randomly select a coin
+        // 4. Randomly select a coin
         const selectedCoin = availableCoinsToSpin[Math.floor(Math.random() * availableCoinsToSpin.length)];
         console.log(`Selected coin for spin: ${selectedCoin.token_name} (${selectedCoin.contract_address})`);
 
-        // 6. Generate a unique spin token
+        // 5. Generate a unique spin token
         const spinToken = uuidv4();
         const { error: insertError } = await supabase.from("spin_tokens").insert({
             token: spinToken,
@@ -286,7 +291,7 @@ setInterval(async () => {
       await channel.send(`🏆 **Updated Leaderboard:**\n\n${leaderboardText}`);
       lastLeaderboardPost = leaderboardText;
     }
-  } catch (error) {
+  } from error) {
     console.error('Leaderboard post error:', error.message, error.stack);
   }
 }, 60 * 60 * 1000);
