@@ -44,7 +44,7 @@ export default async function handler(req, res) {
 
     const { data: config, error: configError } = await supabase
       .from('wheel_configurations')
-      .select('token_name, payout_amounts, image_url, token_id')
+      .select('token_name, payout_amounts, payout_weights, image_url, token_id')
       .eq('contract_address', contract_address)
       .eq('active', true)
       .single();
@@ -62,7 +62,7 @@ export default async function handler(req, res) {
     };
 
     if (spin) {
-      const weights = config.payout_amounts.map((_, i) => 1 / (i + 1));
+      const weights = config.payout_weights || config.payout_amounts.map(() => 1); // Use defined weights
       const totalWeight = weights.reduce((a, b) => a + b, 0);
       const normalizedWeights = weights.map(w => w / totalWeight);
       let random = Math.random();
@@ -114,7 +114,7 @@ export default async function handler(req, res) {
         .eq('used', false);
 
       if (tokenUpdateError) {
-        console.error("Token update error:", tokenUpdateError.message, tokenUpdateError);
+        console.error("Token update error:", tokenUpdateError.message);
         throw new Error('Failed to update spin token');
       }
 
