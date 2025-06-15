@@ -1,394 +1,251 @@
-import { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder } from "discord.js";
-import dotenv from "dotenv";
-import { createClient } from "@supabase/supabase-js";
-import { v4 as uuidv4 } from "uuid";
-import http from "http";
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { createClient } = require('@supabase/supabase-js');
+const { Connection } = require('@solana/web3.js');
 
-dotenv.config();
-
-// --- CONFIGURATION ---
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const DISCORD_APP_ID = process.env.DISCORD_APP_ID;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const SPIN_CHANNEL_NAME = "🔄│free-spin";
-const REQUIRED_ENV = ['DISCORD_APP_ID', 'DISCORD_TOKEN', 'DISCORD_GUILD', 'API_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
-let lastLeaderboardPost = "";
+const LEADERBOARD_CHANNEL_NAME = "🏆│spin-leaderboard";
+const SPIN_URL = process.env.SPIN_URL || 'https://solspin.lightningworks.io';
 
-// --- SETUP ---
-REQUIRED_ENV.forEach(key => {
-    if (!process.env[key]) {
-        console.error(`Fatal: Missing environment variable ${key}`);
-        process.exit(1);
-    }
-});
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const solanaConnection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
-http.createServer((req, res) => res.writeHead(200).end('Bot is running')).listen(process.env.PORT || 8080);
-
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers, GatewayIntentBits.MessageContent], partials: [Partials.Channel] });
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-
-// --- CORE LOGIC ---
-
-async function retryQuery(queryFn, maxRetries = 3, delayMs = 1000, timeoutMs = 10000) {
+async function retryQuery(queryFn, maxRetries = 3, delay = 1000) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Query timed out')), timeoutMs)
-      );
-      return await Promise.race([queryFn(), timeoutPromise]);
+      return await queryFn();
     } catch (error) {
-      console.error(`Query attempt ${attempt} failed: ${error.message}`);
+      console.error(`Attempt ${attempt} failed: ${error.message}`);
       if (attempt === maxRetries) throw error;
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 }
 
 async function handleSpinCommand(interaction) {
-    const discord_id = interaction.user.id;
-    console.log(`Processing /spin for user: ${discord_id}`);
+  const discord_id = interaction.user.id;
+  console.log(`Processing /spin for user: ${discord_id}`);
+  await interaction.deferReply({ ephemeral: true });
+  console.log('Deferred reply sent');
 
-    try {
-        await interaction.deferReply({ ephemeral: true });
-        console.log('Deferred reply sent');
+  const { data: userData, error: userError } = await retryQuery(() =>
+    supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
+  );
+  if (userError || !userData?.wallet_address) {
+    console.error(`User query error: ${userError?.message || 'No wallet found'}`);
+    return interaction.editReply({ content: `❌ Please link your Solana wallet first using the \`/mywallet\` command.`, flags: 64 });
+  }
+  console.log(`Wallet found: ${userData.wallet_address}`);
 
-        // 1. Get user's registered wallet
-        console.log('Querying users table');
-        const { data: userData, error: userError } = await retryQuery(() =>
-          supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
-        );
-        if (userError || !userData?.wallet_address) {
-            console.error(`User query error: ${userError?.message || 'No wallet found'}`);
-            return interaction.editReply({ content: `❌ Please link your Solana wallet first using the \`/mywallet\` command.`, flags: 64 });
-        }
-        const wallet_address = userData.wallet_address;
-        console.log(`Wallet found: ${wallet_address}`);
+  const { data: activeCoins, error: coinsError } = await retryQuery(() =>
+    supabase.from('wheel_configurations').select('contract_address, token_name').eq('active', true)
+  );
+  if (coinsError || !activeCoins?.length) {
+    console.error(`Coins query error: ${coinsError?.message || 'No active coins found'}`);
+    return interaction.editReply({ content: `❌ No active coins available for spinning.`, flags: 64 });
+  }
+  console.log(`Active coins: ${JSON.stringify(activeCoins)}`);
 
-        // 2. Get all active coins from the wheel configurations
-        console.log('Querying wheel_configurations table');
-        const { data: activeCoins, error: coinsError } = await retryQuery(() =>
-          supabase.from('wheel_configurations').select('contract_address, token_name').eq('active', true)
-        );
-        if (coinsError || !activeCoins || activeCoins.length === 0) {
-            console.error(`Coins query error: ${coinsError?.message || 'No active coins'}`);
-            return interaction.editReply({ content: '❌ Sorry, there are no active spin wheels at the moment.', flags: 64 });
-        }
-        console.log(`Active coins: ${JSON.stringify(activeCoins)}`);
-
-        // 3. Check spin limits for EACH coin (bypass for your discord_id)
-        const availableCoinsToSpin = [];
-        if (discord_id !== '332676096531103775') {
-            const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-            const now = new Date().toISOString();
-
-            for (const coin of activeCoins) {
-                console.log(`Querying daily_spins for ${coin.token_name}`);
-                const { count, error: spinCountError } = await retryQuery(() =>
-                  supabase.from('daily_spins')
-                    .select('*', { count: 'exact', head: true })
-                    .eq('discord_id', discord_id)
-                    .eq('contract_address', coin.contract_address)
-                    .gte('created_at', twentyFourHoursAgo)
-                    .lte('created_at', now)
-                );
-                
-                if (spinCountError) {
-                    console.error(`Spin count error for ${coin.token_name}: ${spinCountError.message}`);
-                    throw new Error(`Database error checking spin count for ${coin.token_name}.`);
-                }
-
-                console.log(`Spin count for ${coin.token_name} (contract: ${coin.contract_address}): ${count}`);
-                if (count < 1) {
-                    availableCoinsToSpin.push(coin);
-                }
-            }
-
-            if (availableCoinsToSpin.length === 0) {
-                console.log(`User ${discord_id} has no available spins for any coin.`);
-                return interaction.editReply({ content: "❌ You have already used your daily spin for all available wheels today. Please try again tomorrow.", flags: 64 });
-            }
-        } else {
-            // Bypass limit for your discord_id
-            availableCoinsToSpin.push(...activeCoins);
-            console.log(`Bypassing spin limit for discord_id: ${discord_id}`);
-        }
-
-        // 4. Randomly select a coin
-        const selectedCoin = availableCoinsToSpin[Math.floor(Math.random() * availableCoinsToSpin.length)];
-        console.log(`Selected coin for spin: ${selectedCoin.token_name} (${selectedCoin.contract_address})`);
-
-        // 5. Generate a unique spin token
-        const spinToken = uuidv4();
-        console.log(`Inserting spin token: ${spinToken}`);
-        const { error: insertError } = await retryQuery(() =>
-          supabase.from("spin_tokens").insert({
-            token: spinToken,
-            discord_id: discord_id,
-            wallet_address: wallet_address,
-            contract_address: selectedCoin.contract_address
-          })
-        );
-
-        if (insertError) {
-            console.error(`Token insert error: ${insertError.message}`);
-            throw new Error("Failed to create a spin token in the database.");
-        }
-
-        const spinUrl = `${process.env.API_URL.replace("/api/spin", "")}/index.html?token=${spinToken}`;
-        console.log(`Sending spin URL: ${spinUrl}`);
-        await interaction.editReply({ content: `Click Link for your Free Spin: ${spinUrl}`, flags: 64 });
-    } catch (error) {
-        console.error("Error in handleSpinCommand:", error.message, error.stack);
-        await interaction.editReply({ content: `❌ An unexpected error occurred: ${error.message}`, flags: 64 });
-    }
-}
-
-async function handleWalletCommand(interaction, walletAddress) {
-  try {
-    await interaction.deferReply({ ephemeral: true });
-    const discord_id = interaction.user.id;
-    console.log(`Processing wallet command for discord_id: ${discord_id}, address: ${walletAddress || 'none'}`);
-
-    const { data: existingUser, error: userError } = await retryQuery(() =>
-      supabase
-        .from('users')
-        .select('wallet_address')
-        .eq('discord_id', discord_id)
-        .single()
-    );
-
-    if (userError && userError.code !== 'PGRST116') {
-      console.error(`User query error: ${userError.message}, code: ${userError.code}`);
-      return interaction.editReply({ content: '❌ Database error querying user data. Please try again.', flags: 64 });
-    }
-
-    if (!walletAddress) {
-      if (existingUser) {
-        return interaction.editReply({ content: `Your current wallet is: \`${existingUser.wallet_address}\`\nTo update, use \`/mywallet <new_address>\`.`, flags: 64 });
-      } else {
-        return interaction.editReply({ content: '❌ No wallet linked. Use `/mywallet <your_solana_address>` to link one.', flags: 64 });
+  const availableCoinsToSpin = [];
+  if (discord_id !== '332676096531103775') {
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const now = new Date().toISOString();
+    for (const coin of activeCoins) {
+      const { count, error } = await retryQuery(() =>
+        supabase.from('daily_spins')
+          .select('*', { count: 'exact', head: true })
+          .eq('discord_id', discord_id)
+          .eq('contract_address', coin.contract_address)
+          .gte('created_at', twentyFourHoursAgo)
+          .lte('created_at', now)
+      );
+      if (error) {
+        console.error(`Spin count error: ${error.message}`);
+        return interaction.editReply({ content: `❌ Database error checking spin count.`, flags: 64 });
+      }
+      if (count < 1) {
+        availableCoinsToSpin.push(coin);
       }
     }
-
-    const walletRegex = /^[A-HJ-NP-Za-km-z1-9]{32,44}$/;
-    if (!walletRegex.test(walletAddress)) {
-      return interaction.editReply({ content: '❌ Invalid Solana wallet address.', flags: 64 });
+    console.log(`Available coins to spin: ${JSON.stringify(availableCoinsToSpin)}`);
+    if (!availableCoinsToSpin.length) {
+      return interaction.editReply({ content: `❌ You have already used your daily spin for all available coins. Try again tomorrow!`, flags: 64 });
     }
-
-    const { error: upsertError } = await retryQuery(() =>
-      supabase
-        .from('users')
-        .upsert({ discord_id, wallet_address: walletAddress }, { onConflict: 'discord_id' })
-    );
-
-    if (upsertError) {
-      console.error(`Wallet upsert error: ${upsertError.message}, code: ${upsertError.code}`);
-      return interaction.editReply({ content: '❌ Failed to save wallet due to database error.', flags: 64 });
-    }
-
-    const action = existingUser ? 'updated' : 'linked';
-    await interaction.editReply({ content: `✅ Wallet ${action}: \`${walletAddress}\``, flags: 64 });
-  } catch (error) {
-    console.error('handleWalletCommand error:', error.message, error.stack);
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: '❌ An unexpected error occurred.', flags: 64 }).catch(err => console.error('Reply error:', err));
-    } else if (!interaction.replied) {
-      await interaction.editReply({ content: '❌ An unexpected error occurred.', flags: 64 }).catch(err => console.error('Edit reply error:', err));
-    }
+  } else {
+    console.log(`Bypassing spin limit for discord_id: ${discord_id}`);
+    availableCoinsToSpin.push(...activeCoins);
   }
+
+  const coin = availableCoinsToSpin[Math.floor(Math.random() * availableCoinsToSpin.length)];
+  console.log(`Selected coin for spin: ${coin.token_name} (${coin.contract_address})`);
+
+  const { data: tokenData, error: tokenError } = await retryQuery(() =>
+    supabase.from('spin_tokens').insert({
+      discord_id: discord_id,
+      wallet_address: userData.wallet_address,
+      contract_address: coin.contract_address,
+      token: crypto.randomUUID(),
+      used: false
+    }).select('token').single()
+  );
+  if (tokenError) {
+    console.error(`Token insert error: ${tokenError.message}`);
+    return interaction.editReply({ content: `❌ Failed to generate spin token.`, flags: 64 });
+  }
+  console.log(`Inserting spin token: ${tokenData.token}`);
+
+  const spinUrl = `${SPIN_URL}/index.html?token=${tokenData.token}`;
+  console.log(`Sending spin URL: ${spinUrl}`);
+  return interaction.editReply({ content: `🎰 Your spin is ready! Click here: ${spinUrl}`, flags: 64 });
 }
 
-async function fetchLeaderboardText() {
-  try {
+async function handleWalletCommand(interaction) {
+  const discord_id = interaction.user.id;
+  const wallet_address = interaction.options.getString('address');
+  console.log(`Processing wallet command for user: ${discord_id}, address: ${wallet_address}`);
+
+  await interaction.deferReply({ ephemeral: true });
+
+  if (wallet_address) {
+    if (!wallet_address.match(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)) {
+      return interaction.editReply({ content: `❌ Invalid Solana wallet address.`, flags: 64 });
+    }
+
     const { data, error } = await retryQuery(() =>
-      supabase.rpc('fetch_leaderboard_text')
+      supabase.from('users').upsert({ discord_id, wallet_address }).select('wallet_address').single()
     );
     if (error) {
-      console.error(`Leaderboard query error: ${error.message}, code: ${error.code}`);
-      throw error;
+      console.error(`Wallet upsert error: ${error.message}`);
+      return interaction.editReply({ content: `❌ Failed to save wallet address.`, flags: 64 });
     }
-    if (!data) return 'No leaderboard data available.';
-
-    console.log(`Raw leaderboard data: ${data}`);
-    const lines = data.split('\n');
-    const guild = client.guilds.cache.get(process.env.DISCORD_GUILD);
-    if (!guild) {
-      console.error('Guild not found for DISCORD_GUILD:', process.env.DISCORD_GUILD);
-      return 'Error: Cannot find Discord server.';
+    console.log(`Wallet saved: ${data.wallet_address}`);
+    return interaction.editReply({ content: `✅ Wallet address saved: \`${data.wallet_address}\``, flags: 64 });
+  } else {
+    const { data, error } = await retryQuery(() =>
+      supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
+    );
+    if (error || !data?.wallet_address) {
+      console.error(`Wallet query error: ${error?.message || 'No wallet found'}`);
+      return interaction.editReply({ content: `❌ No wallet address found. Please provide one using \`/mywallet <address>\`.`, flags: 64 });
     }
-
-    const updatedLines = await Promise.all(lines.map(async (line) => {
-      const match = line.match(/: (\d{17,19}) —/);
-      if (!match) {
-        console.log(`No discord_id match in line: ${line}`);
-        const walletMatch = line.match(/: ([A-HJ-NP-Za-km-z1-9]{32,44}) —/);
-        if (walletMatch) {
-          const wallet = walletMatch[1];
-          const { data: userData, error: userError } = await supabase
-            .from('users')
-            .select('discord_id')
-            .eq('wallet_address', wallet)
-            .single();
-          if (userError || !userData) {
-            console.error(`No discord_id for wallet: ${wallet}`);
-            return line.replace(wallet, `User_${wallet.slice(-4)}`);
-          }
-          try {
-            const member = await guild.members.fetch(userData.discord_id);
-            const username = member.nickname || member.user.username;
-            console.log(`Mapped wallet ${wallet} to discord_id: ${userData.discord_id}, username: ${username}`);
-            return line.replace(wallet, username);
-          } catch (err) {
-            console.error(`Failed to fetch username for discord_id: ${userData.discord_id}`, err);
-            return line.replace(wallet, `User_${userData.discord_id.slice(-4)}`);
-          }
-        }
-        return line;
-      }
-
-      const discord_id = match[1];
-      try {
-        const member = await guild.members.fetch(discord_id);
-        const username = member.nickname || member.user.username;
-        console.log(`Fetched username for discord_id: ${discord_id}: ${username}`);
-        return line.replace(discord_id, username);
-      } catch (err) {
-        console.error(`Failed to fetch username for discord_id: ${discord_id}`, err);
-        return line.replace(discord_id, `User_${discord_id.slice(-4)}`);
-      }
-    }));
-
-    return updatedLines.join('\n') || 'No leaderboard data available.';
-  } catch (error) {
-    console.error('Leaderboard fetch error:', error.message, error.stack);
-    return 'Error fetching leaderboard: ' + error.message;
+    console.log(`Wallet retrieved: ${data.wallet_address}`);
+    return interaction.editReply({ content: `ℹ️ Your wallet address: \`${data.wallet_address}\``, flags: 64 });
   }
 }
 
-// --- DISCORD EVENT HANDLERS ---
+async function handleLeaderboardCommand(interaction) {
+  console.log(`Processing leaderboard command in channel: ${interaction.channel.name}`);
+  await interaction.deferReply();
 
-client.on("messageCreate", async (message) => {
-  if (message.author.bot || !message.content.toLowerCase().startsWith("!verify")) return;
-  if (message.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) return;
+  const { data, error } = await retryQuery(() =>
+    supabase.rpc('fetch_leaderboard_text')
+  );
+  if (error || !data) {
+    console.error(`Leaderboard query error: ${error?.message || 'No data returned'}`);
+    return interaction.editReply({ content: `❌ Failed to fetch leaderboard.`, flags: 64 });
+  }
+  console.log(`Leaderboard data: ${data}`);
+
+  return interaction.editReply({ content: data, flags: 64 });
+}
+
+async function handleHelpCommand(interaction) {
+  console.log(`Processing help command`);
+  await interaction.deferReply({ ephemeral: true });
+
+  const helpText = `
+**Free Spin Bot Commands**
+- **/spin**: Spin the wheel to win $HAROLD or other tokens (once per day).
+- **/freespin**: Alias for /spin.
+- **/dailyspin**: Alias for /spin.
+- **/mywallet [address]**: Link or view your Solana wallet address.
+- **/addmywallet [address]**: Alias for /mywallet.
+- **/myaddr [address]**: Alias for /mywallet.
+- **/myaddress [address]**: Alias for /mywallet.
+- **/spinleaders**: View the current leaderboard.
+- **/leaders**: Alias for /spinleaders.
+- **/leaderboard**: Alias for /spinleaders.
+- **/spinhelp**: Show this help message.
+  `;
+  return interaction.editReply({ content: helpText, flags: 64 });
+}
+
+client.once('ready', async () => {
+  console.log('Bot logged in successfully');
+
+  const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+  try {
+    console.log('Registering global slash commands');
+    await rest.put(
+      Routes.applicationCommands(DISCORD_APP_ID),
+      { body: [
+        new SlashCommandBuilder().setName("spin").setDescription("Spin the wheel to win $HAROLD or other tokens"),
+        new SlashCommandBuilder().setName("freespin").setDescription("Spin the wheel to win $HAROLD or other tokens"),
+        new SlashCommandBuilder().setName("dailyspin").setDescription("Spin the wheel to win $HAROLD or other tokens"),
+        new SlashCommandBuilder().setName("mywallet").setDescription("Link or view your Solana wallet address")
+          .addStringOption(option => option.setName("address").setDescription("Your Solana wallet address (optional)").setRequired(false)),
+        new SlashCommandBuilder().setName("addmywallet").setDescription("Link or view your Solana wallet address")
+          .addStringOption(option => option.setName("address").setDescription("Your Solana wallet address (optional)").setRequired(false)),
+        new SlashCommandBuilder().setName("myaddr").setDescription("Link or view your Solana wallet address")
+          .addStringOption(option => option.setName("address").setDescription("Your Solana wallet address (optional)").setRequired(false)),
+        new SlashCommandBuilder().setName("myaddress").setDescription("Link or view your Solana wallet address")
+          .addStringOption(option => option.setName("address").setDescription("Your Solana wallet address (optional)").setRequired(false)),
+        new SlashCommandBuilder().setName("leaders").setDescription("View the current leaderboard"),
+        new SlashCommandBuilder().setName("leaderboard").setDescription("Alias for /leaders"),
+        new SlashCommandBuilder().setName("spinleaders").setDescription("View the current leaderboard"),
+        new SlashCommandBuilder().setName("spinhelp").setDescription("View available commands"),
+      ] }
+    );
+    console.log('Slash commands registered successfully');
+  } catch (error) {
+    console.error(`Error registering slash commands: ${error.message}`);
+  }
+
+  setInterval(async () => {
+    const leaderboardChannel = client.channels.cache.find(channel =>
+      channel.name.toLowerCase() === LEADERBOARD_CHANNEL_NAME.toLowerCase() && channel.isTextBased()
+    );
+    if (leaderboardChannel) {
+      try {
+        const { data, error } = await retryQuery(() => supabase.rpc('fetch_leaderboard_text'));
+        if (error) {
+          console.error(`Leaderboard interval error: ${error.message}`);
+          return;
+        }
+        console.log(`Posting leaderboard: ${data}`);
+        await leaderboardChannel.send(data);
+      } catch (error) {
+        console.error(`Error posting leaderboard: ${error.message}`);
+      }
+    } else {
+      console.log(`Leaderboard channel not found: ${LEADERBOARD_CHANNEL_NAME}`);
+    }
+  }, 60 * 60 * 1000);
 });
 
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
+  console.log(`Received command: ${interaction.commandName}, channel: ${interaction.channel.name}`);
+
   if (["spin", "freespin", "dailyspin"].includes(interaction.commandName)) {
-    console.log(`Received command: ${interaction.commandName}, channel: ${interaction.channel.name}`);
     if (interaction.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) {
       console.log(`Channel mismatch: expected ${SPIN_CHANNEL_NAME}, got ${interaction.channel.name}`);
       return interaction.reply({ content: `Please use this command in the #${SPIN_CHANNEL_NAME} channel.`, flags: 64 });
     }
     await handleSpinCommand(interaction);
-  }
-
-  if (["mywallet", "addmywallet", "myaddr", "myaddress"].includes(interaction.commandName)) {
-    const walletAddress = interaction.options.getString("address");
-    await handleWalletCommand(interaction, walletAddress);
-  }
-
-  if (["leaders", "leaderboard", "spinleaders"].includes(interaction.commandName)) {
-    await interaction.deferReply();
-    const leaderboard = await fetchLeaderboardText();
-    await interaction.editReply({ content: `🏆 **Current Top 10 Winners:**\n\n${leaderboard}` });
-  }
-
-  if (interaction.commandName === "spinhelp") {
-    const helpText = "**/mywallet <address>**: Link your Solana wallet.\n**/spin**: Get a link to spin the wheel.\n**/spinleaders**: View the leaderboard.";
-    await interaction.reply({ content: helpText, flags: 64 });
+  } else if (["mywallet", "addmywallet", "myaddr", "myaddress"].includes(interaction.commandName)) {
+    await handleWalletCommand(interaction);
+  } else if (["leaders", "leaderboard", "spinleaders"].includes(interaction.commandName)) {
+    await handleLeaderboardCommand(interaction);
+  } else if (interaction.commandName === "spinhelp") {
+    await handleHelpCommand(interaction);
   }
 });
 
-setInterval(async () => {
-  try {
-    const channel = client.channels.cache.find(
-      (c) => c.name.toLowerCase() === SPIN_CHANNEL_NAME.toLowerCase(),
-    );
-    if (!channel || !channel.isTextBased()) return;
-
-    const leaderboardText = await fetchLeaderboardText();
-    if (leaderboardText !== lastLeaderboardPost) {
-      await channel.send(`🏆 **Updated Leaderboard:**\n\n${leaderboardText}`);
-      lastLeaderboardPost = leaderboardText;
-    }
-  } catch (error) {
-    console.error('Leaderboard post error:', error.message, error.stack);
-  }
-}, 60 * 60 * 1000);
-
-// --- STARTUP ---
-(async () => {
-  try {
-    const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
-    await rest.put(
-      Routes.applicationGuildCommands(
-        process.env.DISCORD_APP_ID,
-        process.env.DISCORD_GUILD,
-      ),
-      {
-        body: [
-          new SlashCommandBuilder()
-            .setName("spin")
-            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
-          new SlashCommandBuilder()
-            .setName("freespin")
-            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
-          new SlashCommandBuilder()
-            .setName("dailyspin")
-            .setDescription("Spin the wheel to win $HAROLD or other tokens"),
-          new SlashCommandBuilder()
-            .setName("mywallet")
-            .setDescription("Link or view your Solana wallet address")
-            .addStringOption(option =>
-              option.setName("address")
-                .setDescription("Your Solana wallet address (optional)")
-                .setRequired(false)),
-          new SlashCommandBuilder()
-            .setName("addmywallet")
-            .setDescription("Link or view your Solana wallet address")
-            .addStringOption(option =>
-              option.setName("address")
-                .setDescription("Your Solana wallet address (optional)")
-                .setRequired(false)),
-          new SlashCommandBuilder()
-            .setName("myaddr")
-            .setDescription("Link or view your Solana wallet address")
-            .addStringOption(option =>
-              option.setName("address")
-                .setDescription("Your Solana wallet address (optional)")
-                .setRequired(false)),
-          new SlashCommandBuilder()
-            .setName("myaddress")
-            .setDescription("Link or view your Solana wallet address")
-            .addStringOption(option =>
-              option.setName("address")
-                .setDescription("Your Solana wallet address (optional)")
-                .setRequired(false)),
-          new SlashCommandBuilder()
-            .setName("leaders")
-            .setDescription("View the current leaderboard (use /spinleaders instead)"),
-          new SlashCommandBuilder()
-            .setName("leaderboard")
-            .setDescription("Alias for /leaders (use /spinleaders instead)"),
-          new SlashCommandBuilder()
-            .setName("spinleaders")
-            .setDescription("View the current leaderboard"),
-          new SlashCommandBuilder()
-            .setName("spinhelp")
-            .setDescription("View available commands"),
-        ],
-      },
-    );
-    console.log('Slash commands registered successfully');
-  } catch (error) {
-    console.error('Failed to register slash commands:', error.message, error.stack);
-    process.exit(1);
-  }
-
-  try {
-    await client.login(process.env.DISCORD_TOKEN);
-    console.log('Bot logged in successfully');
-  } catch (error) {
-    console.error('Discord login error:', error);
-    process.exit(1);
-  }
-})();
+client.login(DISCORD_TOKEN);
