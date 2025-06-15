@@ -1,6 +1,7 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
-const { createClient } = require('@supabase/supabase-js');
-const { Connection } = require('@solana/web3.js');
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
+import { createClient } from '@supabase/supabase-js';
+import { Connection } from '@solana/web3.js';
+import crypto from 'crypto';
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const DISCORD_APP_ID = process.env.DISCORD_APP_ID;
