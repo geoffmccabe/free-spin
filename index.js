@@ -1,7 +1,7 @@
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { createClient } from '@supabase/supabase-js';
 import { Connection } from '@solana/web3.js';
-import { randomUUID } from 'crypto';
+import crypto from 'crypto';
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const DISCORD_APP_ID = process.env.DISCORD_APP_ID;
@@ -90,7 +90,7 @@ async function handleSpinCommand(interaction) {
       discord_id: discord_id,
       wallet_address: userData.wallet_address,
       contract_address: coin.contract_address,
-      token: randomUUID(),
+      token: crypto.randomUUID(),
       used: false
     }).select('token').single()
   );
