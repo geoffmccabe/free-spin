@@ -1,4 +1,3 @@
-
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { createClient } from '@supabase/supabase-js';
 import { Connection } from '@solana/web3.js';
