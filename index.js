@@ -11,6 +11,7 @@ const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.s
 const SPIN_CHANNEL_NAME = "🔄│free-spin";
 const LEADERBOARD_CHANNEL_NAME = "🏆│spin-leaderboard";
 const SPIN_URL = process.env.SPIN_URL || 'https://solspin.lightningworks.io';
+const TOKEN_SECRET = process.env.TOKEN_SECRET;
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -85,12 +86,15 @@ async function handleSpinCommand(interaction) {
   const coin = availableCoinsToSpin[Math.floor(Math.random() * availableCoinsToSpin.length)];
   console.log(`Selected coin for spin: ${coin.token_name} (${coin.contract_address})`);
 
+  const token = randomUUID();
+  const signature = crypto.createHmac('sha256', TOKEN_SECRET).update(token).digest('hex');
+  const signedToken = `${token}:${signature}`;
   const { data: tokenData, error: tokenError } = await retryQuery(() =>
     supabase.from('spin_tokens').insert({
       discord_id: discord_id,
       wallet_address: userData.wallet_address,
       contract_address: coin.contract_address,
-      token: randomUUID(),
+      token: signedToken,
       used: false
     }).select('token').single()
   );
@@ -99,6 +103,13 @@ async function handleSpinCommand(interaction) {
     return interaction.editReply({ content: `❌ Failed to generate spin token.`, flags: 64 });
   }
   console.log(`Inserting spin token: ${tokenData.token}`);
+
+  const [sentToken, sentSignature] = tokenData.token.split(':');
+  const expectedSignature = crypto.createHmac('sha256', TOKEN_SECRET).update(sentToken).digest('hex');
+  if (sentSignature !== expectedSignature) {
+    console.error('Invalid token signature');
+    return interaction.editReply({ content: `❌ Invalid token signature.`, flags: 64 });
+  }
 
   const spinUrl = `${SPIN_URL}/index.html?token=${tokenData.token}`;
   console.log(`Sending spin URL: ${spinUrl}`);
