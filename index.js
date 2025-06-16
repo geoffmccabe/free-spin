@@ -1,7 +1,7 @@
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { createClient } from '@supabase/supabase-js';
 import { Connection } from '@solana/web3.js';
-import { randomUUID } from 'crypto';
+import { createHmac, randomUUID } from 'crypto';
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const DISCORD_APP_ID = process.env.DISCORD_APP_ID;
@@ -33,7 +33,6 @@ async function handleSpinCommand(interaction) {
   const discord_id = interaction.user.id;
   console.log(`Processing /spin for user: ${discord_id}`);
   await interaction.deferReply({ ephemeral: true });
-  console.log('Deferred reply sent');
 
   const { data: userData, error: userError } = await retryQuery(() =>
     supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
@@ -87,8 +86,8 @@ async function handleSpinCommand(interaction) {
   console.log(`Selected coin for spin: ${coin.token_name} (${coin.contract_address})`);
 
   const token = randomUUID();
-  const signature = crypto.createHmac('sha256', TOKEN_SECRET).update(token).digest('hex');
-  const signedToken = `${token}:${signature}`;
+  const signature = createHmac('sha256', TOKEN_SECRET).update(token).digest('hex');
+  const signedToken = `${token}.${signature}`;
   const { data: tokenData, error: tokenError } = await retryQuery(() =>
     supabase.from('spin_tokens').insert({
       discord_id: discord_id,
@@ -103,13 +102,6 @@ async function handleSpinCommand(interaction) {
     return interaction.editReply({ content: `❌ Failed to generate spin token.`, flags: 64 });
   }
   console.log(`Inserting spin token: ${tokenData.token}`);
-
-  const [sentToken, sentSignature] = tokenData.token.split(':');
-  const expectedSignature = crypto.createHmac('sha256', TOKEN_SECRET).update(sentToken).digest('hex');
-  if (sentSignature !== expectedSignature) {
-    console.error('Invalid token signature');
-    return interaction.editReply({ content: `❌ Invalid token signature.`, flags: 64 });
-  }
 
   const spinUrl = `${SPIN_URL}/index.html?token=${tokenData.token}`;
   console.log(`Sending spin URL: ${spinUrl}`);
