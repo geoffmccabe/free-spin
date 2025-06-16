@@ -1,9 +1,11 @@
-// Add this line for debugging
-console.log(`[DEBUG] Is TOKEN_SECRET loaded? Value: ${process.env.TOKEN_SECRET}`);
+
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { createClient } from '@supabase/supabase-js';
 import { Connection } from '@solana/web3.js';
 import { createHmac, randomUUID } from 'crypto';
+
+// Add this line for debugging
+console.log(`[DEBUG] Is TOKEN_SECRET loaded? Value: ${process.env.TOKEN_SECRET}`);
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const DISCORD_APP_ID = process.env.DISCORD_APP_ID;
