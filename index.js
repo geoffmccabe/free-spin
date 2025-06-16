@@ -130,12 +130,12 @@ async function handleWalletCommand(interaction) {
     const { data, error } = await retryQuery(() =>
       supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
     );
-    if (error || !data?.wallet_address) {
-      console.error(`Wallet query error: ${error?.message || 'No wallet found'}`);
-      return interaction.editReply({ content: `❌ No wallet address found. Please provide one using \`/mywallet <address>\`.`, flags: 64 });
+    if (error || !userData?.wallet_address) {
+      console.error(`User query error: ${error?.message || 'No wallet found'}`);
+      return interaction.editReply({ content: `❌ Please link your Solana wallet first using the \`/mywallet\` command.`, flags: 64 });
     }
-    console.log(`Wallet retrieved: ${data.wallet_address}`);
-    return interaction.editReply({ content: `ℹ️ Your wallet address: \`${data.wallet_address}\``, flags: 64 });
+    console.log(`Wallet found: ${userData.wallet_address}`);
+    return interaction.editReply({ content: `ℹ️ Your wallet address: \`${userData.wallet_address}\``, flags: 64 });
   }
 }
 
@@ -163,13 +163,13 @@ async function handleLeaderboardCommand(interaction) {
     const [, discord_id, total_amount] = match;
     try {
       const user = await client.users.fetch(discord_id);
-      const username = user.username || discord_id;
+      const username = user.username || `User_${discord_id}`; // Fix: Use username
       leaderboard_text += `#${rank}: ${username} — ${total_amount} $HAROLD\n`;
       prev_rank = rank;
       rank++;
     } catch (fetchError) {
       console.error(`Failed to fetch user ${discord_id}: ${fetchError.message}`);
-      leaderboard_text += `#${rank}: ${discord_id} — ${total_amount} $HAROLD\n`;
+      leaderboard_text += `#${rank}: User_${discord_id} — ${total_amount} $HAROLD\n`;
       rank++;
     }
   }
