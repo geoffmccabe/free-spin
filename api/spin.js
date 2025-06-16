@@ -3,12 +3,14 @@ import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction 
 import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
 
+// --- Environment Variables ---
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const TOKEN_SECRET = process.env.TOKEN_SECRET;
 
+// --- Initializations ---
 const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -23,6 +25,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Token required' });
     }
 
+    // 1. VERIFY TOKEN SIGNATURE
     const [token, signature] = signedToken.split('.');
     if (!token || !signature) {
       return res.status(400).json({ error: 'Malformed token' });
@@ -32,6 +35,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Invalid or forged token' });
     }
 
+    // 2. FETCH AND VALIDATE TOKEN DATA
     const { data: tokenData, error: tokenError } = await supabase
       .from('spin_tokens')
       .select('discord_id, wallet_address, contract_address, used')
@@ -47,6 +51,7 @@ export default async function handler(req, res) {
 
     const { discord_id, wallet_address, contract_address } = tokenData;
 
+    // 3. DEFENSE-IN-DEPTH: RE-CHECK DAILY SPIN LIMIT
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { count, error: spinCountError } = await supabase
       .from('daily_spins')
@@ -60,6 +65,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Daily spin limit for this token has already been reached.' });
     }
 
+    // 4. FETCH WHEEL CONFIG
     const { data: config, error: configError } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -71,6 +77,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid wheel configuration' });
     }
     
+    // 5. PROCESS THE SPIN
     if (spin) {
       const weights = config.payout_weights || config.payout_amounts.map(() => 1);
       const totalWeight = weights.reduce((a, b) => a + b, 0);
@@ -84,6 +91,7 @@ export default async function handler(req, res) {
       const rewardAmount = config.payout_amounts[selectedIndex];
       const prizeText = `${rewardAmount} ${config.token_name}`;
 
+      // 6. EXECUTE CORRECT SPL TOKEN TRANSACTION
       const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
       const userWallet = new PublicKey(wallet_address);
       const tokenMint = new PublicKey(contract_address);
@@ -96,17 +104,19 @@ export default async function handler(req, res) {
           fromTokenAccount.address,
           toTokenAccount.address,
           fundingWallet.publicKey,
-          rewardAmount * (10 ** 5)
+          rewardAmount * (10 ** 5) // Assuming 5 decimals
         )
       );
 
       const txSignature = await sendAndConfirmTransaction(connection, transaction, [fundingWallet]);
       console.log("Transaction confirmed with signature:", txSignature);
 
+      // 7. UPDATE DATABASE
       await supabase.from('daily_spins').insert({ discord_id, reward: rewardAmount, contract_address, signature: txSignature });
       await supabase.from('spin_tokens').update({ used: true, signature: txSignature }).eq('token', signedToken);
 
       return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText });
+
     } else {
       const tokenConfig = {
         token_name: config.token_name,
