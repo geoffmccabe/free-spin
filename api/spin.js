@@ -1,118 +1,122 @@
-const { createClient } = require('@supabase/supabase-js');
-const { Connection, PublicKey, Transaction, SystemProgram } = require('@solana/web3.js');
-const crypto = require('crypto');
+import { createClient } from '@supabase/supabase-js';
+import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
+import { createHmac, randomInt } from 'crypto';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const TOKEN_SECRET = process.env.TOKEN_SECRET;
-const WALLET_PRIVATE_KEY = process.env.WALLET_PRIVATE_KEY;
 
+const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-const solanaConnection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
-async function retryQuery(queryFn, maxRetries = 3, delay = 1000) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await queryFn();
-    } catch (error) {
-      console.error(`Attempt ${attempt} failed: ${error.message}`);
-      if (attempt === maxRetries) throw error;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-}
-
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { token } = req.body;
-  if (!token) {
-    return res.status(400).json({ error: 'Token is required' });
-  }
-
   try {
-    const [tokenValue, signature] = token.split(':');
-    const expectedSignature = crypto.createHmac('sha256', TOKEN_SECRET).update(tokenValue).digest('hex');
-    if (signature !== expectedSignature) {
-      return res.status(403).json({ error: 'Invalid token signature' });
+    const { token: signedToken, spin } = req.body;
+    if (!signedToken) {
+      return res.status(400).json({ error: 'Token required' });
     }
 
-    const { data: tokenData, error: tokenError } = await retryQuery(() =>
-      supabase.from('spin_tokens').select('discord_id, wallet_address, contract_address').eq('token', token).eq('used', false).single()
-    );
-    if (tokenError || !tokenData) {
-      return res.status(400).json({ error: 'Invalid or used token' });
+    const [token, signature] = signedToken.split('.');
+    if (!token || !signature) {
+      return res.status(400).json({ error: 'Malformed token' });
     }
+    const expectedSignature = createHmac('sha256', TOKEN_SECRET).update(token).digest('hex');
+    if (signature !== expectedSignature) {
+      return res.status(403).json({ error: 'Invalid or forged token' });
+    }
+
+    const { data: tokenData, error: tokenError } = await supabase
+      .from('spin_tokens')
+      .select('discord_id, wallet_address, contract_address, used')
+      .eq('token', signedToken)
+      .single();
+
+    if (tokenError || !tokenData) {
+      return res.status(400).json({ error: 'Invalid token' });
+    }
+    if (tokenData.used) {
+      return res.status(400).json({ error: 'Token already used' });
+    }
+
+    const { discord_id, wallet_address, contract_address } = tokenData;
 
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { count } = await retryQuery(() =>
-      supabase.from('daily_spins')
-        .select('*', { count: 'exact', head: true })
-        .eq('discord_id', tokenData.discord_id)
-        .eq('contract_address', tokenData.contract_address)
-        .gte('created_at', twentyFourHoursAgo)
-    );
+    const { count, error: spinCountError } = await supabase
+      .from('daily_spins')
+      .select('*', { count: 'exact', head: true })
+      .eq('discord_id', discord_id)
+      .eq('contract_address', contract_address)
+      .gte('created_at', twentyFourHoursAgo);
+
+    if (spinCountError) throw new Error('DB error checking spin history.');
     if (count > 0) {
-      return res.status(400).json({ error: 'Daily spin limit exceeded' });
+      return res.status(403).json({ error: 'Daily spin limit for this token has already been reached.' });
     }
 
-    const { data: wheelConfig, error: configError } = await retryQuery(() =>
-      supabase.from('wheel_configurations').select('payout_weights, payout_amounts, token_name').eq('contract_address', tokenData.contract_address).single()
-    );
-    if (configError || !wheelConfig) {
-      return res.status(500).json({ error: 'Failed to fetch wheel configuration' });
+    const { data: config, error: configError } = await supabase
+      .from('wheel_configurations')
+      .select('token_name, payout_amounts, payout_weights, image_url')
+      .eq('contract_address', contract_address)
+      .eq('active', true)
+      .single();
+
+    if (configError || !config) {
+      return res.status(400).json({ error: 'Invalid wheel configuration' });
     }
+    
+    if (spin) {
+      const weights = config.payout_weights || config.payout_amounts.map(() => 1);
+      const totalWeight = weights.reduce((a, b) => a + b, 0);
+      const rand = randomInt(0, totalWeight);
+      let sum = 0;
+      let selectedIndex = 0;
+      for (let i = 0; i < weights.length; i++) {
+        sum += weights[i];
+        if (rand < sum) { selectedIndex = i; break; }
+      }
+      const rewardAmount = config.payout_amounts[selectedIndex];
+      const prizeText = `${rewardAmount} ${config.token_name}`;
 
-    const weights = wheelConfig.payout_weights;
-    const totalWeight = weights.reduce((sum, w) => sum + w, 0);
-    const rand = crypto.randomBytes(4).readUInt32LE(0) % totalWeight;
-    let sum = 0;
-    let segment = 0;
-    for (let i = 0; i < weights.length; i++) {
-      sum += weights[i];
-      if (rand < sum) { segment = i; break; }
+      const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+      const userWallet = new PublicKey(wallet_address);
+      const tokenMint = new PublicKey(contract_address);
+
+      const fromTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, fundingWallet.publicKey);
+      const toTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, userWallet);
+
+      const transaction = new Transaction().add(
+        createTransferInstruction(
+          fromTokenAccount.address,
+          toTokenAccount.address,
+          fundingWallet.publicKey,
+          rewardAmount * (10 ** 5)
+        )
+      );
+
+      const txSignature = await sendAndConfirmTransaction(connection, transaction, [fundingWallet]);
+      console.log("Transaction confirmed with signature:", txSignature);
+
+      await supabase.from('daily_spins').insert({ discord_id, reward: rewardAmount, contract_address, signature: txSignature });
+      await supabase.from('spin_tokens').update({ used: true, signature: txSignature }).eq('token', signedToken);
+
+      return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText });
+    } else {
+      const tokenConfig = {
+        token_name: config.token_name,
+        payout_amounts: config.payout_amounts,
+        image_url: config.image_url,
+      };
+      return res.status(200).json({ tokenConfig });
     }
-    const amount = wheelConfig.payout_amounts[segment];
-
-    const wallet = Keypair.fromSecretKey(Buffer.from(WALLET_PRIVATE_KEY, 'base64'));
-    const recipient = new PublicKey(tokenData.wallet_address);
-    const transaction = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: wallet.publicKey,
-        toPubkey: recipient,
-        lamports: amount * 1e9 // Assuming token decimals
-      })
-    );
-    const signature = await solanaConnection.sendTransaction(transaction, [wallet]);
-    await solanaConnection.confirmTransaction(signature);
-
-    const { error: spinInsertError } = await retryQuery(() =>
-      supabase.from('daily_spins').insert({
-        discord_id: tokenData.discord_id,
-        reward: amount,
-        contract_address: tokenData.contract_address,
-        signature,
-        created_at: new Date().toISOString()
-      })
-    );
-    if (spinInsertError) {
-      console.error(`Spin insert error: ${spinInsertError.message}`);
-      return res.status(500).json({ error: 'Failed to record spin' });
-    }
-
-    const { error: tokenUpdateError } = await retryQuery(() =>
-      supabase.from('spin_tokens').update({ used: true }).eq('token', token)
-    );
-    if (tokenUpdateError) {
-      console.error(`Token update error: ${tokenUpdateError.message}`);
-    }
-
-    return res.status(200).json({ segment, amount, signature });
-  } catch (error) {
-    console.error(`Spin processing error: ${error.message}`);
-    return res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error("API error:", err.message, err.stack);
+    return res.status(500).json({ error: 'An internal error occurred.' });
   }
-};
+}
