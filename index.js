@@ -1,7 +1,7 @@
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { createClient } from '@supabase/supabase-js';
 import { Connection } from '@solana/web3.js';
-import crypto from 'crypto';
+import { randomUUID } from 'crypto';
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const DISCORD_APP_ID = process.env.DISCORD_APP_ID;
@@ -31,7 +31,7 @@ async function retryQuery(queryFn, maxRetries = 3, delay = 1000) {
 async function handleSpinCommand(interaction) {
   const discord_id = interaction.user.id;
   console.log(`Processing /spin for user: ${discord_id}`);
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: 64 });
   console.log('Deferred reply sent');
 
   const { data: userData, error: userError } = await retryQuery(() =>
@@ -90,7 +90,7 @@ async function handleSpinCommand(interaction) {
       discord_id: discord_id,
       wallet_address: userData.wallet_address,
       contract_address: coin.contract_address,
-      token: crypto.randomUUID(),
+      token: randomUUID(),
       used: false
     }).select('token').single()
   );
@@ -110,7 +110,7 @@ async function handleWalletCommand(interaction) {
   const wallet_address = interaction.options.getString('address');
   console.log(`Processing wallet command for user: ${discord_id}, address: ${wallet_address}`);
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: 64 });
 
   if (wallet_address) {
     if (!wallet_address.match(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)) {
@@ -146,18 +146,49 @@ async function handleLeaderboardCommand(interaction) {
   const { data, error } = await retryQuery(() =>
     supabase.rpc('fetch_leaderboard_text')
   );
-  if (error || !data) {
+  if (error || !data || !Array.isArray(data)) {
     console.error(`Leaderboard query error: ${error?.message || 'No data returned'}`);
     return interaction.editReply({ content: `❌ Failed to fetch leaderboard.`, flags: 64 });
   }
-  console.log(`Leaderboard data: ${data}`);
+  console.log(`Leaderboard data: ${JSON.stringify(data)}`);
 
-  return interaction.editReply({ content: data, flags: 64 });
+  let leaderboard_text = '';
+  let rank = 1;
+  let prev_amount = null;
+  let prev_rank = 0;
+  let row_count = 0;
+
+  for (const { discord_id, total_amount } of data) {
+    try {
+      const user = await client.users.fetch(discord_id);
+      const username = user.username || discord_id;
+      if (total_amount === prev_amount) {
+        leaderboard_text += `#${prev_rank}: ${username} — ${total_amount} $HAROLD\n`;
+      } else {
+        leaderboard_text += `#${rank}: ${username} — ${total_amount} $HAROLD\n`;
+        prev_rank = rank;
+        rank++;
+      }
+      prev_amount = total_amount;
+      row_count++;
+    } catch (fetchError) {
+      console.error(`Failed to fetch user ${discord_id}: ${fetchError.message}`);
+      leaderboard_text += `#${rank}: ${discord_id} — ${total_amount} $HAROLD\n`;
+      rank++;
+      row_count++;
+    }
+  }
+
+  if (row_count === 0) {
+    leaderboard_text = 'No spins recorded in the last 30 days.';
+  }
+
+  return interaction.editReply({ content: leaderboard_text, flags: 64 });
 }
 
 async function handleHelpCommand(interaction) {
   console.log(`Processing help command`);
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: 64 });
 
   const helpText = `
 **Free Spin Bot Commands**
