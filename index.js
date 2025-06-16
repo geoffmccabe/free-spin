@@ -1,3 +1,5 @@
+// Add this line for debugging
+console.log(`[DEBUG] Is TOKEN_SECRET loaded? Value: ${process.env.TOKEN_SECRET}`);
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { createClient } from '@supabase/supabase-js';
 import { Connection } from '@solana/web3.js';
