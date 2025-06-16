@@ -146,40 +146,35 @@ async function handleLeaderboardCommand(interaction) {
   const { data, error } = await retryQuery(() =>
     supabase.rpc('fetch_leaderboard_text')
   );
-  if (error || !data || !Array.isArray(data)) {
+  if (error || !data) {
     console.error(`Leaderboard query error: ${error?.message || 'No data returned'}`);
     return interaction.editReply({ content: `❌ Failed to fetch leaderboard.`, flags: 64 });
   }
-  console.log(`Leaderboard data: ${JSON.stringify(data)}`);
+  console.log(`Leaderboard data: ${data}`);
 
   let leaderboard_text = '';
+  const rows = data.split('\n').filter(row => row.trim());
   let rank = 1;
-  let prev_amount = null;
   let prev_rank = 0;
-  let row_count = 0;
 
-  for (const { discord_id, total_amount } of data) {
+  for (const row of rows) {
+    const match = row.match(/^(\d+),(\d+)$/);
+    if (!match) continue;
+    const [, discord_id, total_amount] = match;
     try {
       const user = await client.users.fetch(discord_id);
       const username = user.username || discord_id;
-      if (total_amount === prev_amount) {
-        leaderboard_text += `#${prev_rank}: ${username} — ${total_amount} $HAROLD\n`;
-      } else {
-        leaderboard_text += `#${rank}: ${username} — ${total_amount} $HAROLD\n`;
-        prev_rank = rank;
-        rank++;
-      }
-      prev_amount = total_amount;
-      row_count++;
+      leaderboard_text += `#${rank}: ${username} — ${total_amount} $HAROLD\n`;
+      prev_rank = rank;
+      rank++;
     } catch (fetchError) {
       console.error(`Failed to fetch user ${discord_id}: ${fetchError.message}`);
       leaderboard_text += `#${rank}: ${discord_id} — ${total_amount} $HAROLD\n`;
       rank++;
-      row_count++;
     }
   }
 
-  if (row_count === 0) {
+  if (!leaderboard_text) {
     leaderboard_text = 'No spins recorded in the last 30 days.';
   }
 
