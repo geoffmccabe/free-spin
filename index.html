@@ -15,7 +15,7 @@
 </head>
 <body>
   <div id="wheel-container">
-    <img id="wheel" src="https://solspin.lightningworks.io/images/default.png" alt="Spin Wheel">
+    <img id="wheel" src="https://solspin.lightningworks.io/img/Wheel_Harold_800px.webp" alt="Spin Wheel">
     <button id="spin-button" disabled>SPIN</button>
     <div id="error-message"></div>
   </div>
@@ -37,7 +37,7 @@
         }
 
         const { tokenConfig } = data;
-        document.getElementById('wheel').src = tokenConfig.image_url || 'https://solspin.lightningworks.io/images/default.png';
+        document.getElementById('wheel').src = tokenConfig.image_url || 'https://solspin.lightningworks.io/img/Wheel_Harold_800px.webp';
         document.getElementById('spin-button').disabled = false;
 
         document.getElementById('spin-button').onclick = async () => {
@@ -57,15 +57,15 @@
             const { segmentIndex, prize } = spinData;
             alert(`You won ${prize}!`);
           } catch (error) {
-            document.getElementById('error-message').textContent = error.message === 'This spin token has already been used' ? 'You have used all your free spins today' : error.message;
+            document.getElementById('error-message').textContent = error.message === 'This spin token has already been used' || error.message === 'Daily spin limit reached' ? 'You have used all your free spins today' : error.message;
             document.getElementById('error-message').style.display = 'block';
             document.getElementById('spin-button').disabled = true;
           }
         };
       } catch (error) {
-        document.getElementById('error-message').textContent = error.message === 'This spin token has already been used' ? 'You have used all your free spins today' : error.message;
+        document.getElementById('error-message').textContent = error.message === 'This spin token has already been used' || error.message === 'Daily spin limit reached' ? 'You have used all your free spins today' : error.message;
         document.getElementById('error-message').style.display = 'block';
-        document.getElementById('wheel').src = 'https://solspin.lightningworks.io/images/default.png';
+        document.getElementById('wheel').src = 'https://solspin.lightningworks.io/img/Wheel_Harold_800px.webp';
         document.getElementById('spin-button').disabled = true;
       }
     }
