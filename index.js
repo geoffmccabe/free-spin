@@ -126,7 +126,12 @@ async function handleWalletCommand(interaction) {
   const wallet_address = interaction.options.getString('address');
   console.log(`Processing wallet command for user: ${discord_id}, address: ${wallet_address}`);
 
-  await interaction.deferReply({ flags: 64 });
+  try {
+    await interaction.deferReply({ flags: 64 });
+  } catch (error) {
+    console.error(`Defer reply failed: ${error.message}`);
+    return;
+  }
 
   if (wallet_address) {
     if (!wallet_address.match(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)) {
@@ -157,7 +162,13 @@ async function handleWalletCommand(interaction) {
 
 async function handleLeaderboardCommand(interaction) {
   console.log(`Processing leaderboard command in channel: ${interaction.channel.name}`);
-  await interaction.deferReply();
+  try {
+    await interaction.deferReply();
+  } catch (error) {
+    console.error(`Defer reply failed: ${error.message}`);
+    return interaction.reply({ content: `❌ Failed to reply: ${error.message}`, flags: 64 });
+  }
+
   try {
     const { data, error } = await retryQuery(() =>
       supabase.rpc('fetch_leaderboard_text')
@@ -176,7 +187,12 @@ async function handleLeaderboardCommand(interaction) {
 
 async function handleHelpCommand(interaction) {
   console.log(`Processing help command`);
-  await interaction.deferReply({ flags: 64 });
+  try {
+    await interaction.deferReply({ flags: 64 });
+  } catch (error) {
+    console.error(`Defer reply failed: ${error.message}`);
+    return;
+  }
 
   const helpText = `
 **Free Spin Bot Commands**
