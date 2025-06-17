@@ -3,9 +3,6 @@ import { createClient } from '@supabase/supabase-js';
 import { Connection } from '@solana/web3.js';
 import { createHmac, randomUUID } from 'crypto';
 
-// Add this line for debugging
-console.log(`[DEBUG] Is TOKEN_SECRET loaded? Value: ${process.env.TOKEN_SECRET}`);
-
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const DISCORD_APP_ID = process.env.DISCORD_APP_ID;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -14,7 +11,6 @@ const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.s
 const SPIN_CHANNEL_NAME = "🔄│free-spin";
 const LEADERBOARD_CHANNEL_NAME = "🏆│spin-leaderboard";
 const SPIN_URL = process.env.SPIN_URL || 'https://solspin.lightningworks.io';
-const TOKEN_SECRET = process.env.TOKEN_SECRET;
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -88,9 +84,16 @@ async function handleSpinCommand(interaction) {
   const coin = availableCoinsToSpin[Math.floor(Math.random() * availableCoinsToSpin.length)];
   console.log(`Selected coin for spin: ${coin.token_name} (${coin.contract_address})`);
 
+  const secretKey = process.env.TOKEN_SECRET;
+  if (!secretKey) {
+    console.error("FATAL: TOKEN_SECRET environment variable not found or is empty.");
+    return interaction.editReply({ content: `❌ A server configuration error occurred. Please notify an administrator.`, flags: 64 });
+  }
+
   const token = randomUUID();
-  const signature = createHmac('sha256', TOKEN_SECRET).update(token).digest('hex');
+  const signature = createHmac('sha256', secretKey).update(token).digest('hex');
   const signedToken = `${token}.${signature}`;
+
   const { data: tokenData, error: tokenError } = await retryQuery(() =>
     supabase.from('spin_tokens').insert({
       discord_id: discord_id,
