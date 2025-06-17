@@ -22,9 +22,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Token required' });
     }
 
-    const TOKEN_SECRET = process.env.TOKEN_SECRET;
+    const TOKEN_SECRET = process.env.SPIN_KEY;
     if (!TOKEN_SECRET) {
-      console.error("FATAL: TOKEN_SECRET environment variable not found or is empty.");
+      console.error("FATAL: SPIN_KEY environment variable not found or is empty.");
       return res.status(500).json({ error: 'Server configuration error' });
     }
 
