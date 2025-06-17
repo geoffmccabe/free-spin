@@ -178,7 +178,27 @@ async function handleLeaderboardCommand(interaction) {
       return interaction.editReply({ content: `❌ Failed to fetch leaderboard: ${error?.message || 'Unknown error'}`, flags: 64 });
     }
     console.log(`Leaderboard data: ${data}`);
-    return interaction.editReply({ content: data, flags: 64 });
+
+    let leaderboard_text = '';
+    const rows = data.split('\n').filter(row => row.trim());
+    for (const row of rows) {
+      const match = row.match(/^#(\d+): (\d+) — (\d+) (.+)$/);
+      if (!match) continue;
+      const [, rank, discord_id, total_amount, token_name] = match;
+      try {
+        const user = await client.users.fetch(discord_id);
+        leaderboard_text += `#${rank}: ${user.username} — ${total_amount} ${token_name}\n`;
+      } catch (fetchError) {
+        console.error(`Failed to fetch user ${discord_id}: ${fetchError.message}`);
+        leaderboard_text += row + '\n';
+      }
+    }
+
+    if (!leaderboard_text) {
+      leaderboard_text = 'No spins recorded in the last 30 days.';
+    }
+
+    return interaction.editReply({ content: leaderboard_text, flags: 64 });
   } catch (err) {
     console.error(`Leaderboard command error: ${err.message}`);
     return interaction.editReply({ content: `❌ Failed to fetch leaderboard: ${err.message}`, flags: 64 });
