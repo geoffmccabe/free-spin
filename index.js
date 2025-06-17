@@ -31,7 +31,18 @@ async function retryQuery(queryFn, maxRetries = 3, delay = 1000) {
 async function handleSpinCommand(interaction) {
   const discord_id = interaction.user.id;
   console.log(`Processing /spin for user: ${discord_id}`);
-  await interaction.deferReply({ ephemeral: true });
+  try {
+    await interaction.deferReply({ flags: 64 });
+  } catch (error) {
+    console.error(`Defer reply failed: ${error.message}`);
+    return;
+  }
+
+  const secretKey = process.env.SPIN_KEY;
+  if (!secretKey) {
+    console.error("FATAL: SPIN_KEY environment variable not found or is empty.");
+    return interaction.editReply({ content: `❌ A server configuration error occurred. Please notify an administrator.`, flags: 64 });
+  }
 
   const { data: userData, error: userError } = await retryQuery(() =>
     supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
@@ -56,6 +67,7 @@ async function handleSpinCommand(interaction) {
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const now = new Date().toISOString();
     for (const coin of activeCoins) {
+      console.log(`Checking spins for discord_id: ${discord_id}, contract: ${coin.contract_address}, since: ${twentyFourHoursAgo}`);
       const { count, error } = await retryQuery(() =>
         supabase.from('daily_spins')
           .select('*', { count: 'exact', head: true })
@@ -68,6 +80,7 @@ async function handleSpinCommand(interaction) {
         console.error(`Spin count error: ${error.message}`);
         return interaction.editReply({ content: `❌ Database error checking spin count.`, flags: 64 });
       }
+      console.log(`Spin count: ${count}`);
       if (count < 1) {
         availableCoinsToSpin.push(coin);
       }
@@ -83,12 +96,6 @@ async function handleSpinCommand(interaction) {
 
   const coin = availableCoinsToSpin[Math.floor(Math.random() * availableCoinsToSpin.length)];
   console.log(`Selected coin for spin: ${coin.token_name} (${coin.contract_address})`);
-
-  const secretKey = process.env.TOKEN_SECRET;
-  if (!secretKey) {
-    console.error("FATAL: TOKEN_SECRET environment variable not found or is empty.");
-    return interaction.editReply({ content: `❌ A server configuration error occurred. Please notify an administrator.`, flags: 64 });
-  }
 
   const token = randomUUID();
   const signature = createHmac('sha256', secretKey).update(token).digest('hex');
@@ -119,7 +126,7 @@ async function handleWalletCommand(interaction) {
   const wallet_address = interaction.options.getString('address');
   console.log(`Processing wallet command for user: ${discord_id}, address: ${wallet_address}`);
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: 64 });
 
   if (wallet_address) {
     if (!wallet_address.match(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)) {
@@ -185,7 +192,7 @@ async function handleLeaderboardCommand(interaction) {
 
 async function handleHelpCommand(interaction) {
   console.log(`Processing help command`);
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: 64 });
 
   const helpText = `
 **Free Spin Bot Commands**
