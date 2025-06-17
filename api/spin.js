@@ -51,27 +51,31 @@ export default async function handler(req, res) {
     }
     if (tokenData.used) {
       console.error(`Token already used: ${signedToken}`);
-      return res.status(400).json({ error: 'Token already used' });
+      return res.status(400).json({ error: 'This spin token has already been used' });
     }
 
     const { discord_id, wallet_address, contract_address } = tokenData;
 
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    console.log(`Checking spin limit for discord_id: ${discord_id}, contract: ${contract_address}, since: ${twentyFourHoursAgo}`);
-    const { count, error: spinCountError } = await supabase
-      .from('daily_spins')
-      .select('*', { count: 'exact', head: true })
-      .eq('discord_id', discord_id)
-      .eq('contract_address', contract_address)
-      .gte('created_at', twentyFourHoursAgo);
+    if (discord_id !== '332676096531103775') { // Bypass spin limit for owner
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      console.log(`Checking spin limit for discord_id: ${discord_id}, contract: ${contract_address}, since: ${twentyFourHoursAgo}`);
+      const { count, error: spinCountError } = await supabase
+        .from('daily_spins')
+        .select('*', { count: 'exact', head: true })
+        .eq('discord_id', discord_id)
+        .eq('contract_address', contract_address)
+        .gte('created_at', twentyFourHoursAgo);
 
-    if (spinCountError) {
-      console.error(`Spin count error: ${spinCountError.message}`);
-      throw new Error('DB error checking spin history');
-    }
-    if (count > 0) {
-      console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
-      return res.status(403).json({ error: 'Daily spin limit reached' });
+      if (spinCountError) {
+        console.error(`Spin count error: ${spinCountError.message}`);
+        throw new Error('DB error checking spin history');
+      }
+      if (count > 0) {
+        console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
+        return res.status(403).json({ error: 'Daily spin limit reached' });
+      }
+    } else {
+      console.log(`Bypassing spin limit for owner discord_id: ${discord_id}`);
     }
 
     const { data: config, error: configError } = await supabase
@@ -126,7 +130,7 @@ export default async function handler(req, res) {
       const tokenConfig = {
         token_name: config.token_name,
         payout_amounts: config.payout_amounts,
-        image_url: config.image_url,
+        image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Harold_800px.webp'
       };
       return res.status(200).json({ tokenConfig });
     }
