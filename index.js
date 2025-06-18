@@ -118,7 +118,7 @@ async function handleSpinCommand(interaction) {
 
   const spinUrl = `${SPIN_URL}/index.html?token=${tokenData.token}`;
   console.log(`Sending spin URL: ${spinUrl}`);
-  return interaction.editReply({ content: `🎰 Your spin is ready! Click here: ${spinUrl}`, flags: 64 });
+  return interaction.editReply({ content: `Your spin is ready! Click here: ${spinUrl}`, flags: 64 });
 }
 
 async function handleWalletCommand(interaction) {
