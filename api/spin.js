@@ -17,9 +17,12 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { token: signedToken, spin } = req.body;
+    const { token: signedToken, spin, server_id } = req.body;
     if (!signedToken) {
       return res.status(400).json({ error: 'Token required' });
+    }
+    if (!server_id) {
+      return res.status(400).json({ error: 'Server ID required' });
     }
 
     const TOKEN_SECRET = process.env.SPIN_KEY;
@@ -56,33 +59,57 @@ export default async function handler(req, res) {
 
     const { discord_id, wallet_address, contract_address } = tokenData;
 
-    if (discord_id !== '332676096531103775') { // Bypass spin limit for owner
+    const [
+      { data: serverTokens, error: serverTokenError },
+      { data: userData, error: userError },
+      { data: adminData, error: adminError }
+    ] = await Promise.all([
+      supabase.from('server_tokens').select('contract_address').eq('server_id', server_id),
+      supabase.from('users').select('spin_limit').eq('discord_id', discord_id).single(),
+      supabase.from('server_admins').select('role').eq('discord_id', discord_id).eq('server_id', server_id).single()
+    ]);
+
+    if (serverTokenError || !serverTokens?.some(t => t.contract_address === contract_address)) {
+      console.error(`Invalid contract_address ${contract_address} for server ${server_id}`);
+      return res.status(400).json({ error: 'Invalid token for this server' });
+    }
+
+    if (userError || !userData) {
+      console.error(`User query error: ${userError?.message || 'No user found'}`);
+      return res.status(400).json({ error: 'User not found' });
+    }
+
+    const isSuperadmin = adminData?.role === 'superadmin';
+    console.log(`Admin check: ${discord_id} is ${isSuperadmin ? '' : 'not '}superadmin`);
+
+    let spins_left = userData.spin_limit;
+    if (!isSuperadmin) {
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       console.log(`Checking spin limit for discord_id: ${discord_id}, contract: ${contract_address}, since: ${twentyFourHoursAgo}`);
-      const { count, error: spinCountError } = await supabase
+      const { data: recentSpins, error: spinCountError } = await supabase
         .from('daily_spins')
-        .select('*', { count: 'exact', head: true })
+        .select('contract_address')
         .eq('discord_id', discord_id)
-        .eq('contract_address', contract_address)
         .gte('created_at', twentyFourHoursAgo);
 
       if (spinCountError) {
         console.error(`Spin count error: ${spinCountError.message}`);
         throw new Error('DB error checking spin history');
       }
-      if (count > 0) {
+      spins_left = userData.spin_limit - recentSpins.length;
+      if (recentSpins.length >= userData.spin_limit) {
         console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
         return res.status(403).json({ error: 'Daily spin limit reached' });
       }
     } else {
-      console.log(`Bypassing spin limit for owner discord_id: ${discord_id}`);
+      console.log(`Bypassing spin limit for superadmin: ${discord_id}`);
+      spins_left = 'Unlimited';
     }
 
     const { data: config, error: configError } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
       .eq('contract_address', contract_address)
-      .eq('active', true)
       .single();
 
     if (configError || !config) {
@@ -125,14 +152,14 @@ export default async function handler(req, res) {
       await supabase.from('daily_spins').insert({ discord_id, reward: rewardAmount, contract_address, signature: txSignature });
       await supabase.from('spin_tokens').update({ used: true, signature: txSignature }).eq('token', signedToken);
 
-      return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText });
+      return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText, spins_left });
     } else {
       const tokenConfig = {
         token_name: config.token_name,
         payout_amounts: config.payout_amounts,
         image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Harold_800px.webp'
       };
-      return res.status(200).json({ tokenConfig });
+      return res.status(200).json({ tokenConfig, spins_left });
     }
   } catch (err) {
     console.error("API error:", err.message, err.stack);
