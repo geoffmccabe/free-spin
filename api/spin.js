@@ -73,6 +73,7 @@ export default async function handler(req, res) {
       console.error(`Invalid contract_address ${contract_address} for server ${server_id}`);
       return res.status(400).json({ error: 'Invalid token for this server' });
     }
+    console.log(`Validated token: ${contract_address} for server ${server_id}`);
 
     if (userError || !userData) {
       console.error(`User query error: ${userError?.message || 'No user found'}`);
