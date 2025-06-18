@@ -215,18 +215,15 @@ async function handleHelpCommand(interaction) {
   }
 
   const helpText = `
-**Free Spin Bot Commands**
-- **/spin**: Spin the wheel to win $HAROLD or other tokens (once per day).
-- **/freespin**: Alias for /spin.
-- **/dailyspin**: Alias for /spin.
-- **/mywallet [address]**: Link or view your Solana wallet address.
-- **/addmywallet [address]**: Alias for /mywallet.
-- **/myaddr [address]**: Alias for /mywallet.
-- **/myaddress [address]**: Alias for /mywallet.
-- **/spinleaders**: View the current leaderboard.
-- **/leaders**: Alias for /spinleaders.
-- **/leaderboard**: Alias for /spinleaders.
-- **/spinhelp**: Show this help message.
+**Free-Spin Bot Commands**
+- 
+- ** /spin**: Spin the wheel to win $HAROLD or other tokens (once per day).
+- 
+- ** /mywallet [address]**: Link or view your Solana wallet address.
+- 
+- ** /spinleaders**: View the current leaderboard.
+- 
+- ** /spinhelp**: Show this help message.
   `;
   return interaction.editReply({ content: helpText, flags: 64 });
 }
