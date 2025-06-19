@@ -98,36 +98,25 @@ async function handleSpinCommand(interaction) {
   let spinsLeft = userData.spin_limit;
   if (!isSuperadmin) {
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    
-    // Correctly fetch the list of spins from the last 24 hours
     const { data: recentSpins, error: spinCountError } = await retryQuery(() =>
-        supabase.from('daily_spins')
-        .select('contract_address')
-        .eq('discord_id', discord_id)
-        .gte('created_at', twentyFourHoursAgo)
+      supabase.from('daily_spins').select('contract_address').eq('discord_id', discord_id).gte('created_at', twentyFourHoursAgo)
     );
-
     if (spinCountError) {
-        console.error(`Spin count error: ${spinCountError.message}`);
-        return interaction.editReply({ content: `❌ Database error checking spin count.`, flags: 64 });
+      console.error(`Spin count error: ${spinCountError.message}`);
+      return interaction.editReply({ content: `❌ Database error checking spin count.`, flags: 64 });
     }
-
     const totalSpinsToday = recentSpins.length;
     spinsLeft = Math.max(0, userData.spin_limit - totalSpinsToday);
-
     if (totalSpinsToday >= userData.spin_limit) {
-        console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
-        return interaction.editReply({ content: `❌ You have used all your ${userData.spin_limit} daily spins today. Try again tomorrow!`, flags: 64 });
+      console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
+      return interaction.editReply({ content: `❌ You have used all your ${userData.spin_limit} daily spins today. Try again tomorrow!`, flags: 64 });
     }
-    
-    // Now, determine which specific tokens are still available to be spun today
     const spunContracts = recentSpins.map(s => s.contract_address);
     for (const coin of coinData) {
-        if (!spunContracts.includes(coin.contract_address)) {
-            availableCoinsToSpin.push(coin);
-        }
+      if (!spunContracts.includes(coin.contract_address)) {
+        availableCoinsToSpin.push(coin);
+      }
     }
-
     if (availableCoinsToSpin.length === 0) {
       return interaction.editReply({ content: `❌ You have already spun all available tokens today. Try again tomorrow!`, flags: 64 });
     }
@@ -221,11 +210,14 @@ async function handleLeaderboardCommand(interaction) {
     await interaction.deferReply();
   } catch (error) {
     console.error(`Defer reply failed: ${error.message}`);
-    return; 
+    return;
   }
 
+  const server_id = interaction.guildId;
+  const token_name = interaction.options.getString('token_name');
+
   const { data: raw_leaderboard, error } = await retryQuery(() =>
-    supabase.rpc('fetch_leaderboard_text')
+    supabase.rpc('fetch_leaderboard_text', { p_server_id: server_id, p_selected_token_name: token_name })
   );
 
   if (error || !raw_leaderboard) {
@@ -234,7 +226,7 @@ async function handleLeaderboardCommand(interaction) {
 
   const rows = raw_leaderboard.split('\n').filter(row => row.trim());
   if (rows.length === 0) {
-    return interaction.editReply({ content: 'No spins recorded in the last 30 days.' });
+    return interaction.editReply({ content: 'No spins recorded for this token in the last 30 days.' });
   }
 
   const user_ids = rows.map(row => {
@@ -245,14 +237,13 @@ async function handleLeaderboardCommand(interaction) {
   const users = await client.users.fetch(user_ids).catch(() => new Map());
 
   const leaderboard_text = rows.map(row => {
-    const match = row.match(/^#(\d+): (\d+) — (\d+ .+)$/);
-    if (!match) return row; 
-    
-    const [, rank, discord_id, score_text] = match;
+    const match = row.match(/^#(\d+): (\d+) — (\d+)$/);
+    if (!match) return row;
+    const [, rank, discord_id, total_reward] = match;
     const user = users.get(discord_id);
     const username = user ? user.tag : `<@${discord_id}>`;
-    
-    return `#${rank}: ${username} — ${score_text}`;
+    const token = token_name || raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
+    return `#${rank}: ${username} — ${total_reward} ${token}`;
   }).join('\n');
 
   return interaction.editReply({ content: leaderboard_text });
@@ -271,7 +262,7 @@ async function handleHelpCommand(interaction) {
 **Free-Spin Bot Commands**
 - **/spin [token_name]**: Spin the wheel to win $HAROLD or other tokens (limited daily).
 - **/mywallet [address]**: Link or view your Solana wallet address.
-- **/spinleaders**: View the current leaderboard.
+- **/spinleaders [token_name]**: View the leaderboard for a specific token.
 - **/spinhelp**: Show this help message.
 - **/settoken <contract_address> [remove] [default]**: (Superadmin only) Add or remove a token for this server.
   `;
@@ -349,7 +340,7 @@ async function handleSetTokenCommand(interaction) {
 
 client.on('interactionCreate', async (interaction) => {
   if (interaction.isAutocomplete()) {
-    if (interaction.commandName === 'spin' || interaction.commandName === 'freespin' || interaction.commandName === 'dailyspin') {
+    if (['spin', 'freespin', 'dailyspin', 'leaders', 'leaderboard', 'spinleaders'].includes(interaction.commandName)) {
       const server_id = interaction.guildId;
       try {
         const { data: serverTokens } = await retryQuery(() =>
@@ -437,9 +428,27 @@ client.once('ready', async () => {
           .addStringOption(option => option.setName("address").setDescription("Your Solana wallet address (optional)").setRequired(false)),
         new SlashCommandBuilder().setName("myaddress").setDescription("Link or view your Solana wallet address")
           .addStringOption(option => option.setName("address").setDescription("Your Solana wallet address (optional)").setRequired(false)),
-        new SlashCommandBuilder().setName("leaders").setDescription("View the current leaderboard"),
-        new SlashCommandBuilder().setName("leaderboard").setDescription("Alias for /leaders"),
-        new SlashCommandBuilder().setName("spinleaders").setDescription("View the current leaderboard"),
+        new SlashCommandBuilder().setName("leaders").setDescription("View the current leaderboard")
+          .addStringOption(option =>
+            option.setName("token_name")
+              .setDescription("Choose a token to view its leaderboard")
+              .setRequired(false)
+              .setAutocomplete(true)
+          ),
+        new SlashCommandBuilder().setName("leaderboard").setDescription("Alias for /leaders")
+          .addStringOption(option =>
+            option.setName("token_name")
+              .setDescription("Choose a token to view its leaderboard")
+              .setRequired(false)
+              .setAutocomplete(true)
+          ),
+        new SlashCommandBuilder().setName("spinleaders").setDescription("View the current leaderboard")
+          .addStringOption(option =>
+            option.setName("token_name")
+              .setDescription("Choose a token to view its leaderboard")
+              .setRequired(false)
+              .setAutocomplete(true)
+          ),
         new SlashCommandBuilder().setName("spinhelp").setDescription("View available commands"),
         new SlashCommandBuilder().setName("settoken").setDescription("Add or remove a token for this server (superadmin only)")
           .addStringOption(option => option.setName("contract_address").setDescription("Token contract address").setRequired(true))
@@ -468,7 +477,7 @@ client.once('ready', async () => {
         console.log(`Leaderboard data: ${raw_leaderboard}`);
         const rows = raw_leaderboard.split('\n').filter(row => row.trim());
         if (rows.length === 0) {
-          await leaderboardChannel.send('No spins recorded in the last 30 days.');
+          await leaderboardChannel.send('No spins recorded for this token in the last 30 days.');
           return;
         }
         const user_ids = rows.map(row => {
@@ -477,12 +486,13 @@ client.once('ready', async () => {
         }).filter(id => id);
         const users = await client.users.fetch(user_ids).catch(() => new Map());
         const leaderboard_text = rows.map(row => {
-          const match = row.match(/^#(\d+): (\d+) — (\d+ .+)$/);
+          const match = row.match(/^#(\d+): (\d+) — (\d+)$/);
           if (!match) return row;
-          const [, rank, discord_id, score_text] = match;
+          const [, rank, discord_id, total_reward] = match;
           const user = users.get(discord_id);
           const username = user ? user.tag : `<@${discord_id}>`;
-          return `#${rank}: ${username} — ${score_text}`;
+          const token = raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
+          return `#${rank}: ${username} — ${total_reward} ${token}`;
         }).join('\n');
         await leaderboardChannel.send(leaderboard_text);
       } catch (error) {
