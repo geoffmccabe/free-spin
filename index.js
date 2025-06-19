@@ -219,14 +219,17 @@ async function handleLeaderboardCommand(interaction) {
     const rows = data.split('\n').filter(row => row.trim());
     for (const row of rows) {
       const match = row.match(/^#(\d+): (\d+) — (\d+) (.+)$/);
-      if (!match) continue;
+      if (!match) {
+        leaderboard_text += row + '\n';
+        continue;
+      }
       const [, rank, discord_id, total_amount, token_name] = match;
       try {
         const user = await client.users.fetch(discord_id);
-        leaderboard_text += `#${rank}: ${user.username} — ${total_amount} ${token_name}\n`;
+        leaderboard_text += `#${rank}: ${user.tag} — ${total_amount} ${token_name}\n`;
       } catch (fetchError) {
         console.error(`Failed to fetch user ${discord_id}: ${fetchError.message}`);
-        leaderboard_text += row + '\n';
+        leaderboard_text += `#${rank}: <@${discord_id}> — ${total_amount} ${token_name}\n`;
       }
     }
 
@@ -234,7 +237,7 @@ async function handleLeaderboardCommand(interaction) {
       leaderboard_text = 'No spins recorded in the last 30 days.';
     }
 
-    return interaction.editReply({ content: leaderboard_text, flags: 64 });
+    return interaction.editReply({ content: leaderboard_text.trim(), flags: 64 });
   } catch (err) {
     console.error(`Leaderboard command error: ${err.message}`);
     return interaction.editReply({ content: `❌ Failed to fetch leaderboard: ${err.message}`, flags: 64 });
@@ -332,7 +335,7 @@ async function handleSetTokenCommand(interaction) {
 
 client.on('interactionCreate', async (interaction) => {
   if (interaction.isAutocomplete()) {
-    if (interaction.commandName === 'spin') {
+    if (interaction.commandName === 'spin' || interaction.commandName === 'freespin' || interaction.commandName === 'dailyspin') {
       const server_id = interaction.guildId;
       const { data: serverTokens } = await retryQuery(() =>
         supabase.from('server_tokens').select('contract_address, default_token').eq('server_id', server_id)
@@ -442,7 +445,27 @@ client.once('ready', async () => {
           return;
         }
         console.log(`Posting leaderboard: ${data}`);
-        await leaderboardChannel.send(data);
+        const rows = data.split('\n').filter(row => row.trim());
+        let leaderboard_text = '';
+        for (const row of rows) {
+          const match = row.match(/^#(\d+): (\d+) — (\d+) (.+)$/);
+          if (!match) {
+            leaderboard_text += row + '\n';
+            continue;
+          }
+          const [, rank, discord_id, total_amount, token_name] = match;
+          try {
+            const user = await client.users.fetch(discord_id);
+            leaderboard_text += `#${rank}: ${user.tag} — ${total_amount} ${token_name}\n`;
+          } catch (fetchError) {
+            console.error(`Failed to fetch user ${discord_id}: ${fetchError.message}`);
+            leaderboard_text += `#${rank}: <@${discord_id}> — ${total_amount} ${token_name}\n`;
+          }
+        }
+        if (!leaderboard_text) {
+          leaderboard_text = 'No spins recorded in the last 30 days.';
+        }
+        await leaderboardChannel.send(leaderboard_text.trim());
       } catch (error) {
         console.error(`Error posting leaderboard: ${error.message}`);
       }
