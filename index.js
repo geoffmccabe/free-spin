@@ -10,7 +10,7 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const SPIN_CHANNEL_NAME = "🔄│free-spin";
 const LEADERBOARD_CHANNEL_NAME = "🏆│spin-leaderboard";
-const SPIN_URL = process.env.SUPABASE_URL || 'https://solspin.lightningworks.io';
+const SPIN_URL = process.env.SPIN_URL || 'https://solspin.lightningworks.io';
 const DEFAULT_TOKEN_ADDRESS = '3vgopg7xm3EWkXfxmWPUpcf7g939hecfqg18sLuXDzVt'; // $HAROLD
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
@@ -98,20 +98,39 @@ async function handleSpinCommand(interaction) {
   let spinsLeft = userData.spin_limit;
   if (!isSuperadmin) {
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    
+    // Correctly fetch the list of spins from the last 24 hours
     const { data: recentSpins, error: spinCountError } = await retryQuery(() =>
-      supabase.from('daily_spins').select('contract_address', { count: 'exact' }).eq('discord_id', discord_id).gte('created_at', twentyFourHoursAgo)
+        supabase.from('daily_spins')
+        .select('contract_address')
+        .eq('discord_id', discord_id)
+        .gte('created_at', twentyFourHoursAgo)
     );
+
     if (spinCountError) {
-      console.error(`Spin count error: ${spinCountError.message}`);
-      return interaction.editReply({ content: `❌ Database error checking spin count.`, flags: 64 });
+        console.error(`Spin count error: ${spinCountError.message}`);
+        return interaction.editReply({ content: `❌ Database error checking spin count.`, flags: 64 });
     }
+
     const totalSpinsToday = recentSpins.length;
     spinsLeft = Math.max(0, userData.spin_limit - totalSpinsToday);
+
     if (totalSpinsToday >= userData.spin_limit) {
-      console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
-      return interaction.editReply({ content: `❌ You have used all your ${userData.spin_limit} daily spins today. Try again tomorrow!`, flags: 64 });
+        console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
+        return interaction.editReply({ content: `❌ You have used all your ${userData.spin_limit} daily spins today. Try again tomorrow!`, flags: 64 });
     }
-    availableCoinsToSpin.push(...coinData);
+    
+    // Now, determine which specific tokens are still available to be spun today
+    const spunContracts = recentSpins.map(s => s.contract_address);
+    for (const coin of coinData) {
+        if (!spunContracts.includes(coin.contract_address)) {
+            availableCoinsToSpin.push(coin);
+        }
+    }
+
+    if (availableCoinsToSpin.length === 0) {
+      return interaction.editReply({ content: `❌ You have already spun all available tokens today. Try again tomorrow!`, flags: 64 });
+    }
   } else {
     console.log(`Bypassing spin limit for superadmin: ${discord_id}`);
     availableCoinsToSpin.push(...coinData);
@@ -202,46 +221,41 @@ async function handleLeaderboardCommand(interaction) {
     await interaction.deferReply();
   } catch (error) {
     console.error(`Defer reply failed: ${error.message}`);
-    return interaction.reply({ content: `❌ Failed to reply: ${error.message}`, flags: 64 });
+    return; 
   }
 
-  try {
-    const { data, error } = await retryQuery(() =>
-      supabase.rpc('fetch_leaderboard_text')
-    );
-    if (error || !data) {
-      console.error(`Leaderboard query error: ${error?.message || 'No data returned'}`);
-      return interaction.editReply({ content: `❌ Failed to fetch leaderboard: ${error?.message || 'Unknown error'}`, flags: 64 });
-    }
-    console.log(`Leaderboard data: ${data}`);
+  const { data: raw_leaderboard, error } = await retryQuery(() =>
+    supabase.rpc('fetch_leaderboard_text')
+  );
 
-    const rows = data.split('\n').filter(row => row.trim());
-    let leaderboard_text = '';
-    for (const row of rows) {
-      const match = row.match(/^#(\d+): (\d+) — (\d+) (.+)$/);
-      if (!match) {
-        leaderboard_text += row + '\n';
-        continue;
-      }
-      const [, rank, discord_id, total_amount, token_name] = match;
-      try {
-        const user = await client.users.fetch(discord_id);
-        leaderboard_text += `#${rank}: ${user.tag} — ${total_amount} ${token_name}\n`;
-      } catch (fetchError) {
-        console.error(`Failed to fetch user ${discord_id}: ${fetchError.message}`);
-        leaderboard_text += `#${rank}: <@${discord_id}> — ${total_amount} ${token_name}\n`;
-      }
-    }
-
-    if (!leaderboard_text) {
-      leaderboard_text = 'No spins recorded in the last 30 days.';
-    }
-
-    return interaction.editReply({ content: leaderboard_text.trim(), flags: 64 });
-  } catch (err) {
-    console.error(`Leaderboard command error: ${err.message}`);
-    return interaction.editReply({ content: `❌ Failed to fetch leaderboard: ${err.message}`, flags: 64 });
+  if (error || !raw_leaderboard) {
+    return interaction.editReply({ content: '❌ Failed to fetch leaderboard data.' });
   }
+
+  const rows = raw_leaderboard.split('\n').filter(row => row.trim());
+  if (rows.length === 0) {
+    return interaction.editReply({ content: 'No spins recorded in the last 30 days.' });
+  }
+
+  const user_ids = rows.map(row => {
+    const match = row.match(/^#\d+: (\d+) —/);
+    return match ? match[1] : null;
+  }).filter(id => id);
+
+  const users = await client.users.fetch(user_ids).catch(() => new Map());
+
+  const leaderboard_text = rows.map(row => {
+    const match = row.match(/^#(\d+): (\d+) — (\d+ .+)$/);
+    if (!match) return row; 
+    
+    const [, rank, discord_id, score_text] = match;
+    const user = users.get(discord_id);
+    const username = user ? user.tag : `<@${discord_id}>`;
+    
+    return `#${rank}: ${username} — ${score_text}`;
+  }).join('\n');
+
+  return interaction.editReply({ content: leaderboard_text });
 }
 
 async function handleHelpCommand(interaction) {
@@ -444,33 +458,33 @@ client.once('ready', async () => {
     );
     if (leaderboardChannel) {
       try {
-        const { data, error } = await retryQuery(() => supabase.rpc('fetch_leaderboard_text'));
-        if (error) {
-          console.error(`Leaderboard interval error: ${error.message}`);
+        const { data: raw_leaderboard, error } = await retryQuery(() =>
+          supabase.rpc('fetch_leaderboard_text')
+        );
+        if (error || !raw_leaderboard) {
+          console.error(`Leaderboard interval error: ${error?.message || 'No data returned'}`);
           return;
         }
-        console.log(`Leaderboard data: ${data}`);
-        const rows = data.split('\n').filter(row => row.trim());
-        let leaderboard_text = '';
-        for (const row of rows) {
-          const match = row.match(/^#(\d+): (\d+) — (\d+) (.+)$/);
-          if (!match) {
-            leaderboard_text += row + '\n';
-            continue;
-          }
-          const [, rank, discord_id, total_amount, token_name] = match;
-          try {
-            const user = await client.users.fetch(discord_id);
-            leaderboard_text += `#${rank}: ${user.tag} — ${total_amount} ${token_name}\n`;
-          } catch (fetchError) {
-            console.error(`Failed to fetch user ${discord_id}: ${fetchError.message}`);
-            leaderboard_text += `#${rank}: <@${discord_id}> — ${total_amount} ${token_name}\n`;
-          }
+        console.log(`Leaderboard data: ${raw_leaderboard}`);
+        const rows = raw_leaderboard.split('\n').filter(row => row.trim());
+        if (rows.length === 0) {
+          await leaderboardChannel.send('No spins recorded in the last 30 days.');
+          return;
         }
-        if (!leaderboard_text) {
-          leaderboard_text = 'No spins recorded in the last 30 days.';
-        }
-        await leaderboardChannel.send(leaderboard_text.trim());
+        const user_ids = rows.map(row => {
+          const match = row.match(/^#\d+: (\d+) —/);
+          return match ? match[1] : null;
+        }).filter(id => id);
+        const users = await client.users.fetch(user_ids).catch(() => new Map());
+        const leaderboard_text = rows.map(row => {
+          const match = row.match(/^#(\d+): (\d+) — (\d+ .+)$/);
+          if (!match) return row;
+          const [, rank, discord_id, score_text] = match;
+          const user = users.get(discord_id);
+          const username = user ? user.tag : `<@${discord_id}>`;
+          return `#${rank}: ${username} — ${score_text}`;
+        }).join('\n');
+        await leaderboardChannel.send(leaderboard_text);
       } catch (error) {
         console.error(`Error posting leaderboard: ${error.message}`);
       }
