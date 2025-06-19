@@ -1,9 +1,6 @@
-import { supabase } from './index.js';
-import { client } from './index.js';
-import { retryQuery } from './index.js';
-import { LEADERBOARD_CHANNEL_NAME } from './index.js';
+import { client, supabase, retryQuery, LEADERBOARD_CHANNEL_NAME } from './index.js';
 
-async function handleLeaderboardCommand(interaction, client, supabase, retryQuery) {
+async function handleLeaderboardCommand(interaction) {
   console.log(`Processing leaderboard command in channel: ${interaction.channel.name}`);
   try {
     await interaction.deferReply();
@@ -48,7 +45,7 @@ async function handleLeaderboardCommand(interaction, client, supabase, retryQuer
   return interaction.editReply({ content: leaderboard_text });
 }
 
-async function scheduleLeaderboardUpdates(client, supabase, retryQuery) {
+async function scheduleLeaderboardUpdates() {
   setInterval(async () => {
     const leaderboardChannel = client.channels.cache.find(channel =>
       channel.name.toLowerCase() === LEADERBOARD_CHANNEL_NAME.toLowerCase() && channel.isTextBased()
