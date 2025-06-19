@@ -10,7 +10,7 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const SPIN_CHANNEL_NAME = "🔄│free-spin";
 const LEADERBOARD_CHANNEL_NAME = "🏆│spin-leaderboard";
-const SPIN_URL = process.env.SPIN_URL || 'https://solspin.lightningworks.io';
+const SPIN_URL = process.env.SUPABASE_URL || 'https://solspin.lightningworks.io';
 const DEFAULT_TOKEN_ADDRESS = '3vgopg7xm3EWkXfxmWPUpcf7g939hecfqg18sLuXDzVt'; // $HAROLD
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
@@ -215,8 +215,8 @@ async function handleLeaderboardCommand(interaction) {
     }
     console.log(`Leaderboard data: ${data}`);
 
-    let leaderboard_text = '';
     const rows = data.split('\n').filter(row => row.trim());
+    let leaderboard_text = '';
     for (const row of rows) {
       const match = row.match(/^#(\d+): (\d+) — (\d+) (.+)$/);
       if (!match) {
@@ -337,25 +337,30 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.isAutocomplete()) {
     if (interaction.commandName === 'spin' || interaction.commandName === 'freespin' || interaction.commandName === 'dailyspin') {
       const server_id = interaction.guildId;
-      const { data: serverTokens } = await retryQuery(() =>
-        supabase.from('server_tokens').select('contract_address, default_token').eq('server_id', server_id)
-      );
-      const contract_addresses = serverTokens?.map(t => t.contract_address) || [DEFAULT_TOKEN_ADDRESS];
-      const { data: coinData } = await retryQuery(() =>
-        supabase.from('wheel_configurations').select('contract_address, token_name').in('contract_address', contract_addresses)
-      );
-      const default_token = serverTokens?.find(t => t.default_token)?.contract_address;
-      const choices = coinData?.map(c => ({
-        name: c.token_name,
-        value: c.token_name
-      })) || [];
-      if (default_token) {
-        const defaultCoin = coinData?.find(c => c.contract_address === default_token);
-        if (defaultCoin) {
-          choices.sort((a, b) => (a.value === defaultCoin.token_name ? -1 : 1));
+      try {
+        const { data: serverTokens } = await retryQuery(() =>
+          supabase.from('server_tokens').select('contract_address, default_token').eq('server_id', server_id)
+        );
+        const contract_addresses = serverTokens?.map(t => t.contract_address) || [DEFAULT_TOKEN_ADDRESS];
+        const { data: coinData } = await retryQuery(() =>
+          supabase.from('wheel_configurations').select('contract_address, token_name').in('contract_address', contract_addresses)
+        );
+        const default_token = serverTokens?.find(t => t.default_token)?.contract_address;
+        const choices = coinData?.map(c => ({
+          name: c.token_name,
+          value: c.token_name
+        })) || [{ name: '$HAROLD', value: '$HAROLD' }];
+        if (default_token) {
+          const defaultCoin = coinData?.find(c => c.contract_address === default_token);
+          if (defaultCoin) {
+            choices.sort((a, b) => (a.value === defaultCoin.token_name ? -1 : 1));
+          }
         }
+        await interaction.respond(choices.slice(0, 25));
+      } catch (error) {
+        console.error(`Autocomplete error: ${error.message}`);
+        await interaction.respond([]);
       }
-      await interaction.respond(choices.slice(0, 25)); // Discord limit
     }
     return;
   }
@@ -444,7 +449,7 @@ client.once('ready', async () => {
           console.error(`Leaderboard interval error: ${error.message}`);
           return;
         }
-        console.log(`Posting leaderboard: ${data}`);
+        console.log(`Leaderboard data: ${data}`);
         const rows = data.split('\n').filter(row => row.trim());
         let leaderboard_text = '';
         for (const row of rows) {
