@@ -32,16 +32,31 @@ async function retryQuery(queryFn, maxRetries = 3, delay = 1000) {
 
 client.on('interactionCreate', async (interaction) => {
   if (interaction.isAutocomplete()) {
+    console.log(`Handling autocomplete for command: ${interaction.commandName}, server: ${interaction.guildId}`);
     if (['spin', 'freespin', 'dailyspin', 'leaders', 'leaderboard', 'spinleaders'].includes(interaction.commandName)) {
       const server_id = interaction.guildId;
       try {
-        const { data: serverTokens } = await retryQuery(() =>
+        const focusedValue = interaction.options.getFocused();
+        console.log(`Focused value: ${focusedValue}`);
+        const { data: serverTokens, error: tokenError } = await retryQuery(() =>
           supabase.from('server_tokens').select('contract_address, default_token').eq('server_id', server_id)
         );
+        if (tokenError) {
+          console.error(`Token query error: ${tokenError.message}`);
+          await interaction.respond([]);
+          return;
+        }
         const contract_addresses = serverTokens?.map(t => t.contract_address) || [DEFAULT_TOKEN_ADDRESS];
-        const { data: coinData } = await retryQuery(() =>
+        console.log(`Contract addresses: ${contract_addresses.join(', ')}`);
+        const { data: coinData, error: coinError } = await retryQuery(() =>
           supabase.from('wheel_configurations').select('contract_address, token_name').in('contract_address', contract_addresses)
         );
+        if (coinError) {
+          console.error(`Coin query error: ${coinError.message}`);
+          await interaction.respond([]);
+          return;
+        }
+        console.log(`Coin data: ${JSON.stringify(coinData)}`);
         const default_token = serverTokens?.find(t => t.default_token)?.contract_address;
         const choices = coinData?.map(c => ({
           name: c.token_name,
@@ -53,7 +68,9 @@ client.on('interactionCreate', async (interaction) => {
             choices.sort((a, b) => (a.value === defaultCoin.token_name ? -1 : 1));
           }
         }
-        await interaction.respond(choices.slice(0, 25));
+        const filteredChoices = choices.filter(c => c.name.toLowerCase().startsWith(focusedValue.toLowerCase())).slice(0, 25);
+        console.log(`Sending choices: ${JSON.stringify(filteredChoices)}`);
+        await interaction.respond(filteredChoices);
       } catch (error) {
         console.error(`Autocomplete error: ${error.message}`);
         await interaction.respond([]);
