@@ -1,8 +1,7 @@
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { createClient } from '@supabase/supabase-js';
 import { Connection } from '@solana/web3.js';
-import { handleLeaderboardCommand } from './leaderboards.js';
-import { handleSpinCommand, handleWalletCommand, handleSetTokenCommand, handleHelpCommand } from './commands.js';
+import { createHmac, randomUUID } from 'crypto';
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const DISCORD_APP_ID = process.env.DISCORD_APP_ID;
@@ -30,74 +29,205 @@ async function retryQuery(queryFn, maxRetries = 3, delay = 1000) {
   }
 }
 
-client.on('interactionCreate', async (interaction) => {
-  if (interaction.isAutocomplete()) {
-    console.log(`Handling autocomplete for command: ${interaction.commandName}, server: ${interaction.guildId}`);
-    if (['spin', 'freespin', 'dailyspin', 'leaders', 'leaderboard', 'spinleaders'].includes(interaction.commandName)) {
-      const server_id = interaction.guildId;
-      try {
-        const focusedValue = interaction.options.getFocused();
-        console.log(`Focused value: ${focusedValue}`);
-        const { data: serverTokens, error: tokenError } = await retryQuery(() =>
-          supabase.from('server_tokens').select('contract_address, default_token').eq('server_id', server_id)
-        );
-        if (tokenError) {
-          console.error(`Token query error: ${tokenError.message}`);
-          await interaction.respond([]);
-          return;
-        }
-        const contract_addresses = serverTokens?.map(t => t.contract_address) || [DEFAULT_TOKEN_ADDRESS];
-        console.log(`Contract addresses: ${contract_addresses.join(', ')}`);
-        const { data: coinData, error: coinError } = await retryQuery(() =>
-          supabase.from('wheel_configurations').select('contract_address, token_name').in('contract_address', contract_addresses)
-        );
-        if (coinError) {
-          console.error(`Coin query error: ${coinError.message}`);
-          await interaction.respond([]);
-          return;
-        }
-        console.log(`Coin data: ${JSON.stringify(coinData)}`);
-        const default_token = serverTokens?.find(t => t.default_token)?.contract_address;
-        const choices = coinData?.map(c => ({
-          name: c.token_name,
-          value: c.token_name
-        })) || [{ name: '$HAROLD', value: '$HAROLD' }];
-        if (default_token) {
-          const defaultCoin = coinData?.find(c => c.contract_address === default_token);
-          if (defaultCoin) {
-            choices.sort((a, b) => (a.value === defaultCoin.token_name ? -1 : 1));
-          }
-        }
-        const filteredChoices = choices.filter(c => c.name.toLowerCase().startsWith(focusedValue.toLowerCase())).slice(0, 25);
-        console.log(`Sending choices: ${JSON.stringify(filteredChoices)}`);
-        await interaction.respond(filteredChoices);
-      } catch (error) {
-        console.error(`Autocomplete error: ${error.message}`);
-        await interaction.respond([]);
-      }
-    }
+async function handleSpinCommand(interaction) {
+  const discord_id = interaction.user.id;
+  const server_id = interaction.guildId;
+  console.log(`Processing /spin for user: ${discord_id}, server: ${server_id}`);
+  try {
+    await interaction.deferReply({ flags: 64 });
+  } catch (error) {
+    console.error(`Defer reply failed: ${error.message}`);
     return;
   }
-  if (!interaction.isChatInputCommand()) return;
 
-  console.log(`Received command: ${interaction.commandName}, channel: ${interaction.channel.name}`);
-
-  if (["spin", "freespin", "dailyspin"].includes(interaction.commandName)) {
-    if (interaction.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) {
-      console.log(`Channel mismatch: expected ${SPIN_CHANNEL_NAME}, got ${interaction.channel.name}`);
-      return interaction.reply({ content: `Please use this command in the #${SPIN_CHANNEL_NAME} channel.`, flags: 64 });
-    }
-    await handleSpinCommand(interaction, supabase, retryQuery);
-  } else if (["mywallet", "addmywallet", "myaddr", "myaddress"].includes(interaction.commandName)) {
-    await handleWalletCommand(interaction, supabase, retryQuery);
-  } else if (["leaders", "leaderboard", "spinleaders"].includes(interaction.commandName)) {
-    await handleLeaderboardCommand(interaction, client, supabase, retryQuery);
-  } else if (interaction.commandName === "spinhelp") {
-    await handleHelpCommand(interaction);
-  } else if (interaction.commandName === "settoken") {
-    await handleSetTokenCommand(interaction, supabase, retryQuery);
+  const secretKey = process.env.SPIN_KEY;
+  if (!secretKey) {
+    console.error("FATAL: SPIN_KEY environment variable not found or is empty.");
+    return interaction.editReply({ content: `❌ A server configuration error occurred. Please notify an administrator.`, flags: 64 });
   }
-});
+
+  const { data: userData, error: userError } = await retryQuery(() =>
+    supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
+  );
+  if (userError || !userData?.wallet_address) {
+    console.error(`User query error: ${userError?.message || 'No wallet found'}`);
+    return interaction.editReply({ content: `❌ Please link your Solana wallet first using the \`/mywallet\` command.`, flags: 64 });
+  }
+  console.log(`Wallet found: ${userData.wallet_address}`);
+
+  const { data: activeCoins, error: coinsError } = await retryQuery(() =>
+    supabase.from('wheel_configurations').select('contract_address, token_name').eq('active', true)
+  );
+  if (coinsError || !activeCoins?.length) {
+    console.error(`Coins query error: ${coinsError?.message || 'No active coins found'}`);
+    return interaction.editReply({ content: `❌ No active coins available for spinning.`, flags: 64 });
+  }
+  console.log(`Active coins: ${JSON.stringify(activeCoins)}`);
+
+  const availableCoinsToSpin = [];
+  if (discord_id !== '332676096531103775') {
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const now = new Date().toISOString();
+    for (const coin of activeCoins) {
+      console.log(`Checking spins for discord_id: ${discord_id}, contract: ${coin.contract_address}, since: ${twentyFourHoursAgo}`);
+      const { count, error } = await retryQuery(() =>
+        supabase.from('daily_spins')
+          .select('*', { count: 'exact', head: true })
+          .eq('discord_id', discord_id)
+          .eq('contract_address', coin.contract_address)
+          .gte('created_at', twentyFourHoursAgo)
+          .lte('created_at', now)
+      );
+      if (error) {
+        console.error(`Spin count error: ${error.message}`);
+        return interaction.editReply({ content: `❌ Database error checking spin count.`, flags: 64 });
+      }
+      console.log(`Spin count: ${count}`);
+      if (count < 1) {
+        availableCoinsToSpin.push(coin);
+      }
+    }
+    console.log(`Available coins to spin: ${JSON.stringify(availableCoinsToSpin)}`);
+    if (!availableCoinsToSpin.length) {
+      return interaction.editReply({ content: `❌ You have already used your daily spin for all available coins. Try again tomorrow!`, flags: 64 });
+    }
+  } else {
+    console.log(`Bypassing spin limit for discord_id: ${discord_id}`);
+    availableCoinsToSpin.push(...activeCoins);
+  }
+
+  const coin = availableCoinsToSpin[Math.floor(Math.random() * availableCoinsToSpin.length)];
+  console.log(`Selected coin for spin: ${coin.token_name} (${coin.contract_address})`);
+
+  const token = randomUUID();
+  const signature = createHmac('sha256', secretKey).update(token).digest('hex');
+  const signedToken = `${token}.${signature}`;
+
+  const { data: tokenData, error: tokenError } = await retryQuery(() =>
+    supabase.from('spin_tokens').insert({
+      discord_id: discord_id,
+      wallet_address: userData.wallet_address,
+      contract_address: coin.contract_address,
+      token: signedToken,
+      used: false
+    }).select('token').single()
+  );
+  if (tokenError) {
+    console.error(`Token insert error: ${tokenError.message}`);
+    return interaction.editReply({ content: `❌ Failed to generate spin token.`, flags: 64 });
+  }
+  console.log(`Inserting spin token: ${tokenData.token}`);
+
+  const spinUrl = `${SPIN_URL}/index.html?token=${tokenData.token}`;
+  console.log(`Sending spin URL: ${spinUrl}`);
+  return interaction.editReply({ content: `Your spin is ready! Click here: ${spinUrl}`, flags: 64 });
+}
+
+async function handleWalletCommand(interaction) {
+  const discord_id = interaction.user.id;
+  const wallet_address = interaction.options.getString('address');
+  console.log(`Processing wallet command for user: ${discord_id}, address: ${wallet_address}`);
+
+  try {
+    await interaction.deferReply({ flags: 64 });
+  } catch (error) {
+    console.error(`Defer reply failed: ${error.message}`);
+    return;
+  }
+
+  if (wallet_address) {
+    if (!wallet_address.match(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)) {
+      return interaction.editReply({ content: `❌ Invalid Solana wallet address.`, flags: 64 });
+    }
+
+    const { data, error } = await retryQuery(() =>
+      supabase.from('users').upsert({ discord_id, wallet_address }).select('wallet_address').single()
+    );
+    if (error) {
+      console.error(`Wallet upsert error: ${error.message}`);
+      return interaction.editReply({ content: `❌ Failed to save wallet address.`, flags: 64 });
+    }
+    console.log(`Wallet saved: ${data.wallet_address}`);
+    return interaction.editReply({ content: `✅ Wallet address saved: \`${data.wallet_address}\``, flags: 64 });
+  } else {
+    const { data, error } = await retryQuery(() =>
+      supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
+    );
+    if (error || !data?.wallet_address) {
+      console.error(`Wallet query error: ${error?.message || 'No wallet found'}`);
+      return interaction.editReply({ content: `❌ No wallet address found. Please provide one using \`/mywallet <address>\`.`, flags: 64 });
+    }
+    console.log(`Wallet retrieved: ${data.wallet_address}`);
+    return interaction.editReply({ content: `ℹ️ Your wallet address: \`${data.wallet_address}\``, flags: 64 });
+  }
+}
+
+async function handleLeaderboardCommand(interaction) {
+  console.log(`Processing leaderboard command in channel: ${interaction.channel.name}`);
+  try {
+    await interaction.deferReply();
+  } catch (error) {
+    console.error(`Defer reply failed: ${error.message}`);
+    return interaction.reply({ content: `❌ Failed to reply: ${error.message}`, flags: 64 });
+  }
+
+  try {
+    const { data, error } = await retryQuery(() =>
+      supabase.rpc('fetch_leaderboard_text')
+    );
+    if (error || !data) {
+      console.error(`Leaderboard query error: ${error?.message || 'No data returned'}`);
+      return interaction.editReply({ content: `❌ Failed to fetch leaderboard: ${error?.message || 'Unknown error'}`, flags: 64 });
+    }
+    console.log(`Leaderboard data: ${data}`);
+
+    let leaderboard_text = '';
+    const rows = data.split('\n').filter(row => row.trim());
+    for (const row of rows) {
+      const match = row.match(/^#(\d+): (\d+) — (\d+) (.+)$/);
+      if (!match) {
+        leaderboard_text += row + '\n';
+        continue;
+      }
+      const [, rank, discord_id, total_amount, token_name ] = match;
+      try {
+        const user = await client.users.fetch(discord_id);
+        leaderboard_text += `#${rank}: ${user.username} — ${total_amount} ${token_name}\n`;
+      } catch (fetchError) {
+        console.error(`Failed to fetch user ${discord_id}: ${fetchError.message}`);
+        leaderboard_text += row + '\n';
+      }
+    }
+
+    if (!leaderboard_text) {
+      leaderboard_text = 'No spins recorded in the last 30 days.';
+    }
+
+    return interaction.editReply({ content: leaderboard_text, flags: 64 });
+  } catch (err) {
+    console.error(`Leaderboard command error: ${err.message}`);
+    return interaction.editReply({ content: `❌ Failed to fetch leaderboard: ${err.message}`, flags: 64 });
+  }
+}
+
+async function handleHelpCommand(interaction) {
+  console.log(`Processing help command`);
+  try {
+    await interaction.deferReply({ flags: 64 });
+  } catch (error) {
+    console.error(`Defer reply failed: ${error.message}`);
+    return;
+  }
+
+  const helpText = `
+**Free-Spin Bot Commands**
+- **/spin**: Spin the wheel to win $HAROLD or other tokens (once per day).
+- **/mywallet [address]**: Link or view your Solana wallet address.
+- **/spinleaders**: View the current leaderboard.
+- **/spinhelp**: Show this help message.
+  `;
+  return interaction.editReply({ content: helpText, flags: 64 });
+}
 
 client.once('ready', async () => {
   console.log('Bot logged in successfully');
@@ -108,27 +238,9 @@ client.once('ready', async () => {
     await rest.put(
       Routes.applicationCommands(DISCORD_APP_ID),
       { body: [
-        new SlashCommandBuilder().setName("spin").setDescription("Spin the wheel to win $HAROLD or other tokens")
-          .addStringOption(option => 
-            option.setName("token_name")
-              .setDescription("Choose a token to spin")
-              .setRequired(false)
-              .setAutocomplete(true)
-          ),
-        new SlashCommandBuilder().setName("freespin").setDescription("Spin the wheel to win $HAROLD or other tokens")
-          .addStringOption(option => 
-            option.setName("token_name")
-              .setDescription("Choose a token to spin")
-              .setRequired(false)
-              .setAutocomplete(true)
-          ),
-        new SlashCommandBuilder().setName("dailyspin").setDescription("Spin the wheel to win $HAROLD or other tokens")
-          .addStringOption(option => 
-            option.setName("token_name")
-              .setDescription("Choose a token to spin")
-              .setRequired(false)
-              .setAutocomplete(true)
-          ),
+        new SlashCommandBuilder().setName("spin").setDescription("Spin the wheel to win $HAROLD or other tokens"),
+        new SlashCommandBuilder().setName("freespin").setDescription("Spin the wheel to win $HAROLD or other tokens"),
+        new SlashCommandBuilder().setName("dailyspin").setDescription("Spin the wheel to win $HAROLD or other tokens"),
         new SlashCommandBuilder().setName("mywallet").setDescription("Link or view your Solana wallet address")
           .addStringOption(option => option.setName("address").setDescription("Your Solana wallet address (optional)").setRequired(false)),
         new SlashCommandBuilder().setName("addmywallet").setDescription("Link or view your Solana wallet address")
@@ -137,48 +249,57 @@ client.once('ready', async () => {
           .addStringOption(option => option.setName("address").setDescription("Your Solana wallet address (optional)").setRequired(false)),
         new SlashCommandBuilder().setName("myaddress").setDescription("Link or view your Solana wallet address")
           .addStringOption(option => option.setName("address").setDescription("Your Solana wallet address (optional)").setRequired(false)),
-        new SlashCommandBuilder().setName("leaders").setDescription("View the current leaderboard")
-          .addStringOption(option =>
-            option.setName("token_name")
-              .setDescription("Choose a token to view its leaderboard")
-              .setRequired(false)
-              .setAutocomplete(true)
-          ),
-        new SlashCommandBuilder().setName("leaderboard").setDescription("Alias for /leaders")
-          .addStringOption(option =>
-            option.setName("token_name")
-              .setDescription("Choose a token to view its leaderboard")
-              .setRequired(false)
-              .setAutocomplete(true)
-          ),
-        new SlashCommandBuilder().setName("spinleaders").setDescription("View the current leaderboard")
-          .addStringOption(option =>
-            option.setName("token_name")
-              .setDescription("Choose a token to view its leaderboard")
-              .setRequired(false)
-              .setAutocomplete(true)
-          ),
+        new SlashCommandBuilder().setName("leaders").setDescription("View the current leaderboard"),
+        new SlashCommandBuilder().setName("leaderboard").setDescription("Alias for /leaders"),
+        new SlashCommandBuilder().setName("spinleaders").setDescription("View the current leaderboard"),
         new SlashCommandBuilder().setName("spinhelp").setDescription("View available commands"),
-        new SlashCommandBuilder().setName("settoken").setDescription("Add or remove a token for this server (superadmin only)")
-          .addStringOption(option => option.setName("contract_address").setDescription("Token contract address").setRequired(true))
-          .addBooleanOption(option => option.setName("remove").setDescription("Remove the token").setRequired(false))
-          .addBooleanOption(option => option.setName("default").setDescription("Set as default token").setRequired(false)),
       ] }
     );
     console.log('Slash commands registered successfully');
   } catch (error) {
     console.error(`Error registering slash commands: ${error.message}`);
   }
+
+  setInterval(async () => {
+    const leaderboardChannel = client.channels.cache.find(channel =>
+      channel.name.toLowerCase() === LEADERBOARD_CHANNEL_NAME.toLowerCase() && channel.isTextBased()
+    );
+    if (leaderboardChannel) {
+      try {
+        const { data, error } = await retryQuery(() => supabase.rpc('fetch_leaderboard_text'));
+        if (error || !data) {
+          console.error(`Leaderboard interval error: ${error?.message || 'No data returned'}`);
+          return;
+        }
+        console.log(`Posting leaderboard: ${data}`);
+        await leaderboardChannel.send(data);
+      } catch (error) {
+        console.error(`Error posting leaderboard: ${error.message}`);
+      }
+    } else {
+      console.log(`Leaderboard channel not found: ${LEADERBOARD_CHANNEL_NAME}`);
+    }
+  }, 60 * 60 * 1000);
 });
 
-export {
-  client,
-  supabase,
-  retryQuery,
-  LEADERBOARD_CHANNEL_NAME,
-  SPIN_CHANNEL_NAME,
-  SPIN_URL,
-  DEFAULT_TOKEN_ADDRESS
-};
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+
+  console.log(`Received command: ${interaction.commandName}, channel: ${interaction.channel?.name || 'DM'}`);
+
+  if (["spin", "freespin", "dailyspin"].includes(interaction.commandName)) {
+    if (interaction.channel.name.toLowerCase() !== SPIN_CHANNEL_NAME.toLowerCase()) {
+      console.log(`Channel mismatch: expected ${SPIN_CHANNEL_NAME}, got ${interaction.channel.name}`);
+      return interaction.reply({ content: `Please use this command in the #${SPIN_CHANNEL_NAME} channel.`, flags: 64 });
+    }
+    await handleSpinCommand(interaction);
+  } else if (["mywallet", "addmywallet", "myaddr", "myaddress"].includes(interaction.commandName)) {
+    await handleWalletCommand(interaction);
+  } else if (["leaders", "leaderboard", "spinleaders"].includes(interaction.commandName)) {
+    await handleLeaderboardCommand(interaction);
+  } else if (interaction.commandName === "spinhelp") {
+    await handleHelpCommand(interaction);
+  }
+});
 
 client.login(DISCORD_TOKEN);
