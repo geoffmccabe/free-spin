@@ -16,6 +16,8 @@ async function handleLeaderboardCommand(interaction) {
     supabase.rpc('fetch_leaderboard_text', { p_server_id: server_id, p_selected_token_name: token_name })
   );
 
+  console.log(`Raw leaderboard: ${raw_leaderboard}`);
+
   if (error || !raw_leaderboard) {
     return interaction.editReply({ content: '❌ Failed to fetch leaderboard data.' });
   }
@@ -30,10 +32,14 @@ async function handleLeaderboardCommand(interaction) {
     return match ? match[1] : null;
   }).filter(id => id);
 
-  const users = await client.users.fetch(user_ids).catch(() => new Map());
+  const userPromises = user_ids.map(id => client.users.fetch(id).then(user => ({id, user})).catch(() => ({id, null})));
+
+  const fetchedUsers = await Promise.all(userPromises);
+
+  const users = new Map(fetchedUsers.filter(f => f.user).map(f => [f.id, f.user]));
 
   const leaderboard_text = rows.map(row => {
-    const match = row.match(/^#(\d+): (\d+) — (\d+)$/);
+    const match = row.match(/^#(\d+): (\d+) — ([\d.]+)$/);
     if (!match) return row;
     const [, rank, discord_id, total_reward] = match;
     const adjusted_rank = parseInt(rank, 10);
@@ -56,11 +62,11 @@ async function scheduleLeaderboardUpdates() {
         const { data: raw_leaderboard, error } = await retryQuery(() =>
           supabase.rpc('fetch_leaderboard_text')
         );
+        console.log(`Raw leaderboard interval: ${raw_leaderboard}`);
         if (error || !raw_leaderboard) {
           console.error(`Leaderboard interval error: ${error?.message || 'No data returned'}`);
           return;
         }
-        console.log(`Leaderboard data: ${raw_leaderboard}`);
         const rows = raw_leaderboard.split('\n').filter(row => row.trim());
         if (rows.length === 0) {
           await leaderboardChannel.send('No spins recorded for this token in the last 30 days.');
@@ -70,9 +76,11 @@ async function scheduleLeaderboardUpdates() {
           const match = row.match(/^#\d+: (\d+) —/);
           return match ? match[1] : null;
         }).filter(id => id);
-        const users = await client.users.fetch(user_ids).catch(() => new Map());
+        const userPromises = user_ids.map(id => client.users.fetch(id).then(user => ({id, user})).catch(() => ({id, null})));
+        const fetchedUsers = await Promise.all(userPromises);
+        const users = new Map(fetchedUsers.filter(f => f.user).map(f => [f.id, f.user]));
         const leaderboard_text = rows.map(row => {
-          const match = row.match(/^#(\d+): (\d+) — (\d+)$/);
+          const match = row.match(/^#(\d+): (\d+) — ([\d.]+)$/);
           if (!match) return row;
           const [, rank, discord_id, total_reward] = match;
           const adjusted_rank = parseInt(rank, 10);
