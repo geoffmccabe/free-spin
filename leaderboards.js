@@ -36,7 +36,7 @@ async function handleLeaderboardCommand(interaction) {
     const match = row.match(/^#(\d+): (\d+) — (\d+)$/);
     if (!match) return row;
     const [, rank, discord_id, total_reward] = match;
-    const adjusted_rank = rank - 1;
+    const adjusted_rank = parseInt(rank, 10) - 1; // Shift ranks to start at 1
     const user = users.get(discord_id);
     const username = user ? user.tag : `<@${discord_id}>`;
     const token = token_name || raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
@@ -75,7 +75,7 @@ async function scheduleLeaderboardUpdates() {
           const match = row.match(/^#(\d+): (\d+) — (\d+)$/);
           if (!match) return row;
           const [, rank, discord_id, total_reward] = match;
-          const adjusted_rank = rank - 1;
+          const adjusted_rank = parseInt(rank, 10) - 1; // Shift ranks to start at 1
           const user = users.get(discord_id);
           const username = user ? user.tag : `<@${discord_id}>`;
           const token = raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
