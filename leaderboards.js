@@ -59,7 +59,7 @@ async function scheduleLeaderboardUpdates() {
     if (leaderboardChannel) {
       try {
         const { data: leaderboardData, error } = await retryQuery(() =>
-          supabase.rpc('fetch_leaderboard_text')
+          supabase.rpc('fetch_leaderboard_text', { p_server_id: '970415158058950716', p_selected_token_name: null })
         );
         if (error || !leaderboardData) {
           console.error(`Leaderboard interval error: ${error?.message || 'No data returned'}`);
