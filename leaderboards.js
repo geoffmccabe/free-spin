@@ -47,7 +47,7 @@ async function handleLeaderboardCommand(interaction) {
     const username = user ? user.tag : `<@${discord_id}>`;
     const token = token_name || raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
     return `#${adjusted_rank}: ${username} — ${total_reward} ${token}`;
-  }).filter(row => !row.startsWith('**')).join('\n');
+  }).join('\n');
 
   return interaction.editReply({ content: leaderboard_text });
 }
