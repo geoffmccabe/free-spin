@@ -39,7 +39,7 @@ async function handleLeaderboardCommand(interaction) {
   const users = new Map(fetchedUsers.filter(f => f.user).map(f => [f.id, f.user]));
 
   const token = token_name || raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
-  const leaderboard_text = `**${token} Leaderboard**\n${rows.map(row => {
+  const leaderboard_text = `**${token} Leaderboard**\n` + rows.map(row => {
     const match = row.match(/^#(\d+): (\d+) — ([\d.]+)/);
     if (!match) return '';
     const [, rank, discord_id, total_reward] = match;
@@ -47,7 +47,7 @@ async function handleLeaderboardCommand(interaction) {
     const user = users.get(discord_id);
     const username = user ? user.tag : `<@${discord_id}>`;
     return `#${adjusted_rank}: ${username} — ${total_reward} ${token}`;
-  }).filter(row => row).join('\n')}`;
+  }).filter(row => row).join('\n');
 
   return interaction.editReply({ content: leaderboard_text });
 }
@@ -80,7 +80,7 @@ async function scheduleLeaderboardUpdates() {
         const fetchedUsers = await Promise.all(userPromises);
         const users = new Map(fetchedUsers.filter(f => f.user).map(f => [f.id, f.user]));
         const token = raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
-        const leaderboard_text = `**${token} Leaderboard**\n${rows.map(row => {
+        const leaderboard_text = `**${token} Leaderboard**\n` + rows.map(row => {
           const match = row.match(/^#(\d+): (\d+) — ([\d.]+)/);
           if (!match) return '';
           const [, rank, discord_id, total_reward] = match;
@@ -88,7 +88,7 @@ async function scheduleLeaderboardUpdates() {
           const user = users.get(discord_id);
           const username = user ? user.tag : `<@${discord_id}>`;
           return `#${adjusted_rank}: ${username} — ${total_reward} ${token}`;
-        }).filter(row => row).join('\n')}`;
+        }).filter(row => row).join('\n');
         await leaderboardChannel.send(leaderboard_text);
       } catch (error) {
         console.error(`Error posting leaderboard: ${error.message}`);
