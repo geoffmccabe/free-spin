@@ -16,6 +16,8 @@ async function handleLeaderboardCommand(interaction) {
     supabase.rpc('fetch_leaderboard_text', { p_server_id: server_id, p_selected_token_name: token_name })
   );
 
+  console.log(`Raw leaderboard: ${raw_leaderboard}`);
+
   if (error || !raw_leaderboard) {
     return interaction.editReply({ content: '❌ Failed to fetch leaderboard data.' });
   }
@@ -37,7 +39,7 @@ async function handleLeaderboardCommand(interaction) {
   const users = new Map(fetchedUsers.filter(f => f.user).map(f => [f.id, f.user]));
 
   const leaderboard_text = rows.map(row => {
-    const match = row.match(/^#(\d+): (\d+) — (\d+)$/);
+    const match = row.match(/^#(\d+): (\d+) — ([\d.]+)/);
     if (!match) return row;
     const [, rank, discord_id, total_reward] = match;
     const adjusted_rank = parseInt(rank, 10);
@@ -78,7 +80,7 @@ async function scheduleLeaderboardUpdates() {
         const fetchedUsers = await Promise.all(userPromises);
         const users = new Map(fetchedUsers.filter(f => f.user).map(f => [f.id, f.user]));
         const leaderboard_text = rows.map(row => {
-          const match = row.match(/^#(\d+): (\d+) — (\d+)$/);
+          const match = row.match(/^#(\d+): (\d+) — ([\d.]+)/);
           if (!match) return row;
           const [, rank, discord_id, total_reward] = match;
           const adjusted_rank = parseInt(rank, 10);
