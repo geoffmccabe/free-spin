@@ -28,7 +28,7 @@ async function handleLeaderboardCommand(interaction) {
   }
 
   const user_ids = rows.map(row => {
-    const match = row.match(/^#\d+:\s*(\d+)\s*—\s*/);
+    const match = row.match(/^#\d+:\s*(\d+)\s*-\s*/);
     return match ? match[1] : null;
   }).filter(id => id);
 
@@ -40,7 +40,7 @@ async function handleLeaderboardCommand(interaction) {
 
   const token = token_name || raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
   const leaderboard_text = `**${token} Leaderboard**\n` + rows.map(row => {
-    const match = row.match(/^#(\d+):\s*(\d+)\s*—\s*([\d.]+)/);
+    const match = row.match(/^#(\d+):\s*(\d+)\s*-\s*([\d.]+)/);
     if (!match) return '';
     const [, rank, discord_id, total_reward] = match;
     const adjusted_rank = parseInt(rank, 10);
@@ -73,7 +73,7 @@ async function scheduleLeaderboardUpdates() {
           return;
         }
         const user_ids = rows.map(row => {
-          const match = row.match(/^#\d+:\s*(\d+)\s*—\s*/);
+          const match = row.match(/^#\d+:\s*(\d+)\s*-\s*/);
           return match ? match[1] : null;
         }).filter(id => id);
         const userPromises = user_ids.map(id => client.users.fetch(id).then(user => ({id, user})).catch(() => ({id, user: null})));
@@ -81,7 +81,7 @@ async function scheduleLeaderboardUpdates() {
         const users = new Map(fetchedUsers.filter(f => f.user).map(f => [f.id, f.user]));
         const token = raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
         const leaderboard_text = `**${token} Leaderboard**\n` + rows.map(row => {
-          const match = row.match(/^#(\d+):\s*(\d+)\s*—\s*([\d.]+)/);
+          const match = row.match(/^#(\d+):\s*(\d+)\s*-\s*([\d.]+)/);
           if (!match) return '';
           const [, rank, discord_id, total_reward] = match;
           const adjusted_rank = parseInt(rank, 10);
