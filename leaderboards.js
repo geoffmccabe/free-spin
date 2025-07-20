@@ -22,7 +22,7 @@ async function handleLeaderboardCommand(interaction) {
     return interaction.editReply({ content: '❌ Failed to fetch leaderboard data.' });
   }
 
-  const rows = raw_leaderboard.split('\n').filter(row => row.trim());
+  const rows = raw_leaderboard.split('\n').filter(row => row.trim() && row.match(/^#\d+:/));
   if (rows.length === 0) {
     return interaction.editReply({ content: 'No spins recorded for this token in the last 30 days.' });
   }
@@ -38,16 +38,16 @@ async function handleLeaderboardCommand(interaction) {
 
   const users = new Map(fetchedUsers.filter(f => f.user).map(f => [f.id, f.user]));
 
-  const leaderboard_text = rows.map(row => {
+  const token = token_name || raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
+  const leaderboard_text = `**${token} Leaderboard**\n${rows.map(row => {
     const match = row.match(/^#(\d+): (\d+) — ([\d.]+)/);
-    if (!match) return row;
+    if (!match) return '';
     const [, rank, discord_id, total_reward] = match;
     const adjusted_rank = parseInt(rank, 10);
     const user = users.get(discord_id);
     const username = user ? user.tag : `<@${discord_id}>`;
-    const token = token_name || raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
     return `#${adjusted_rank}: ${username} — ${total_reward} ${token}`;
-  }).join('\n');
+  }).filter(row => row).join('\n')}`;
 
   return interaction.editReply({ content: leaderboard_text });
 }
@@ -67,7 +67,7 @@ async function scheduleLeaderboardUpdates() {
           return;
         }
         console.log(`Leaderboard data: ${raw_leaderboard}`);
-        const rows = raw_leaderboard.split('\n').filter(row => row.trim());
+        const rows = raw_leaderboard.split('\n').filter(row => row.trim() && row.match(/^#\d+:/));
         if (rows.length === 0) {
           await leaderboardChannel.send('No spins recorded for this token in the last 30 days.');
           return;
@@ -79,16 +79,16 @@ async function scheduleLeaderboardUpdates() {
         const userPromises = user_ids.map(id => client.users.fetch(id).then(user => ({id, user})).catch(() => ({id, user: null})));
         const fetchedUsers = await Promise.all(userPromises);
         const users = new Map(fetchedUsers.filter(f => f.user).map(f => [f.id, f.user]));
-        const leaderboard_text = rows.map(row => {
+        const token = raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
+        const leaderboard_text = `**${token} Leaderboard**\n${rows.map(row => {
           const match = row.match(/^#(\d+): (\d+) — ([\d.]+)/);
-          if (!match) return row;
+          if (!match) return '';
           const [, rank, discord_id, total_reward] = match;
           const adjusted_rank = parseInt(rank, 10);
           const user = users.get(discord_id);
           const username = user ? user.tag : `<@${discord_id}>`;
-          const token = raw_leaderboard.match(/\*\*(.+?) Leaderboard\*\*/)?.[1] || 'Unknown';
           return `#${adjusted_rank}: ${username} — ${total_reward} ${token}`;
-        }).join('\n');
+        }).filter(row => row).join('\n')}`;
         await leaderboardChannel.send(leaderboard_text);
       } catch (error) {
         console.error(`Error posting leaderboard: ${error.message}`);
