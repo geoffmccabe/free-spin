@@ -17,6 +17,7 @@
     #spin-button { display: block; margin: 20px auto; padding: 8px 16px; font-size: 14px; background-color: #ff4500; color: white; border: none; border-radius: 10px; cursor: pointer; }
     #spin-button:disabled, #spin-button.hidden { display: none; }
     #error-message { margin-top: 10px; color: white; font-size: 14px; z-index: 11; position: relative; max-width: 800px; font-weight: bold; text-align: center; white-space: pre-line; }
+    #admin-info { position: absolute; bottom: 10px; right: 10px; font-size: 12px; color: gray; }
   </style>
 </head>
 <body>
@@ -29,6 +30,7 @@
     </div>
     <button id="spin-button" disabled>SPIN</button>
     <div id="error-message"></div>
+    <div id="admin-info"></div>
   </div>
   <script>
     window.onload = function () {
@@ -44,6 +46,7 @@
       const server_id = new URLSearchParams(window.location.search).get("server_id");
       const spinButton = document.getElementById("spin-button");
       const messageDiv = document.getElementById("error-message");
+      const adminInfo = document.getElementById("admin-info");
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
@@ -151,6 +154,18 @@
           textWheel.draw();
           spinButton.disabled = false;
           spinButton.classList.remove("hidden");
+
+          // Admin info
+          const adminRes = await fetch("/api/spin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token, server_id, admin: true })
+          });
+          const adminData = await adminRes.json();
+          if (adminData.admin) {
+            adminInfo.textContent = `${adminData.tokenAmt} = $${adminData.usdValue}\nPOOL ADDR: ${adminData.poolAddr}`;
+            adminInfo.style.display = "block";
+          }
         } catch (err) {
           messageDiv.textContent = err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached' ? 'You have used all your free spins today' : err.message;
           messageDiv.style.display = "block";
