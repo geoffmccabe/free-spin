@@ -17,7 +17,7 @@
     #spin-button { display: block; margin: 20px auto; padding: 8px 16px; font-size: 14px; background-color: #ff4500; color: white; border: none; border-radius: 10px; cursor: pointer; }
     #spin-button:disabled, #spin-button.hidden { display: none; }
     #error-message { margin-top: 10px; color: white; font-size: 14px; z-index: 11; position: relative; max-width: 800px; font-weight: bold; text-align: center; white-space: pre-line; }
-    #admin-info { position: absolute; bottom: 10px; right: 10px; font-size: 12px; color: white; text-align: right; display: none; }
+    #admin-info { position: absolute; bottom: 10px; right: 10px; font-size: 12px; color: white; text-align: right; }
     #copy-btn { background: none; border: none; color: white; cursor: pointer; }
   </style>
 </head>
@@ -30,9 +30,8 @@
       <canvas id="canvas-text"></canvas>
     </div>
     <button id="spin-button" disabled>SPIN</button>
-    <button id="chart-button" style="display: none;">CHART</button>
     <div id="error-message"></div>
-    <div id="admin-info">
+    <div id="admin-info" style="display: none;">
       <div id="token-balance"></div>
       <div>POOL ADDR: <span id="pool-addr"></span> <button id="copy-btn">📋</button></div>
     </div>
@@ -46,12 +45,10 @@
       let isSpinning = false;
       let announcedPrize = null;
       let finalSpinsLeft = null;
-      let isAdmin = false;
 
       const token = new URLSearchParams(window.location.search).get("token");
       const server_id = new URLSearchParams(window.location.search).get("server_id");
       const spinButton = document.getElementById("spin-button");
-      const chartButton = document.getElementById("chart-button");
       const messageDiv = document.getElementById("error-message");
       const adminInfoDiv = document.getElementById("admin-info");
 
@@ -89,6 +86,18 @@
           }
 
           const { token_name, payout_amounts, image_url, adminInfo } = data;
+
+          if (adminInfo) {
+            document.getElementById("token-balance").textContent = `${adminInfo.tokenAmt} = $${adminInfo.usdValue}`;
+            document.getElementById("pool-addr").textContent = adminInfo.poolAddr;
+            adminInfoDiv.style.display = "block";
+
+            document.getElementById('copy-btn').addEventListener('click', () => {
+              navigator.clipboard.writeText(adminInfo.poolAddr);
+              alert('Copied to clipboard');
+            });
+          }
+
           segments = (payout_amounts || []).map((amount) => ({
             text: `${amount}`,
             text2: `${token_name}`,
@@ -161,20 +170,6 @@
           textWheel.draw();
           spinButton.disabled = false;
           spinButton.classList.remove("hidden");
-          if (data.is_admin) {
-            chartButton.style.display = "block";
-          }
-
-          if (adminInfo) {
-            document.getElementById("token-balance").textContent = `${adminInfo.tokenAmt} = $${adminInfo.usdValue}`;
-            document.getElementById("pool-addr").textContent = adminInfo.poolAddr;
-            adminInfoDiv.style.display = "block";
-
-            document.getElementById('copy-btn').addEventListener('click', () => {
-              navigator.clipboard.writeText(adminInfo.poolAddr);
-              alert('Copied to clipboard');
-            });
-          }
         } catch (err) {
           messageDiv.textContent = err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached' ? 'You have used all your free spins today' : err.message;
           messageDiv.style.display = "block";
@@ -238,36 +233,6 @@
       };
 
       spinButton.addEventListener("click", spinHandler);
-
-      chartButton.addEventListener("click", () => {
-        wheelContainer.style.display = 'none';
-        spinButton.style.display = 'none';
-        chartContainer.style.display = 'block';
-        loadChart();
-      });
-
-      async function loadChart() {
-        try {
-          const res = await fetch("/api/chart", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token, server_id })
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "Server error during chart load");
-
-          const ctx = document.getElementById('stats-chart').getContext('2d');
-          new Chart(ctx, {
-            type: 'line',
-            data: data.chartData,
-            options: data.options
-          });
-        } catch (err) {
-          messageDiv.textContent = `Chart load failed: ${err.message}`;
-          messageDiv.style.display = "block";
-        }
-      }
-
       initializeWheel();
     };
   </script>
