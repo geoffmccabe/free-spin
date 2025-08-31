@@ -44,7 +44,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Admin access required' });
     }
 
-    // Build spins query filtered by this mint
+    // Query spins for this mint + range
     let query = supabase
       .from('daily_spins')
       .select('created_at, reward, contract_address')
@@ -73,7 +73,7 @@ export default async function handler(req, res) {
     const spinsData = dates.map(d => aggregated[d].spins);
     const payoutData = dates.map(d => aggregated[d].payout);
 
-    // Safe normalization (avoid divide by zero)
+    // Safe normalization (avoid divide-by-zero)
     const maxSpins = Math.max(1, ...(spinsData.length ? spinsData : [1]));
     const maxPayout = Math.max(1, ...(payoutData.length ? payoutData : [1]));
     const normalizedSpins = spinsData.map(v => (v / maxSpins) * 100);
@@ -89,8 +89,8 @@ export default async function handler(req, res) {
 
     const options = {
       scales: {
-        y:   { type: 'linear', position: 'left',  title: { display: true, text: '# Spins (Normalized)' } },
-        y1:  { type: 'linear', position: 'right', title: { display: true, text: 'Payout Amount (Normalized)' }, grid: { drawOnChartArea: false } }
+        y:  { type: 'linear', position: 'left',  title: { display: true, text: '# Spins (Normalized)' } },
+        y1: { type: 'linear', position: 'right', title: { display: true, text: 'Payout Amount (Normalized)' }, grid: { drawOnChartArea: false } }
       }
     };
 
