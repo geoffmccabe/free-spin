@@ -4,120 +4,33 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Spin the Wheel</title>
-
-  <!-- Wheel libs -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.4/TweenMax.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
-
-  <!-- Charts -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
   <style>
-    /* ====== Layout ====== */
-    html, body { background:#000; color:#fff; margin:0; padding:0; height:100vh; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    .main {
-      height:100vh;
-      display:grid;
-      grid-template-columns: 1fr 420px;
-      gap:18px;
-      padding:16px;
-      box-sizing:border-box;
-      align-items:start;  /* keep button visible; no vertical centering that could push it off-screen */
-      justify-items:center;
-    }
-    @media (max-width: 980px) { .main { grid-template-columns: 1fr; grid-auto-rows: max-content; } }
+    html, body { background:#000; color:#fff; font-family: Inter, system-ui, sans-serif; text-align:center; margin:0; padding:0; overflow:hidden; height:100vh; }
+    .main { height:100vh; display:grid; grid-template-columns: 1fr; align-items:center; justify-items:center; padding:16px; box-sizing:border-box; gap:8px; }
+    #admin-link { display:none; font-size:12px; color:#93c5fd; text-decoration:none; margin-top:6px; }
+    #admin-link:hover { text-decoration:underline; }
 
-    /* ====== Wheel area (left) ====== */
-    #wheel-wrap { width:100%; display:flex; flex-direction:column; align-items:center; }
-    /* Clamp size so the SPIN button always has room below */
-    #wheel-container {
-      position:relative;
-      width: clamp(520px, 70vmin, 640px);
-      height: clamp(520px, 70vmin, 640px);
-    }
-    /* red pointer fixed at top-center of the wheel */
-    #pointer {
-      position:absolute; left:50%; top:-20px; transform:translateX(-50%);
-      width:0; height:0;
-      border-left:15px solid transparent; border-right:15px solid transparent; border-top:20px solid red;
-      z-index:10;
-    }
-    /* mechanics canvas = Winwheel drawing; text canvas = our labels; overlay = token art */
-    #canvas-mechanics, #canvas-text { position:absolute; inset:0; }
-    #canvas-mechanics { z-index:1; opacity:0; }   /* we only use its geometry/rotation */
-    #wheel-overlay   { position:absolute; inset:0; z-index:2; pointer-events:none; display:none; }
-    #canvas-text     { z-index:3; pointer-events:none; }
+    #wheel-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    #wheel-container { position:relative; width:min(80vmin, 640px); height:min(80vmin, 640px); }
+    #pointer { position:absolute; top:-20px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:15px solid transparent; border-right:15px solid transparent; border-top:20px solid red; z-index:10; }
+    #canvas-mechanics { position:absolute; top:0; left:0; z-index:1; opacity:0; width:100%; height:100%; }
+    #wheel-overlay { position:absolute; top:0; left:0; width:100%; height:100%; z-index:2; pointer-events:none; display:none; }
+    #canvas-text { position:absolute; top:0; left:0; z-index:3; pointer-events:none; width:100%; height:100%; }
 
-    #spin-button { margin:14px auto 0; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
+    #spin-button { display:block; margin:12px auto 0; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
     #spin-button:disabled, #spin-button.hidden { display:none; }
-    #message { margin-top:10px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; text-align:center; }
 
-    /* ====== Admin Panel (right) ====== */
-    #admin-panel { display:none; width:100%; max-width:420px; align-self:stretch; background:#0b0b0c; border:1px solid #1f1f20; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.5); overflow:hidden; }
-    .ap-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border-bottom:1px solid #1c1c1e; }
-    .ap-title { font-weight:700; }
-    .ap-body  { padding:14px 16px 6px; display:flex; flex-direction:column; gap:10px; }
-    .ap-row   { font-size:14px; color:#eaeaea; line-height:1.5; display:flex; align-items:center; justify-content:space-between; gap:8px; }
-
-    .token-line { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-    .token-name { color:#d4af37; font-weight:800; }
-    .usd { font-weight:700; }
-    .usd-high { color:#22c55e; }  /* ≥$50 */
-    .usd-mid  { color:#f59e0b; }  /* $20–$50 */
-    .usd-low  { color:#ef4444; }  /* <$20 */
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:13px; }
-
-    /* inline copy icon (no button chrome) */
-    .copy-icon { margin-left:8px; display:inline-flex; vertical-align:middle; cursor:pointer; }
-    .copy-icon svg { width:16px; height:16px; }
-    .copy-copied rect { stroke:#22c55e !important; }
-
-    .ap-actions { display:flex; justify-content:flex-end; padding:10px 16px 12px; border-top:1px solid #1c1c1e; }
-    #chart-button { padding:8px 12px; font-size:12px; background:#0ea5e9; color:#fff; border:none; border-radius:10px; cursor:pointer; }
-
-    /* Superadmin controls */
-    .ap-section { border-top:1px solid #1c1c1e; padding:12px 16px; }
-    .ap-section h4 { margin:0 0 8px 0; font-size:14px; opacity:0.9; }
-    #token-list { display:flex; flex-direction:column; gap:6px; max-height:160px; overflow:auto; }
-    .token-item { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 10px; background:#0f0f10; border:1px solid #1f1f20; border-radius:10px; }
-    .token-item .meta { display:flex; gap:10px; align-items:center; }
-    .token-item .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid #2a2a2c; background:#141416; opacity:0.9; }
-    .token-item button { padding:6px 10px; font-size:12px; border-radius:10px; border:1px solid #2a2a2c; background:#1a1a1c; color:#fff; cursor:pointer; }
-    .token-add { display:flex; gap:8px; margin-top:10px; }
-    .token-add input { flex:1; min-width:0; background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:8px 10px; font-size:12px; }
-
-    /* Leaderboards (tall + dark scrollbar) */
-    .lb-wrap { border-top:1px solid #1c1c1e; padding:12px 16px; display:flex; flex-direction:column; gap:10px; }
-    .lb-controls { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
-    .lb-controls select { background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:6px 10px; font-size:12px; }
-    .lb-table { max-height:420px; overflow:auto; border:1px solid #1f1f20; border-radius:10px; }
-    table { width:100%; border-collapse:collapse; }
-    th, td { padding:8px 10px; border-bottom:1px solid #151517; font-size:12px; text-align:left; }
-    th { position:sticky; top:0; background:#121214; z-index:1; }
-    tr:last-child td { border-bottom:none; }
-    .lb-table::-webkit-scrollbar { width:10px; }
-    .lb-table::-webkit-scrollbar-track { background:#0f0f10; }
-    .lb-table::-webkit-scrollbar-thumb { background:#2a2a2c; border-radius:10px; }
-    .lb-table::-webkit-scrollbar-thumb:hover { background:#3a3a3d; }
-
-    /* Chart modal */
-    #chart-modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.6); z-index:50; }
-    .panel { width:min(1000px,92vw); height:min(650px,88vh); background:#0b0b0c; border:1px solid #1f1f20; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto 1fr; grid-template-areas:'header header' 'left right'; overflow:hidden; }
-    .panel-header { grid-area: header; display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border-bottom:1px solid #1c1c1e; }
-    .panel-title { font-weight:700; }
-    .panel-left { grid-area:left; display:flex; align-items:center; justify-content:center; padding:16px; border-right:1px solid #1c1c1e; }
-    .panel-right { grid-area:right; position:relative; padding:12px 16px; }
-    #chartCanvas { width:100%; height:100%; }
-    .toolbar { display:flex; align-items:center; gap:8px; }
-    .toolbar select { background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:6px 10px; }
-    .close-btn { background:#222; border:1px solid #444; color:#fff; padding:8px 12px; border-radius:10px; cursor:pointer; }
-    @keyframes slowspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-    #chart-wheel { width:20vmin; height:20vmin; animation:slowspin 15s linear infinite; filter:drop-shadow(0 8px 20px rgba(0,0,0,0.5)); display:none; }
+    #message { margin-top:10px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; }
   </style>
 </head>
 <body>
   <div class="main">
-    <!-- Left: Wheel -->
+    <!-- Admin link (only shown for admins/superadmins) -->
+    <a id="admin-link">ADMIN</a>
+
+    <!-- Wheel -->
     <div id="wheel-wrap">
       <div id="wheel-container">
         <div id="pointer"></div>
@@ -127,97 +40,6 @@
       </div>
       <button id="spin-button" disabled>SPIN</button>
       <div id="message"></div>
-    </div>
-
-    <!-- Right: Admin Panel -->
-    <aside id="admin-panel">
-      <div class="ap-header">
-        <div class="ap-title">Admin Panel</div>
-      </div>
-
-      <div class="ap-body">
-        <!-- Spin token (top) -->
-        <div class="ap-row">
-          <div class="token-line">
-            <span class="token-name" id="spin-name">—</span>:
-            <span id="spin-qty">—</span> /
-            <span class="usd" id="spin-usd">$—</span>
-          </div>
-        </div>
-        <!-- Gas token (below) -->
-        <div class="ap-row">
-          <div class="token-line">
-            <span class="token-name" id="gas-name">—</span>:
-            <span id="gas-qty">—</span> /
-            <span class="usd" id="gas-usd">$—</span>
-          </div>
-        </div>
-        <!-- Wallet + inline copy icon -->
-        <div class="ap-row" style="justify-content:flex-start;">
-          <span class="mono" id="pool-addr">Wallet: —</span>
-          <span class="copy-icon" id="copy-icon" title="Copy address">
-            <svg viewBox="0 0 24 24" fill="none">
-              <rect x="7" y="7" width="12" height="12" rx="2" stroke="#bbb" />
-              <rect x="4" y="4" width="12" height="12" rx="2" stroke="#bbb" />
-            </svg>
-          </span>
-        </div>
-      </div>
-
-      <div class="ap-actions">
-        <button id="chart-button">Open Chart</button>
-      </div>
-
-      <!-- Superadmin controls -->
-      <div class="ap-section" id="superadmin-controls" style="display:none;">
-        <h4>Manage Token Types</h4>
-        <div id="token-list"></div>
-        <div class="token-add">
-          <input type="text" id="new-token-contract" placeholder="New token mint address (contract_address)" />
-          <button id="add-token-btn">Add Token</button>
-        </div>
-      </div>
-
-      <!-- Leaderboards -->
-      <div class="lb-wrap" id="lb-wrap" style="display:none;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <h4 style="margin:0;">Leaderboards (Top 200)</h4>
-          <div class="lb-controls">
-            <label for="lbMode">Sort by</label>
-            <select id="lbMode">
-              <option value="spins">Spins</option>
-              <option value="payout">Payout</option>
-            </select>
-          </div>
-        </div>
-        <div class="lb-table">
-          <table id="lb-table">
-            <thead>
-            <tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr>
-            </thead>
-            <tbody id="lb-body"><tr><td colspan="4" class="mono" style="opacity:.8">Loading…</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-    </aside>
-  </div>
-
-  <!-- Chart Modal -->
-  <div id="chart-modal">
-    <div class="panel">
-      <div class="panel-header">
-        <div class="panel-title" id="chart-title">Token Performance</div>
-        <div class="toolbar">
-          <label for="rangeSelect">Range</label>
-          <select id="rangeSelect">
-            <option value="past30">Past 30 days</option>
-            <option value="all">All time</option>
-          </select>
-          <button class="close-btn" id="closeChart">Close</button>
-        </div>
-      </div>
-      <div class="panel-left"><img id="chart-wheel" alt="Wheel"/></div>
-      <div class="panel-right"><canvas id="chartCanvas"></canvas></div>
     </div>
   </div>
 
@@ -233,44 +55,13 @@
       let contract_address = null;
       let token_name = null;
       let image_url = null;
-      let chartInstance = null;
 
       const token = new URLSearchParams(window.location.search).get("token");
       const server_id = new URLSearchParams(window.location.search).get("server_id");
       const spinButton = document.getElementById("spin-button");
       const messageDiv = document.getElementById("message");
       const overlayImg = document.getElementById("wheel-overlay");
-
-      // Admin refs
-      const adminPanel = document.getElementById('admin-panel');
-      const spinNameEl = document.getElementById('spin-name');
-      const spinQtyEl  = document.getElementById('spin-qty');
-      const spinUsdEl  = document.getElementById('spin-usd');
-      const gasNameEl  = document.getElementById('gas-name');
-      const gasQtyEl   = document.getElementById('gas-qty');
-      const gasUsdEl   = document.getElementById('gas-usd');
-      const poolAddrEl = document.getElementById('pool-addr');
-      const copyIcon   = document.getElementById('copy-icon');
-      const chartBtn   = document.getElementById('chart-button');
-
-      // Superadmin
-      const superControls = document.getElementById('superadmin-controls');
-      const tokenListEl   = document.getElementById('token-list');
-      const addTokenBtn   = document.getElementById('add-token-btn');
-      const newTokenInput = document.getElementById('new-token-contract');
-
-      // Leaderboards
-      const lbWrap  = document.getElementById('lb-wrap');
-      const lbMode  = document.getElementById('lbMode');
-      const lbBody  = document.getElementById('lb-body');
-
-      // Chart modal
-      const chartModal  = document.getElementById('chart-modal');
-      const chartCanvas = document.getElementById('chartCanvas');
-      const chartTitle  = document.getElementById('chart-title');
-      const chartWheel  = document.getElementById('chart-wheel');
-      const closeChartBtn = document.getElementById('closeChart');
-      const rangeSelect   = document.getElementById('rangeSelect');
+      const adminLink = document.getElementById('admin-link');
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
@@ -279,181 +70,55 @@
         return;
       }
 
-      /* ========= CANVAS SIZING (fixes pointer/text alignment) ========= */
-      function setCanvasSize(canvas, size) {
-        const dpr = Math.max(1, window.devicePixelRatio || 1);
-        canvas.style.width = size + 'px';
-        canvas.style.height = size + 'px';
-        canvas.width = Math.floor(size * dpr);
-        canvas.height = Math.floor(size * dpr);
-        const ctx = canvas.getContext('2d');
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);   // scale all drawings to CSS pixels
-        return { ctx, dpr };
+      function resizeCanvas() {
+        const container = document.getElementById('wheel-container');
+        const size = Math.min(container.offsetWidth, container.offsetHeight);
+        const canvases = [document.getElementById('canvas-mechanics'), document.getElementById('canvas-text')];
+        canvases.forEach(canvas => {
+          canvas.width = Math.max(size, 1);
+          canvas.height = Math.max(size, 1);
+        });
       }
-
-      function resizeCanvases() {
-        const cont = document.getElementById('wheel-container');
-        const size = Math.min(cont.clientWidth, cont.clientHeight);
-        setCanvasSize(document.getElementById('canvas-mechanics'), size);
-        setCanvasSize(document.getElementById('canvas-text'), size);
-        if (mechanicsWheel) {
-          mechanicsWheel.outerRadius = size / 2;
-          mechanicsWheel.draw(false);
-          drawTextWheel(mechanicsWheel.rotationAngle);
-        }
-      }
-      window.addEventListener('resize', resizeCanvases);
-
-      function usdClass(val) {
-        const n = typeof val === 'string' ? Number(val.replace(/[^0-9.]/g,'')) : Number(val);
-        if (!Number.isFinite(n)) return '';
-        if (n >= 50) return 'usd-high';
-        if (n >= 20) return 'usd-mid';
-        return 'usd-low';
-      }
-
-      async function loadServerTokens() {
-        tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">Loading tokens…</div>';
-        try {
-          const res = await fetch('/api/admin/tokens', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, server_id, action: 'list' })
-          });
-          const payload = await res.json();
-          if (!res.ok) {
-            tokenListEl.innerHTML = `<div class="mono" style="color:#f66">Error: ${payload.error || 'failed to load'}</div>`;
-            return;
-          }
-          const rows = payload.tokens || [];
-          if (!rows.length) {
-            tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">No tokens added yet.</div>';
-            return;
-          }
-          tokenListEl.innerHTML = '';
-          rows.forEach(row => {
-            const item = document.createElement('div');
-            item.className = 'token-item';
-            item.innerHTML = `
-              <div class="meta">
-                <span class="badge">ENABLED</span>
-                <span class="token-name">${row.token_name || 'Token'}</span>
-                <span class="mono" style="opacity:.8">${row.contract_address}</span>
-              </div>
-              <div><button data-contract="${row.contract_address}">Disable</button></div>`;
-            item.querySelector('button').onclick = async () => {
-              const btn = item.querySelector('button');
-              btn.disabled = true;
-              const res2 = await fetch('/api/admin/tokens', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ token, server_id, action: 'setEnabled', contract_address: row.contract_address, enabled: false })
-              });
-              btn.disabled = false;
-              if (res2.ok) loadServerTokens(); else alert('Failed to disable token');
-            };
-            tokenListEl.appendChild(item);
-          });
-        } catch (e) {
-          tokenListEl.innerHTML = `<div class="mono" style="color:#f66">Error: ${e.message}</div>`;
-        }
-      }
-
-      async function loadLeaderboards() {
-        lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="opacity:.8">Loading…</td></tr>`;
-        try {
-          const res = await fetch('/api/leaderboards', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, server_id })
-          });
-          const payload = await res.json();
-          if (!res.ok) {
-            lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="color:#f66">Error: ${payload.error || 'failed to load'}</td></tr>`;
-            return;
-          }
-          window._LB = payload;
-          renderLeaderboard();
-        } catch (e) {
-          lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="color:#f66">Error: ${e.message}</td></tr>`;
-        }
-      }
-      function renderLeaderboard() {
-        const mode = lbMode.value;
-        const rows = (window._LB && (mode === 'spins' ? window._LB.bySpins : window._LB.byPayout)) || [];
-        if (!rows.length) {
-          lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="opacity:.8">No data yet.</td></tr>`;
-          return;
-        }
-        lbBody.innerHTML = rows.map(r => `<tr><td>${r.rank}</td><td>${r.user}</td><td>${r.spins}</td><td>${r.payout}</td></tr>`).join('');
-      }
-      lbMode.addEventListener('change', renderLeaderboard);
+      window.addEventListener('resize', () => {
+        resizeCanvas();
+        drawTextWheel();
+      });
+      resizeCanvas();
 
       async function initializeWheel() {
         try {
           const res = await fetch("/api/spin", {
-            method: "POST", headers: { "Content-Type": "application/json" },
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ token, server_id })
           });
           const data = await res.json();
           if (!res.ok || !data.tokenConfig) throw new Error(data.error || "Failed to load spin configuration");
 
           const { token_name: tn, payout_amounts: pa, image_url: iu } = data.tokenConfig;
-          token_name = tn; image_url = iu; contract_address = data.contract_address || null;
+          token_name = tn;
+          image_url = iu;
           role = data.role || null;
+          contract_address = data.contract_address || null;
 
-          /* Admin panel */
+          // Show ADMIN link only for admins
           if (role === 'admin' || role === 'superadmin') {
-            const info = data.adminInfo || {};
-            spinNameEl.textContent = info.tokenSymbol || token_name || '—';
-            spinQtyEl.textContent  = (typeof info.tokenAmt === 'number') ? info.tokenAmt.toLocaleString(undefined, { maximumFractionDigits: 6 }) : String(info.tokenAmt ?? 'N/A');
-            const tokUsd = typeof info.tokenUsdValue === 'number' ? info.tokenUsdValue.toFixed(2) : String(info.tokenUsdValue ?? 'N/A');
-            spinUsdEl.textContent = `$${tokUsd}`; spinUsdEl.className = `usd ${usdClass(tokUsd)}`;
-
-            gasNameEl.textContent = info.gasSymbol || 'SOL';
-            gasQtyEl.textContent  = (typeof info.gasAmt === 'number') ? info.gasAmt.toFixed(4) : String(info.gasAmt ?? 'N/A');
-            const gasUsd = typeof info.gasUsdValue === 'number' ? info.gasUsdValue.toFixed(2) : String(info.gasUsdValue ?? 'N/A');
-            gasUsdEl.textContent = `$${gasUsd}`; gasUsdEl.className = `usd ${usdClass(gasUsd)}`;
-
-            poolAddrEl.textContent = `Wallet: ${info.poolAddr || '—'}`;
-            copyIcon.onclick = () => {
-              if (!info.poolAddr) return;
-              navigator.clipboard.writeText(info.poolAddr);
-              copyIcon.classList.add('copy-copied');
-              setTimeout(() => copyIcon.classList.remove('copy-copied'), 1000);
-            };
-
-            chartBtn.onclick = () => openChart('past30');
-            adminPanel.style.display = 'block';
-
-            if (role === 'superadmin') {
-              superControls.style.display = 'block';
-              loadServerTokens();
-              addTokenBtn.onclick = async () => {
-                const mint = newTokenInput.value.trim();
-                if (!mint) return;
-                addTokenBtn.disabled = true;
-                const resX = await fetch('/api/admin/tokens', {
-                  method: 'POST', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ token, server_id, action: 'add', contract_address: mint })
-                });
-                addTokenBtn.disabled = false;
-                if (resX.ok) { newTokenInput.value=''; loadServerTokens(); } else { alert('Failed to add token'); }
-              };
-            }
-
-            lbWrap.style.display = 'block';
-            loadLeaderboards();
+            adminLink.href = `adminpanel.html?token=${encodeURIComponent(token)}&server_id=${encodeURIComponent(server_id)}`;
+            adminLink.style.display = 'inline';
           } else {
-            adminPanel.style.display = 'none';
+            adminLink.style.display = 'none';
           }
 
-          /* Build wheel labels */
           const payout_amounts = Array.isArray(pa) ? pa : [];
-          segments = payout_amounts.map(amount => ({ text: `${amount}`, text2: `${token_name}`, textFillStyle: 'white', textFontFamily: 'Arial' }));
-          if (!segments.length) throw new Error("No payout amounts configured.");
+          segments = payout_amounts.map((amount) => ({
+            text: `${amount}`,
+            text2: `${token_name}`,
+            textFillStyle: 'white',
+            textFontFamily: 'Arial'
+          }));
+          if (segments.length === 0) throw new Error("No payout amounts configured.");
 
-          /* Size canvases BEFORE creating the wheel (key to alignment) */
-          resizeCanvases();
-
-          /* Preload overlay image (no broken-img flash) */
+          // Preload overlay image to avoid broken-image flash
           if (image_url) {
             const img = new Image();
             img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
@@ -461,25 +126,30 @@
             img.src = image_url;
           }
 
-          const radius = document.getElementById('canvas-mechanics').clientWidth / 2;
+          const container = document.getElementById('wheel-container');
+          const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
 
           mechanicsWheel = new Winwheel({
             canvasId: 'canvas-mechanics',
             numSegments: segments.length,
             segments: segments.map(() => ({ fillStyle: 'transparent', strokeStyle: 'none' })),
             outerRadius: radius,
+            pointerAngle: 90,
             animation: {
-              type: 'spinToStop',
-              duration: 5,
-              spins: 8
+              type: 'spinToStop', duration: 5, spins: 8,
+              callbackFinished: () => {
+                const spinsLeftText = typeof finalSpinsLeft === 'number' ? `Spins Left Today: ${finalSpinsLeft}` : 'Unlimited spins';
+                messageDiv.textContent = announcedPrize ? `You won: ${announcedPrize}\n${spinsLeftText}` : `Spin completed.\n${spinsLeftText}`;
+                isSpinning = false;
+                spinButton.disabled = true;
+                spinButton.classList.add("hidden");
+              }
             }
           });
 
-          /* Initial draw */
-          drawTextWheel(0);
+          drawTextWheel();
           spinButton.disabled = false;
           spinButton.classList.remove("hidden");
-
         } catch (err) {
           messageDiv.textContent = (err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached')
             ? 'You have used all your free spins today'
@@ -489,96 +159,56 @@
         }
       }
 
-      /* Draw labels centered per segment, aligned to TOP baseline */
-      function drawTextWheel(currentRotationDeg = 0) {
+      function drawTextWheel(rotation = -60) {
         const canvas = document.getElementById("canvas-text");
         const ctx = canvas.getContext('2d');
-        const W = canvas.clientWidth, H = canvas.clientHeight;
-        ctx.clearRect(0, 0, W, H);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        const cx = W / 2, cy = H / 2;
-        const n = segments.length; if (!n) return;
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        const numSegments = segments.length;
+        if (!numSegments) return;
 
-        const r = Math.min(W, H) / 2;
-        const qtyRadius   = r * 0.80;
-        const tokenRadius = r * 0.85;
+        const radius = Math.min(canvas.width, canvas.height) / 2;
+        const numberFontPx = Math.max(10, Math.min(48, Math.round(radius * 0.12)));
+        const tokenFontPx  = Math.max(8,  Math.min(36, Math.round(radius * 0.09)));
+        const quantityRadius = radius * 0.8;
+        const tokenRadius    = quantityRadius * 0.85;
+        const segmentAngle = (2 * Math.PI) / numSegments;
 
-        const numberFontPx = Math.max(12, Math.min(48, Math.round(r * 0.12)));
-        const tokenFontPx  = Math.max(10, Math.min(36, Math.round(r * 0.09)));
-
-        const segmentAngle = (2 * Math.PI) / n;
-        const rotationRad  = (currentRotationDeg - 90) * Math.PI / 180; // -90° => top-center baseline
-
-        for (let i = 0; i < n; i++) {
-          const seg = segments[i];
-          const angle = rotationRad + (i + 0.5) * segmentAngle; // center of segment
+        for (let i = 1; i <= numSegments; i++) {
+          const seg = segments[i - 1];
+          const angle = rotation * (Math.PI / 180) + (i - 1) * segmentAngle + segmentAngle / 2;
 
           ctx.save();
-          ctx.translate(cx, cy);
+          ctx.translate(centerX, centerY);
           ctx.rotate(angle);
           ctx.fillStyle = seg.textFillStyle || 'white';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
 
           ctx.font = `${numberFontPx}px ${seg.textFontFamily || 'Arial'}`;
-          ctx.fillText(seg.text, 0, -qtyRadius);
+          ctx.fillText(seg.text, 0, -quantityRadius);
 
           ctx.font = `${tokenFontPx}px ${seg.textFontFamily || 'Arial'}`;
           ctx.fillText(seg.text2, 0, -tokenRadius);
+
           ctx.restore();
-        }
-      }
-
-      async function openChart(range) {
-        try {
-          chartTitle.textContent = `${token_name || 'Token'} • Performance`;
-          chartModal.style.display = 'flex';
-          if (image_url) {
-            const size = document.getElementById('wheel-container').clientWidth * 0.25;
-            chartWheel.style.width = Math.round(size) + 'px';
-            chartWheel.style.height = Math.round(size) + 'px';
-            chartWheel.onload = () => { chartWheel.style.display = 'block'; };
-            chartWheel.onerror = () => { chartWheel.style.display = 'none'; };
-            chartWheel.src = image_url;
-          } else chartWheel.style.display = 'none';
-
-          const res = await fetch('/api/chart', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, server_id, contract_address, range })
-          });
-          const payload = await res.json();
-          if (!res.ok) throw new Error(payload.error || 'Failed to load chart');
-
-          if (chartInstance) chartInstance.destroy();
-          const ctx = chartCanvas.getContext('2d');
-          chartInstance = new Chart(ctx, {
-            type: 'line',
-            data: payload.chartData,
-            options: Object.assign({
-              responsive: true, maintainAspectRatio: false,
-              interaction: { mode: 'index', intersect: false },
-              plugins: { legend: { labels: { color: '#ddd' } }, tooltip: { enabled: true } },
-              scales: {
-                x:  { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                y:  { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' }, title:{ display:true, text:'# Spins', color:'#bbb' } },
-                y1: { position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'Payout Amount', color:'#bbb' } }
-              }
-            }, payload.options || {})
-          });
-        } catch (e) {
-          alert('Chart error: ' + e.message);
         }
       }
 
       const spinHandler = async () => {
         if (hasSpun || isSpinning || !mechanicsWheel) return;
-        hasSpun = true; isSpinning = true;
-        spinButton.disabled = true; spinButton.classList.add("hidden");
+        hasSpun = true;
+        isSpinning = true;
+        spinButton.disabled = true;
+        spinButton.classList.add("hidden");
         messageDiv.textContent = "Preparing your spin...";
 
         try {
           const res = await fetch("/api/spin", {
-            method: "POST", headers: { "Content-Type": "application/json" },
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ token, spin: true, server_id })
           });
           const data = await res.json();
@@ -588,40 +218,35 @@
           const seg = mechanicsWheel.segments[segmentIndex + 1];
           if (!seg) throw new Error("Invalid segment returned from server");
 
-          const centerDeg = (seg.startAngle + seg.endAngle) / 2;
-          const span = (seg.endAngle - seg.startAngle) * 0.8;
-          const randomOffset = (Math.random() * span) - (span / 2);
-
-          mechanicsWheel.animation.stopAngle = (centerDeg + randomOffset) % 360;
-
+          const center = (seg.startAngle + seg.endAngle) / 2;
+          const randomOffset = (Math.random() * (seg.endAngle - seg.startAngle) * 0.8) - ((seg.endAngle - seg.startAngle) * 0.4);
+          mechanicsWheel.animation.stopAngle = (center + randomOffset) % 360;
           announcedPrize = data.prize;
           finalSpinsLeft = data.spins_left;
 
-          /* keep overlay + labels in sync with mechanics rotation while spinning */
           mechanicsWheel.animation.callbackBefore = () => {
-            const deg = mechanicsWheel.rotationAngle;
-            overlayImg.style.transform = `rotate(${deg}deg)`;
-            drawTextWheel(deg);
+            const adjustedAngle = mechanicsWheel.rotationAngle - 30;
+            drawTextWheel(adjustedAngle - 60);
+            overlayImg.style.transform = `rotate(${adjustedAngle}deg)`;
           };
 
           messageDiv.textContent = "Spinning...";
           mechanicsWheel.stopAnimation(false);
-          mechanicsWheel.rotationAngle = 0; mechanicsWheel.draw();
-          drawTextWheel(0);
+          mechanicsWheel.rotationAngle = 0;
+          mechanicsWheel.draw();
+          drawTextWheel(-60);
           mechanicsWheel.startAnimation();
 
         } catch (err) {
           messageDiv.textContent = `Spin failed: ${err.message}`;
-          isSpinning = false; hasSpun = false;
-          spinButton.disabled = true; spinButton.classList.add("hidden");
+          isSpinning = false;
+          hasSpun = false;
+          spinButton.disabled = true;
+          spinButton.classList.add("hidden");
         }
       };
 
-      document.getElementById('closeChart').addEventListener('click', () => { chartModal.style.display = 'none'; });
-      rangeSelect.addEventListener('change', (e) => { openChart(e.target.value); });
-      lbMode.addEventListener('change', renderLeaderboard);
       spinButton.addEventListener("click", spinHandler);
-
       initializeWheel();
     };
   </script>
