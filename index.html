@@ -44,7 +44,7 @@
     <div id="wheel-container">
       <div id="pointer"></div>
       <canvas id="canvas-mechanics"></canvas>
-      <!-- Overlay image preloaded then shown; no broken-image flash -->
+      <!-- Overlay image is preloaded then shown (prevents broken-image flash) -->
       <img id="wheel-overlay" alt="Wheel Overlay"/>
       <canvas id="canvas-text"></canvas>
     </div>
@@ -146,14 +146,14 @@
             throw new Error(data.error || "Failed to load spin configuration");
           }
 
-          // ✅ Correctly read nested shape from API
+          // Read nested config
           ({ token_name, payout_amounts: window_payout_amounts, image_url } = data.tokenConfig);
-          role = data.role || null; // 'admin' or 'superadmin'
-          contract_address = data.contract_address || null; // for chart API
+          role = data.role || null;               // 'admin' | 'superadmin' | null
+          contract_address = data.contract_address || null; // mint for chart API
           const adminInfo = data.adminInfo;
 
-          // Show CHART button for admin or superadmin
-          if (role === 'admin' || role === 'superadmin' || adminInfo) {
+          // CHART visible for admin/superadmin
+          if (role === 'admin' || role === 'superadmin') {
             chartButton.style.display = 'inline-block';
             chartButton.onclick = () => openChart('past30');
           }
@@ -182,7 +182,7 @@
             throw new Error("No payout amounts configured.");
           }
 
-          // Preload overlay image to avoid broken-image flash
+          // Preload overlay image (avoid broken-image flash)
           if (image_url) {
             const img = new Image();
             img.onload = () => {
@@ -276,6 +276,8 @@
             chartWheel.onload = () => { chartWheel.style.display = 'block'; };
             chartWheel.onerror = () => { chartWheel.style.display = 'none'; };
             chartWheel.src = image_url;
+          } else {
+            chartWheel.style.display = 'none';
           }
 
           // Fetch chart data from our API
