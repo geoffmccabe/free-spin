@@ -1,12 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+const COINMARKETCAP_API_KEY = process.env.COINMARKETCAP_API_KEY;
 
 const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -28,7 +29,7 @@ export default async function handler(req, res) {
     const TOKEN_SECRET = process.env.SPIN_KEY;
     if (!TOKEN_SECRET) {
       console.error("FATAL: SPIN_KEY environment variable not found or is empty.");
-      return res.status(500).json({ error: 'A server configuration error occurred. Please notify an administrator.' });
+      return res.status(500).json({ error: 'Server configuration error' });
     }
 
     const [token, signature] = signedToken.split('.');
@@ -113,7 +114,7 @@ export default async function handler(req, res) {
       .eq('contract_address', contract_address)
       .single();
 
-    if (configError || !config) {
+    if (configError || !config || !config.payout_amounts || config.payout_amounts.length === 0) {
       console.error(`Config error: ${configError?.message || 'No config found'}`);
       return res.status(400).json({ error: 'Invalid wheel configuration' });
     }
@@ -163,36 +164,36 @@ export default async function handler(req, res) {
 
       let adminInfo = {};
       if (isSuperadmin) {
-        const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-        const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), fundingWallet.publicKey);
-        let balance = 0;
         try {
+          const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+          const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), fundingWallet.publicKey);
           const balanceResponse = await connection.getTokenAccountBalance(ata);
-          balance = balanceResponse.value.uiAmount;
-        } catch (err) {
-          console.error('Balance fetch failed', err);
-          balance = 'N/A';
-        }
+          const balance = balanceResponse.value.uiAmount;
 
-        let usdValue = 0;
-        try {
-          const cmcRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=HAROLD&convert=USD`, {
-            headers: {
-              'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY
+          let usdValue = 'N/A';
+          if (COINMARKETCAP_API_KEY) {
+            try {
+              const cmcRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=HAROLD&convert=USD`, {
+                headers: {
+                  'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY
+                }
+              });
+              const cmcData = await cmcRes.json();
+              usdValue = (balance * cmcData.data.HAROLD.quote.USD.price).toFixed(2);
+            } catch (cmcErr) {
+              console.error('CMC price fetch failed', cmcErr);
             }
-          });
-          const cmcData = await cmcRes.json();
-          usdValue = balance * cmcData.data.HAROLD.quote.USD.price;
-        } catch (err) {
-          console.error('CMC price fetch failed', err);
-          usdValue = 'N/A';
-        }
+          }
 
-        adminInfo = {
-          tokenAmt: balance,
-          usdValue,
-          poolAddr: fundingWallet.publicKey.toString()
-        };
+          adminInfo = {
+            tokenAmt: balance,
+            usdValue,
+            poolAddr: fundingWallet.publicKey.toString()
+          };
+        } catch (adminErr) {
+          console.error('Admin info failed', adminErr);
+          adminInfo = { tokenAmt: 'N/A', usdValue: 'N/A', poolAddr: 'N/A' };
+        }
       }
 
       return res.status(200).json({ tokenConfig, spins_left, adminInfo });
