@@ -32,7 +32,7 @@ export default async function handler(req, res) {
     }
 
     // Check admin or superadmin on this server
-    const { data: adminData, error: adminError } = await supabase
+    const { data: adminData } = await supabase
       .from('server_admins')
       .select('role')
       .eq('discord_id', tokenData.discord_id)
@@ -40,11 +40,11 @@ export default async function handler(req, res) {
       .single();
 
     const role = adminData?.role;
-    if (adminError || (role !== 'admin' && role !== 'superadmin')) {
+    if (role !== 'admin' && role !== 'superadmin') {
       return res.status(403).json({ error: 'Admin access required' });
     }
 
-    // Build spins query filtered by contract_address
+    // Build spins query filtered by this mint
     let query = supabase
       .from('daily_spins')
       .select('created_at, reward, contract_address')
@@ -58,11 +58,9 @@ export default async function handler(req, res) {
     } // 'all' => no extra time filter
 
     const { data: spins, error } = await query;
-    if (error) {
-      throw new Error('DB error fetching spins');
-    }
+    if (error) throw new Error('DB error fetching spins');
 
-    // Aggregate by date
+    // Aggregate per day
     const aggregated = (spins || []).reduce((acc, spin) => {
       const date = spin.created_at.split('T')[0];
       if (!acc[date]) acc[date] = { spins: 0, payout: 0 };
@@ -75,9 +73,9 @@ export default async function handler(req, res) {
     const spinsData = dates.map(d => aggregated[d].spins);
     const payoutData = dates.map(d => aggregated[d].payout);
 
-    // Normalize safely
-    const maxSpins = Math.max(1, ...spinsData, 1);
-    const maxPayout = Math.max(1, ...payoutData, 1);
+    // Safe normalization (avoid divide by zero)
+    const maxSpins = Math.max(1, ...(spinsData.length ? spinsData : [1]));
+    const maxPayout = Math.max(1, ...(payoutData.length ? payoutData : [1]));
     const normalizedSpins = spinsData.map(v => (v / maxSpins) * 100);
     const normalizedPayout = payoutData.map(v => (v / maxPayout) * 100);
 
@@ -91,8 +89,8 @@ export default async function handler(req, res) {
 
     const options = {
       scales: {
-        y: { type: 'linear', position: 'left', title: { display: true, text: '# Spins (Normalized)' } },
-        y1: { type: 'linear', position: 'right', title: { display: true, text: 'Payout Amount (Normalized)' }, grid: { drawOnChartArea: false } }
+        y:   { type: 'linear', position: 'left',  title: { display: true, text: '# Spins (Normalized)' } },
+        y1:  { type: 'linear', position: 'right', title: { display: true, text: 'Payout Amount (Normalized)' }, grid: { drawOnChartArea: false } }
       }
     };
 
