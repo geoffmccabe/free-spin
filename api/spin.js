@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
