@@ -8,23 +8,35 @@
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
+    :root { --gap:18px; --panelW:420px; }
     html, body { background:#000; color:#fff; font-family: Inter, system-ui, sans-serif; margin:0; padding:0; height:100vh; }
-    .main { height:100vh; display:grid; grid-template-columns: 1fr 420px; gap:18px; align-items:center; justify-items:center; padding:16px; box-sizing:border-box; }
-    @media (max-width: 980px) { .main { grid-template-columns: 1fr; grid-auto-rows: max-content; overflow:auto; } }
+    .main {
+      height:100vh; box-sizing:border-box; padding:16px;
+      display:grid; grid-template-columns: 1fr var(--panelW); column-gap: var(--gap);
+      align-items:center; justify-items:center;
+    }
+    @media (max-width: 980px) {
+      :root { --panelW: 100%; }
+      .main { grid-template-columns: 1fr; grid-auto-rows: max-content; align-items:start; }
+    }
 
-    #wheel-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; }
-    #wheel-container { position:relative; width:min(80vmin, 640px); height:min(80vmin, 640px); }
+    /* Left: wheel area */
+    #wheel-wrap { width:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    #wheel-container {
+      position:relative; width:600px; height:600px; /* JS will resize this responsively */
+      margin:0 auto;
+    }
     #pointer { position:absolute; top:-20px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:15px solid transparent; border-right:15px solid transparent; border-top:20px solid red; z-index:10; }
-    #canvas-mechanics { position:absolute; inset:0; z-index:1; opacity:0; width:100%; height:100%; }
+    #canvas-mechanics { position:absolute; inset:0; z-index:1; opacity:0; }
     #wheel-overlay { position:absolute; inset:0; z-index:2; pointer-events:none; display:none; }
-    #canvas-text { position:absolute; inset:0; z-index:3; pointer-events:none; width:100%; height:100%; }
+    #canvas-text { position:absolute; inset:0; z-index:3; pointer-events:none; }
 
     #spin-button { display:block; margin:12px auto 0; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
     #spin-button:disabled, #spin-button.hidden { display:none; }
     #message { margin-top:10px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; }
 
-    /* Admin Panel */
-    #admin-panel { display:none; width:100%; max-width:420px; align-self:stretch; background:#0b0b0c; border:1px solid #1f1f20; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.5); overflow:hidden; }
+    /* Admin Panel (right) */
+    #admin-panel { display:none; width:100%; max-width:var(--panelW); align-self:stretch; background:#0b0b0c; border:1px solid #1f1f20; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.5); overflow:hidden; }
     .ap-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border-bottom:1px solid #1c1c1e; }
     .ap-title { font-weight:700; letter-spacing:0.3px; }
     .ap-body { text-align:left; padding:14px 16px 6px; display:flex; flex-direction:column; gap:10px; }
@@ -32,14 +44,13 @@
     .token-line { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
     .token-name { color:#d4af37; font-weight:800; } /* gold & bold */
     .usd { font-weight:700; }
-    .usd-high { color:#22c55e; } /* bright green */
-    .usd-mid  { color:#f59e0b; } /* gold */
-    .usd-low  { color:#ef4444; } /* red  */
+    .usd-high { color:#22c55e; } /* ≥$50 bright green */
+    .usd-mid  { color:#f59e0b; } /* $20–$50 gold */
+    .usd-low  { color:#ef4444; } /* <$20 red */
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size:13px; }
 
-    .copy-btn { margin-left:6px; background:none; border:1px solid #444; color:#fff; padding:4px 8px; border-radius:8px; cursor:pointer; display:flex; align-items:center; gap:6px; }
-    .copy-icon { width:16px; height:16px; display:inline-block; }
-    .copy-icon svg { width:16px; height:16px; }
+    .icon-btn { margin-left:6px; background:none; border:1px solid #444; color:#fff; padding:6px; border-radius:8px; cursor:pointer; display:flex; align-items:center; }
+    .icon-btn svg { width:16px; height:16px; }
 
     .ap-actions { display:flex; justify-content:flex-end; padding:10px 16px 12px; border-top:1px solid #1c1c1e; }
     #chart-button { padding:8px 12px; font-size:12px; background:#0ea5e9; color:#fff; border:none; border-radius:10px; cursor:pointer; }
@@ -52,14 +63,14 @@
     .token-item .meta { display:flex; gap:10px; align-items:center; }
     .token-item .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid #2a2a2c; background:#141416; opacity:0.9; }
     .token-item button { padding:6px 10px; font-size:12px; border-radius:10px; border:1px solid #2a2a2c; background:#1a1a1c; color:#fff; cursor:pointer; }
-    .token-add { display:flex; gap:8px; }
+    .token-add { display:flex; gap:8px; margin-top:10px; }
     .token-add input { flex:1; min-width:0; background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:8px 10px; font-size:12px; }
 
     /* Leaderboards */
     .lb-wrap { border-top:1px solid #1c1c1e; padding:12px 16px; display:flex; flex-direction:column; gap:10px; }
     .lb-controls { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
     .lb-controls select { background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:6px 10px; font-size:12px; }
-    .lb-table { max-height:240px; overflow:auto; border:1px solid #1f1f20; border-radius:10px; }
+    .lb-table { max-height:260px; overflow:auto; border:1px solid #1f1f20; border-radius:10px; }
     table { width:100%; border-collapse:collapse; }
     th, td { padding:8px 10px; border-bottom:1px solid #151517; font-size:12px; text-align:left; }
     th { position:sticky; top:0; background:#121214; z-index:1; }
@@ -100,37 +111,33 @@
     <aside id="admin-panel">
       <div class="ap-header">
         <div class="ap-title">Admin Panel</div>
-        <!-- (reserved for future switches) -->
       </div>
 
       <div class="ap-body">
-        <!-- Spin token on top -->
+        <!-- Spin token (top) -->
         <div class="ap-row">
-          <div class="token-line" id="spin-line">
+          <div class="token-line">
             <span class="token-name" id="spin-name">—</span>:
             <span id="spin-qty">—</span> /
             <span class="usd" id="spin-usd">$—</span>
           </div>
         </div>
-        <!-- Gas token below -->
+        <!-- Gas token (below) -->
         <div class="ap-row">
-          <div class="token-line" id="gas-line">
+          <div class="token-line">
             <span class="token-name" id="gas-name">—</span>:
             <span id="gas-qty">—</span> /
             <span class="usd" id="gas-usd">$—</span>
           </div>
         </div>
-        <!-- Wallet + copy -->
+        <!-- Wallet + icon-only copy -->
         <div class="ap-row">
           <span class="mono" id="pool-addr">Wallet: —</span>
-          <button class="copy-btn" id="copy-btn" title="Copy address">
-            <span class="copy-icon">
-              <svg viewBox="0 0 24 24" fill="none">
-                <rect x="7" y="7" width="12" height="12" rx="2" stroke="#bbb" />
-                <rect x="4" y="4" width="12" height="12" rx="2" stroke="#bbb" />
-              </svg>
-            </span>
-            Copy
+          <button class="icon-btn" id="copy-btn" title="Copy address">
+            <svg viewBox="0 0 24 24" fill="none">
+              <rect x="7" y="7" width="12" height="12" rx="2" stroke="#bbb" />
+              <rect x="4" y="4" width="12" height="12" rx="2" stroke="#bbb" />
+            </svg>
           </button>
         </div>
       </div>
@@ -143,7 +150,7 @@
       <div class="ap-section" id="superadmin-controls" style="display:none;">
         <h4>/SETTOKEN (Manage Server Tokens)</h4>
         <div id="token-list"></div>
-        <div class="token-add" style="margin-top:10px;">
+        <div class="token-add">
           <input type="text" id="new-token-contract" placeholder="New token mint address (contract_address)" />
           <button id="add-token-btn">Add Token</button>
         </div>
@@ -166,7 +173,9 @@
             <thead>
               <tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr>
             </thead>
-            <tbody id="lb-body"></tbody>
+            <tbody id="lb-body">
+              <tr><td colspan="4" class="mono" style="opacity:.8">Loading…</td></tr>
+            </tbody>
           </table>
         </div>
       </div>
@@ -208,15 +217,17 @@
       let contract_address = null;
       let token_name = null;
       let image_url = null;
+      let chartInstance = null;
 
       const token = new URLSearchParams(window.location.search).get("token");
       const server_id = new URLSearchParams(window.location.search).get("server_id");
       const spinButton = document.getElementById("spin-button");
       const messageDiv = document.getElementById("message");
       const overlayImg = document.getElementById("wheel-overlay");
-
-      // Admin panel elements
+      const wheelContainer = document.getElementById('wheel-container');
       const adminPanel = document.getElementById('admin-panel');
+
+      // Admin elements
       const spinNameEl = document.getElementById('spin-name');
       const spinQtyEl  = document.getElementById('spin-qty');
       const spinUsdEl  = document.getElementById('spin-usd');
@@ -227,6 +238,7 @@
       const copyBtn    = document.getElementById('copy-btn');
       const chartBtn   = document.getElementById('chart-button');
 
+      // Superadmin controls
       const superControls = document.getElementById('superadmin-controls');
       const tokenListEl   = document.getElementById('token-list');
       const addTokenBtn   = document.getElementById('add-token-btn');
@@ -244,7 +256,6 @@
       const chartWheel  = document.getElementById('chart-wheel');
       const closeChartBtn = document.getElementById('closeChart');
       const rangeSelect   = document.getElementById('rangeSelect');
-      let chartInstance = null;
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
@@ -253,111 +264,123 @@
         return;
       }
 
-      function resizeCanvas() {
-        const container = document.getElementById('wheel-container');
-        const size = Math.min(container.offsetWidth, container.offsetHeight);
+      /* --- Responsive wheel sizing: keep it where it was, never under the panel --- */
+      function sizeWheel() {
+        const adminVisible = getComputedStyle(adminPanel).display !== 'none' && window.innerWidth > 980;
+        const gap = parseInt(getComputedStyle(document.querySelector('.main')).columnGap) || 18;
+        const sidePad = 32; // .main padding sum per side
+        const availableW = adminVisible
+          ? Math.max(320, window.innerWidth - adminPanel.offsetWidth - gap - sidePad - 16)
+          : Math.max(320, window.innerWidth - sidePad*2);
+        const availableH = window.innerHeight - 180; // leave room for button & message
+        const size = Math.min(availableW, availableH, 700); // cap like before; feels like “how it was”
+        wheelContainer.style.width  = size + 'px';
+        wheelContainer.style.height = size + 'px';
+
+        // resize canvases to exact container
         const canvases = [document.getElementById('canvas-mechanics'), document.getElementById('canvas-text')];
-        canvases.forEach(canvas => {
-          canvas.width = Math.max(size, 1);
-          canvas.height = Math.max(size, 1);
-        });
+        canvases.forEach(c => { c.width = size; c.height = size; });
       }
-      window.addEventListener('resize', () => {
-        resizeCanvas();
-        drawTextWheel();
-      });
-      resizeCanvas();
+      window.addEventListener('resize', () => { sizeWheel(); drawTextWheel(); });
 
-      // USD color logic
+      // USD color class helper
       function usdClass(val) {
-        const num = typeof val === 'string' ? Number(val.replace(/[^0-9.]/g,'')) : Number(val);
-        if (Number.isFinite(num)) {
-          if (num >= 50) return 'usd-high';
-          if (num >= 20) return 'usd-mid';
-          return 'usd-low';
-        }
-        return '';
+        const n = typeof val === 'string' ? Number(val.replace(/[^0-9.]/g,'')) : Number(val);
+        if (!Number.isFinite(n)) return '';
+        if (n >= 50) return 'usd-high';
+        if (n >= 20) return 'usd-mid';
+        return 'usd-low';
       }
 
-      // Admin: load tokens (superadmin list)
+      // Superadmin token list
       async function loadServerTokens() {
         tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">Loading tokens…</div>';
-        const res = await fetch('/api/admin/tokens', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token, server_id, action: 'list' })
-        });
-        const payload = await res.json();
-        if (!res.ok) {
-          tokenListEl.innerHTML = `<div class="mono" style="color:#f66">Error: ${payload.error || 'failed to load'}</div>`;
-          return;
+        try {
+          const res = await fetch('/api/admin/tokens', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, server_id, action: 'list' })
+          });
+          const payload = await res.json();
+          if (!res.ok) {
+            tokenListEl.innerHTML = `<div class="mono" style="color:#f66">Error: ${payload.error || 'failed to load'}</div>`;
+            return;
+          }
+          const rows = payload.tokens || [];
+          if (!rows.length) {
+            tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">No tokens added yet.</div>';
+            return;
+          }
+          tokenListEl.innerHTML = '';
+          rows.forEach(row => {
+            const item = document.createElement('div');
+            item.className = 'token-item';
+            item.innerHTML = `
+              <div class="meta">
+                <span class="badge">${row.enabled ? 'ENABLED' : 'DISABLED'}</span>
+                <span class="token-name">${row.token_name || 'Token'}</span>
+                <span class="mono" style="opacity:.8">${row.contract_address}</span>
+              </div>
+              <div>
+                <button data-contract="${row.contract_address}" data-enabled="${row.enabled ? '1' : '0'}">${row.enabled ? 'Disable' : 'Enable'}</button>
+              </div>`;
+            const btn = item.querySelector('button');
+            btn.onclick = async () => {
+              const newState = !(btn.getAttribute('data-enabled') === '1');
+              btn.disabled = true;
+              const res2 = await fetch('/api/admin/tokens', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token, server_id, action: 'setEnabled', contract_address: row.contract_address, enabled: newState })
+              });
+              btn.disabled = false;
+              if (res2.ok) loadServerTokens(); else alert('Failed to update token');
+            };
+            tokenListEl.appendChild(item);
+          });
+        } catch (e) {
+          tokenListEl.innerHTML = `<div class="mono" style="color:#f66">Error: ${e.message}</div>`;
         }
-        const rows = (payload.tokens || []);
-        if (!rows.length) {
-          tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">No tokens added yet.</div>';
-          return;
-        }
-        tokenListEl.innerHTML = '';
-        rows.forEach(row => {
-          const item = document.createElement('div');
-          item.className = 'token-item';
-          item.innerHTML = `
-            <div class="meta">
-              <span class="badge">${row.enabled ? 'ENABLED' : 'DISABLED'}</span>
-              <span class="token-name">${row.token_name || 'Token'}</span>
-              <span class="mono" style="opacity:.8">${row.contract_address}</span>
-            </div>
-            <div>
-              <button data-contract="${row.contract_address}" data-enabled="${row.enabled ? '1' : '0'}">${row.enabled ? 'Disable' : 'Enable'}</button>
-            </div>
-          `;
-          const btn = item.querySelector('button');
-          btn.onclick = async () => {
-            const newState = !(btn.getAttribute('data-enabled') === '1');
-            btn.disabled = true;
-            const res2 = await fetch('/api/admin/tokens', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token, server_id, action: 'setEnabled', contract_address: row.contract_address, enabled: newState })
-            });
-            btn.disabled = false;
-            if (res2.ok) loadServerTokens(); else alert('Failed to update token');
-          };
-          tokenListEl.appendChild(item);
-        });
       }
 
-      // Leaderboards load
+      // Leaderboards
       async function loadLeaderboards() {
-        const res = await fetch('/api/leaderboards', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token, server_id })
-        });
-        const payload = await res.json();
-        if (!res.ok) return;
-        window._LB = payload;
-        renderLeaderboard();
+        lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="opacity:.8">Loading…</td></tr>`;
+        try {
+          const res = await fetch('/api/leaderboards', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, server_id })
+          });
+          const payload = await res.json();
+          if (!res.ok) {
+            lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="color:#f66">Error: ${payload.error || 'failed to load'}</td></tr>`;
+            return;
+          }
+          window._LB = payload;
+          renderLeaderboard();
+        } catch (e) {
+          lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="color:#f66">Error: ${e.message}</td></tr>`;
+        }
       }
       function renderLeaderboard() {
         const mode = lbMode.value;
         const rows = (window._LB && (mode === 'spins' ? window._LB.bySpins : window._LB.byPayout)) || [];
+        if (!rows.length) {
+          lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="opacity:.8">No data yet.</td></tr>`;
+          return;
+        }
         lbBody.innerHTML = rows.map(r => `
           <tr>
             <td>${r.rank}</td>
             <td>${r.user}</td>
             <td>${r.spins}</td>
             <td>${r.payout}</td>
-          </tr>
-        `).join('');
+          </tr>`).join('');
       }
       lbMode.addEventListener('change', renderLeaderboard);
 
       async function initializeWheel() {
         try {
           const res = await fetch("/api/spin", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
+            method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ token, server_id })
           });
           const data = await res.json();
@@ -367,39 +390,38 @@
           role = data.role || null;
           contract_address = data.contract_address || null;
 
-          // Admin / Superadmin panel
+          // Admin panel
           if (role === 'admin' || role === 'superadmin') {
             const info = data.adminInfo || {};
-            // spin token (top)
+            // spin token line
             spinNameEl.textContent = info.tokenSymbol || token_name || '—';
             const tokAmt = (typeof info.tokenAmt === 'number') ? info.tokenAmt.toLocaleString(undefined, { maximumFractionDigits: 6 }) : String(info.tokenAmt ?? 'N/A');
             spinQtyEl.textContent = tokAmt;
             const tokUsd = (typeof info.tokenUsdValue === 'string') ? info.tokenUsdValue : (typeof info.tokenUsdValue === 'number' ? info.tokenUsdValue.toFixed(2) : 'N/A');
-            spinUsdEl.textContent = `$${tokUsd}`;
-            spinUsdEl.className = `usd ${usdClass(tokUsd)}`;
+            spinUsdEl.textContent = `$${tokUsd}`; spinUsdEl.className = `usd ${usdClass(tokUsd)}`;
 
-            // gas token (below)
+            // gas token line
             gasNameEl.textContent = info.gasSymbol || 'SOL';
             const gasAmt = (typeof info.gasAmt === 'number') ? info.gasAmt.toFixed(4) : String(info.gasAmt ?? 'N/A');
             gasQtyEl.textContent = gasAmt;
             const gasUsd = (typeof info.gasUsdValue === 'string') ? info.gasUsdValue : (typeof info.gasUsdValue === 'number' ? info.gasUsdValue.toFixed(2) : 'N/A');
-            gasUsdEl.textContent = `$${gasUsd}`;
-            gasUsdEl.className = `usd ${usdClass(gasUsd)}`;
+            gasUsdEl.textContent = `$${gasUsd}`; gasUsdEl.className = `usd ${usdClass(gasUsd)}`;
 
             poolAddrEl.textContent = `Wallet: ${info.poolAddr || '—'}`;
             copyBtn.onclick = () => {
               if (info.poolAddr) {
                 navigator.clipboard.writeText(info.poolAddr);
-                copyBtn.innerHTML = '<span class="copy-icon"><svg viewBox="0 0 24 24" fill="none"><rect x="7" y="7" width="12" height="12" rx="2" stroke="#0f0" /><rect x="4" y="4" width="12" height="12" rx="2" stroke="#0f0" /></svg></span> Copied';
+                // quick visual feedback (green strokes)
+                copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><rect x="7" y="7" width="12" height="12" rx="2" stroke="#22c55e" /><rect x="4" y="4" width="12" height="12" rx="2" stroke="#22c55e" /></svg>';
                 setTimeout(() => {
-                  copyBtn.innerHTML = '<span class="copy-icon"><svg viewBox="0 0 24 24" fill="none"><rect x="7" y="7" width="12" height="12" rx="2" stroke="#bbb" /><rect x="4" y="4" width="12" height="12" rx="2" stroke="#bbb" /></svg></span> Copy';
-                }, 1200);
+                  copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><rect x="7" y="7" width="12" height="12" rx="2" stroke="#bbb" /><rect x="4" y="4" width="12" height="12" rx="2" stroke="#bbb" /></svg>';
+                }, 1000);
               }
             };
 
             chartBtn.onclick = () => openChart('past30');
             adminPanel.style.display = 'block';
-            lbWrap.style.display = 'block';
+            document.getElementById('lb-wrap').style.display = 'block';
 
             if (role === 'superadmin') {
               superControls.style.display = 'block';
@@ -409,27 +431,25 @@
                 if (!mint) return;
                 addTokenBtn.disabled = true;
                 const resX = await fetch('/api/admin/tokens', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ token, server_id, action: 'add', contract_address: mint })
                 });
                 addTokenBtn.disabled = false;
-                if (resX.ok) { newTokenInput.value = ''; loadServerTokens(); } else { alert('Failed to add token'); }
+                if (resX.ok) { newTokenInput.value=''; loadServerTokens(); } else { alert('Failed to add token'); }
               };
             }
 
-            // load leaderboards for admins
             loadLeaderboards();
           } else {
             adminPanel.style.display = 'none';
           }
 
-          // Build wheel segments
+          // build segments
           const payout_amounts = Array.isArray(window_payout_amounts) ? window_payout_amounts : [];
           segments = payout_amounts.map((amount) => ({ text: `${amount}`, text2: `${token_name}`, textFillStyle: 'white', textFontFamily: 'Arial' }));
           if (segments.length === 0) throw new Error("No payout amounts configured.");
 
-          // Preload wheel image to avoid broken-image flash
+          // preload overlay image (avoid broken-image flash)
           if (image_url) {
             const img = new Image();
             img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
@@ -437,9 +457,10 @@
             img.src = image_url;
           }
 
-          const container = document.getElementById('wheel-container');
-          const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
+          // size wheel then create mechanics wheel
+          sizeWheel();
 
+          const radius = parseInt(wheelContainer.style.width, 10) / 2;
           mechanicsWheel = new Winwheel({
             canvasId: 'canvas-mechanics',
             numSegments: segments.length,
@@ -451,9 +472,7 @@
               callbackFinished: () => {
                 const spinsLeftText = typeof finalSpinsLeft === 'number' ? `Spins Left Today: ${finalSpinsLeft}` : 'Unlimited spins';
                 messageDiv.textContent = announcedPrize ? `You won: ${announcedPrize}\n${spinsLeftText}` : `Spin completed.\n${spinsLeftText}`;
-                isSpinning = false;
-                spinButton.disabled = true;
-                spinButton.classList.add("hidden");
+                isSpinning = false; spinButton.disabled = true; spinButton.classList.add("hidden");
               }
             }
           });
@@ -490,7 +509,6 @@
         for (let i = 1; i <= numSegments; i++) {
           const seg = segments[i - 1];
           const angle = rotation * (Math.PI / 180) + (i - 1) * segmentAngle + segmentAngle / 2;
-
           ctx.save();
           ctx.translate(centerX, centerY);
           ctx.rotate(angle);
@@ -500,34 +518,27 @@
 
           ctx.font = `${numberFontPx}px ${seg.textFontFamily || 'Arial'}`;
           ctx.fillText(seg.text, 0, -quantityRadius);
-
           ctx.font = `${tokenFontPx}px ${seg.textFontFamily || 'Arial'}`;
           ctx.fillText(seg.text2, 0, -tokenRadius);
-
           ctx.restore();
         }
       }
 
       async function openChart(range) {
         try {
-          // Title + mini spinning wheel
-          const title = token_name || 'Token';
-          chartTitle.textContent = `${title} • Performance`;
+          chartTitle.textContent = `${token_name || 'Token'} • Performance`;
           chartModal.style.display = 'flex';
           if (image_url) {
-            const d = Math.min(document.getElementById('wheel-container').offsetWidth, document.getElementById('wheel-container').offsetHeight);
+            const d = parseInt(wheelContainer.style.width, 10);
             chartWheel.style.width = Math.round(d * 0.25) + 'px';
             chartWheel.style.height = Math.round(d * 0.25) + 'px';
             chartWheel.onload = () => { chartWheel.style.display = 'block'; };
             chartWheel.onerror = () => { chartWheel.style.display = 'none'; };
             chartWheel.src = image_url;
-          } else {
-            chartWheel.style.display = 'none';
-          }
+          } else chartWheel.style.display = 'none';
 
           const res = await fetch('/api/chart', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ token, server_id, contract_address, range })
           });
           const payload = await res.json();
@@ -539,8 +550,7 @@
             type: 'line',
             data: payload.chartData,
             options: Object.assign({
-              responsive: true,
-              maintainAspectRatio: false,
+              responsive: true, maintainAspectRatio: false,
               interaction: { mode: 'index', intersect: false },
               plugins: { legend: { labels: { color: '#ddd' } }, tooltip: { enabled: true } },
               scales: {
@@ -563,8 +573,7 @@
 
         try {
           const res = await fetch("/api/spin", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
+            method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ token, spin: true, server_id })
           });
           const data = await res.json();
@@ -598,13 +607,13 @@
         }
       };
 
-      // Events
       document.getElementById('closeChart').addEventListener('click', () => { chartModal.style.display = 'none'; });
       document.getElementById('rangeSelect').addEventListener('change', (e) => { openChart(e.target.value); });
+      document.getElementById('lbMode').addEventListener('change', renderLeaderboard);
       spinButton.addEventListener("click", spinHandler);
 
-      // Init
       initializeWheel();
+      sizeWheel();
     };
   </script>
 </body>
