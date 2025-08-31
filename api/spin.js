@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair, Transaction } from '@solana/web3.js';
 import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
 import Helius from 'helius-sdk';
@@ -141,16 +141,18 @@ export default async function handler(req, res) {
       const fromTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, fundingWallet.publicKey);
       const toTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, userWallet);
 
-      const transferInstruction = createTransferInstruction(
-        fromTokenAccount.address,
-        toTokenAccount.address,
-        fundingWallet.publicKey,
-        rewardAmount * (10 ** 5)
+      const transaction = new Transaction().add(
+        createTransferInstruction(
+          fromTokenAccount.address,
+          toTokenAccount.address,
+          fundingWallet.publicKey,
+          rewardAmount * (10 ** 5)
+        )
       );
 
-      const transaction = new Transaction().add(transferInstruction);
-
-      const txSignature = await helius.rpc.sendTransaction(transaction, fundingWallet, { skipPreflight: true });
+      // Use Helius relayer for gasless
+      const serializedTx = transaction.serialize({ requireAllSignatures: false });
+      const txSignature = await helius.relay(serializedTx, { payer: userWallet.toString() });
       await connection.confirmTransaction(txSignature);
       console.log("Transaction confirmed with signature:", txSignature);
 
