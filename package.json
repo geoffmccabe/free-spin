@@ -13,7 +13,8 @@
     "@supabase/supabase-js": "^2.45.4",
     "discord.js": "^14.16.2",
     "dotenv": "^16.4.5",
-    "uuid": "^10.0.0"
+    "uuid": "^10.0.0",
+    "helius-sdk": "^1.2.0"
   },
   "engines": {
     "node": "20.x"
