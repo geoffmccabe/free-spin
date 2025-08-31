@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -123,7 +123,7 @@ export default async function handler(req, res) {
       console.error(`No payout amounts for contract: ${contract_address}`);
       return res.status(400).json({ error: 'No payout amounts configured.' });
     }
-
+    
     if (spin) {
       const weights = config.payout_weights || config.payout_amounts.map(() => 1);
       const totalWeight = weights.reduce((a, b) => a + b, 0);
@@ -169,32 +169,35 @@ export default async function handler(req, res) {
 
       let adminInfo = {};
       if (isSuperadmin) {
+        const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+        const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), fundingWallet.publicKey);
         let balance = 'N/A';
-        let usdValue = 'N/A';
-        let poolAddr = 'N/A';
         try {
-          const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-          poolAddr = fundingWallet.publicKey.toString();
-          const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), fundingWallet.publicKey);
           const balanceResponse = await connection.getTokenAccountBalance(ata);
           balance = balanceResponse.value.uiAmount;
-          if (COINMARKETCAP_API_KEY) {
-            const cmcRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=HAROLD&convert=USD`, {
+        } catch (err) {
+          console.error('Balance fetch failed', err);
+        }
+
+        let usdValue = 'N/A';
+        if (COINMARKETCAP_API_KEY) {
+          try {
+            const cmcRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${config.token_name}&convert=USD`, {
               headers: {
                 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY
               }
             });
             const cmcData = await cmcRes.json();
-            usdValue = (balance * cmcData.data.HAROLD.quote.USD.price).toFixed(2);
+            usdValue = (balance * cmcData.data[config.token_name.toUpperCase()].quote.USD.price).toFixed(2);
+          } catch (err) {
+            console.error('CMC price fetch failed', err);
           }
-        } catch (err) {
-          console.error('Admin info failed', err);
         }
 
         adminInfo = {
           tokenAmt: balance,
           usdValue,
-          poolAddr
+          poolAddr: fundingWallet.publicKey.toString()
         };
       }
 
