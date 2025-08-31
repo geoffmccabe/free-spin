@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { Connection, PublicKey, Keypair, Transaction } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
 
@@ -75,10 +75,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'User not found' });
     }
 
-    const role = adminData?.role || null;               // 'admin' | 'superadmin' | null
+    const role = adminData?.role || null; // 'admin' | 'superadmin' | null
     const isSuperadmin = role === 'superadmin';
-    let spins_left = userData.spin_limit;
 
+    let spins_left = userData.spin_limit;
     if (!isSuperadmin) {
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const { data: recentSpins, error: spinCountError } = await supabase
@@ -116,7 +116,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No payout amounts configured.' });
     }
 
-    // -------- CONFIG PATH --------
+    // ---------- CONFIG PATH (no spin) ----------
     if (!spin) {
       const tokenConfig = {
         token_name: config.token_name,
@@ -124,40 +124,81 @@ export default async function handler(req, res) {
         image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Generic_800px.webp'
       };
 
+      // Build admin panel data for admins & superadmins
       let adminInfo = undefined;
-      if (isSuperadmin) {
-        const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-        const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), fundingWallet.publicKey);
-        let balance = 'N/A';
+      if (role === 'admin' || role === 'superadmin') {
         try {
-          const balanceResponse = await connection.getTokenAccountBalance(ata);
-          balance = balanceResponse.value.uiAmount;
-        } catch (err) {
-          console.error('Balance fetch failed', err);
-        }
+          const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+          const poolPubkey = fundingWallet.publicKey;
 
-        let usdValue = 'N/A';
-        if (COINMARKETCAP_API_KEY && typeof balance === 'number') {
+          // SPL token balance
+          let tokenAmt = 'N/A';
           try {
-            const cmcRes = await fetch(
-              `https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${encodeURIComponent(config.token_name.toUpperCase())}&convert=USD`,
-              { headers: { 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY } }
-            );
-            const cmcData = await cmcRes.json();
-            const price = cmcData?.data?.[config.token_name.toUpperCase()]?.quote?.USD?.price;
-            if (typeof price === 'number') {
-              usdValue = (balance * price).toFixed(2);
-            }
-          } catch (err) {
-            console.error('CMC price fetch failed', err);
+            const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), poolPubkey);
+            const balanceResponse = await connection.getTokenAccountBalance(ata);
+            tokenAmt = balanceResponse.value.uiAmount;
+          } catch (e) {
+            console.error('SPL balance fetch failed', e);
           }
-        }
 
-        adminInfo = {
-          tokenAmt: balance,
-          usdValue,
-          poolAddr: fundingWallet.publicKey.toString()
-        };
+          // SOL balance (gas token)
+          let gasAmt = 'N/A';
+          try {
+            const lamports = await connection.getBalance(poolPubkey, 'processed');
+            gasAmt = lamports / LAMPORTS_PER_SOL;
+          } catch (e) {
+            console.error('SOL balance fetch failed', e);
+          }
+
+          // Prices (best-effort)
+          let tokenUsdValue = 'N/A';
+          let gasUsdValue = 'N/A';
+
+          if (COINMARKETCAP_API_KEY) {
+            try {
+              // Gas token: SOL
+              const gasRes = await fetch('https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOL&convert=USD', {
+                headers: { 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY }
+              });
+              const gasJson = await gasRes.json();
+              const solPrice = gasJson?.data?.SOL?.quote?.USD?.price;
+              if (typeof solPrice === 'number' && typeof gasAmt === 'number') {
+                gasUsdValue = (gasAmt * solPrice).toFixed(2);
+              }
+            } catch (e) {
+              console.error('SOL price fetch failed', e);
+            }
+
+            try {
+              // Spin token: use configured token_name symbol if listed
+              const sym = String(config.token_name || '').toUpperCase().trim();
+              if (sym) {
+                const tokRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${encodeURIComponent(sym)}&convert=USD`, {
+                  headers: { 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY }
+                });
+                const tokJson = await tokRes.json();
+                const price = tokJson?.data?.[sym]?.quote?.USD?.price;
+                if (typeof price === 'number' && typeof tokenAmt === 'number') {
+                  tokenUsdValue = (tokenAmt * price).toFixed(2);
+                }
+              }
+            } catch (e) {
+              console.error('Spin token price fetch failed', e);
+            }
+          }
+
+          adminInfo = {
+            gasSymbol: 'SOL',
+            gasAmt,
+            gasUsdValue,
+            tokenSymbol: config.token_name,
+            tokenAmt,
+            tokenUsdValue,
+            poolAddr: poolPubkey.toString()
+          };
+        } catch (e) {
+          console.error('Admin panel build failed', e);
+        }
       }
 
       return res.status(200).json({
@@ -169,8 +210,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // -------- SPIN PATH (fast return) --------
-    // Weighted selection (server-side randomness)
+    // ---------- SPIN PATH (fast return; no full confirm wait) ----------
     const weights = Array.isArray(config.payout_weights) && config.payout_weights.length === config.payout_amounts.length
       ? config.payout_weights
       : config.payout_amounts.map(() => 1);
@@ -187,7 +227,6 @@ export default async function handler(req, res) {
     const rewardAmount = Number(config.payout_amounts[selectedIndex]);
     const prizeText = `${rewardAmount} ${config.token_name}`;
 
-    // Build transfer (current mint uses 5 decimals; if you add others, swap to checked+decimals)
     const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
     const userWallet = new PublicKey(wallet_address);
     const tokenMint = new PublicKey(contract_address);
@@ -200,29 +239,25 @@ export default async function handler(req, res) {
         fromTokenAccount.address,
         toTokenAccount.address,
         fundingWallet.publicKey,
-        rewardAmount * (10 ** 5)
+        rewardAmount * (10 ** 5) // keep as-is for your current mint; switch to checked+decimals if needed
       )
     );
 
-    // Get recent blockhash, sign, and send quickly
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('processed');
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = fundingWallet.publicKey;
     transaction.sign(fundingWallet);
 
-    // QUICK SEND: don't wait full confirmation (reduces UI wait from ~20s to ~1-2s)
     const sig = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true, maxRetries: 3 });
 
-    // Record spin immediately (prevents double-spend attempts while confirmation settles)
     await supabase.from('daily_spins').insert({ discord_id, reward: rewardAmount, contract_address, signature: sig });
     await supabase.from('spin_tokens').update({ used: true, signature: sig }).eq('token', signedToken);
 
-    // Confirm in the background (non-blocking)
+    // background confirm
     connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'processed')
       .then(() => console.log('Transfer processed:', sig))
       .catch((e) => console.error('Confirm error:', e));
 
-    // Return immediately with outcome
     return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText, spins_left });
 
   } catch (err) {
