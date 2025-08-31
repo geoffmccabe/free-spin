@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -182,7 +182,7 @@ export default async function handler(req, res) {
         let usdValue = 'N/A';
         if (COINMARKETCAP_API_KEY) {
           try {
-            const cmcRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${config.token_name}&convert=USD`, {
+            const cmcRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${config.token_name.toUpperCase()}&convert=USD`, {
               headers: {
                 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY
               }
