@@ -95,11 +95,13 @@ export default async function handler(req, res) {
         console.error(`Spin count error: ${spinCountError.message}`);
         return res.status(500).json({ error: 'DB error checking spin history' });
       }
-      spins_left = Math.max(0, userData.spin_limit - (recentSpins?.length || 0));
-      if ((recentSpins?.length || 0) >= userData.spin_limit) {
+      const used = recentSpins?.length || 0;
+      const limit = Number(userData.spin_limit ?? 0);
+      if (used >= limit) {
         console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
         return res.status(403).json({ error: 'Daily spin limit reached' });
       }
+      spins_left = Math.max(0, limit - used);
     } else {
       console.log(`Bypassing spin limit for superadmin: ${discord_id}`);
       spins_left = 'Unlimited';
@@ -122,6 +124,7 @@ export default async function handler(req, res) {
     }
 
     if (spin) {
+      // Weighted selection
       const weights = Array.isArray(config.payout_weights) && config.payout_weights.length === config.payout_amounts.length
         ? config.payout_weights
         : config.payout_amounts.map(() => 1);
@@ -138,6 +141,7 @@ export default async function handler(req, res) {
       const rewardAmount = Number(config.payout_amounts[selectedIndex]);
       const prizeText = `${rewardAmount} ${config.token_name}`;
 
+      // Transfer (uses fixed 5 decimals as in your current setup)
       const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
       const userWallet = new PublicKey(wallet_address);
       const tokenMint = new PublicKey(contract_address);
@@ -150,7 +154,7 @@ export default async function handler(req, res) {
           fromTokenAccount.address,
           toTokenAccount.address,
           fundingWallet.publicKey,
-          rewardAmount * (10 ** 5) // keep as-is for your current mints; switch to checked+decimals if you add others
+          rewardAmount * (10 ** 5)
         )
       );
 
@@ -162,12 +166,14 @@ export default async function handler(req, res) {
 
       return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText, spins_left });
     } else {
+      // Config path
       const tokenConfig = {
         token_name: config.token_name,
         payout_amounts: config.payout_amounts,
         image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Generic_800px.webp'
       };
 
+      // Only show adminInfo for superadmin
       let adminInfo = undefined;
       if (isSuperadmin) {
         const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
@@ -183,9 +189,10 @@ export default async function handler(req, res) {
         let usdValue = 'N/A';
         if (COINMARKETCAP_API_KEY && typeof balance === 'number') {
           try {
-            const cmcRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${encodeURIComponent(config.token_name.toUpperCase())}&convert=USD`, {
-              headers: { 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY }
-            });
+            const cmcRes = await fetch(
+              `https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${encodeURIComponent(config.token_name.toUpperCase())}&convert=USD`,
+              { headers: { 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY } }
+            );
             const cmcData = await cmcRes.json();
             const price = cmcData?.data?.[config.token_name.toUpperCase()]?.quote?.USD?.price;
             if (typeof price === 'number') {
@@ -203,7 +210,7 @@ export default async function handler(req, res) {
         };
       }
 
-      // Include role and contract_address so the front end can show CHART and query by mint.
+      // Include role + contract_address for UI
       return res.status(200).json({
         tokenConfig,
         spins_left,
