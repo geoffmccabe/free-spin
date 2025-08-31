@@ -169,32 +169,33 @@ export default async function handler(req, res) {
       if (isSuperadmin) {
         const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
         const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), fundingWallet.publicKey);
-        let balance;
+        let balance = 0;
         try {
-          balance = await helius.rpc.getTokenAccountBalance(ata.toString());
+          const heliusBalance = await helius.rpc.getTokenAccountBalance(ata.toString());
+          balance = heliusBalance.value.uiAmount;
         } catch (err) {
-          balance = await connection.getTokenAccountBalance(ata);
+          console.error('Helius balance fetch failed', err);
+          const solanaBalance = await connection.getTokenAccountBalance(ata);
+          balance = solanaBalance.value.uiAmount;
         }
+
         let usdValue = 0;
         try {
-          const cmcRes = await fetch('https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?slug=harold-sol', {
+          const cmcRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=HAROLD&convert=USD`, {
             headers: {
               'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY
             }
           });
           const cmcData = await cmcRes.json();
-          usdValue = balance.value.uiAmount * cmcData.data.HAROLD.quote.USD.price;
+          usdValue = balance * cmcData.data.HAROLD.quote.USD.price;
         } catch (err) {
-          try {
-            const heliusPrice = await helius.rpc.getAssetPrice(contract_address);
-            usdValue = balance.value.uiAmount * heliusPrice.price;
-          } catch (err) {
-            console.error('Price fetch failed');
-          }
+          console.error('CMC price fetch failed', err);
+          usdValue = 'N/A';
         }
+
         adminInfo = {
-          tokenAmt: balance.value.uiAmount,
-          usdValue,
+          tokenAmt: balance,
+          usdValue: usdValue,
           poolAddr: fundingWallet.publicKey.toString()
         };
       }
