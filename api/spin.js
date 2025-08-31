@@ -114,6 +114,8 @@ export default async function handler(req, res) {
       .eq('contract_address', contract_address)
       .single();
 
+    console.log(`Fetched config for ${contract_address}: ${JSON.stringify(config)}`); // Diagnostic log
+
     if (configError || !config) {
       console.error(`Config error: ${configError?.message || 'No config found'}`);
       return res.status(400).json({ error: 'Invalid wheel configuration' });
