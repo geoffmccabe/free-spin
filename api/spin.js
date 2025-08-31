@@ -42,6 +42,7 @@ export default async function handler(req, res) {
 
     const { discord_id, wallet_address, contract_address } = tokenData;
 
+    // Fetch server tokens, user spin limit, and admin role in parallel
     const [
       { data: serverTokens, error: serverTokenError },
       { data: userData, error: userError },
@@ -52,15 +53,24 @@ export default async function handler(req, res) {
       supabase.from('server_admins').select('role').eq('discord_id', discord_id).eq('server_id', server_id).single()
     ]);
 
-    const allowedTokens = (serverTokens || []).filter(t => t.enabled !== false).map(t => t.contract_address);
-    if (serverTokenError || !allowedTokens.includes(contract_address)) {
-      return res.status(400).json({ error: 'Invalid token for this server' });
-    }
-    if (userError || !userData) return res.status(400).json({ error: 'User not found' });
-
+    // Determine role BEFORE enforcing token restrictions
     const role = adminData?.role || null; // 'admin' | 'superadmin' | null
     const isSuperadmin = role === 'superadmin';
 
+    // Enforce "token must belong to this server" ONLY for non-superadmins
+    if (!isSuperadmin) {
+      const allowedTokens = (serverTokens || [])
+        .filter(t => t.enabled !== false)
+        .map(t => t.contract_address);
+      if (serverTokenError || !allowedTokens.includes(contract_address)) {
+        return res.status(400).json({ error: 'Invalid token for this server' });
+      }
+    }
+    // Superadmins bypass the check entirely.
+
+    if (userError || !userData) return res.status(400).json({ error: 'User not found' });
+
+    // Spin limits (superadmins bypass)
     let spins_left = userData.spin_limit;
     if (!isSuperadmin) {
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -79,6 +89,7 @@ export default async function handler(req, res) {
       spins_left = 'Unlimited';
     }
 
+    // Load wheel config for this mint
     const { data: config, error: configError } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -98,14 +109,14 @@ export default async function handler(req, res) {
         image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Generic_800px.webp'
       };
 
-      // Admin/Superadmin panel data
+      // Admin/Superadmin panel payload
       let adminInfo = undefined;
       if (role === 'admin' || role === 'superadmin') {
         try {
           const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
           const poolPubkey = fundingWallet.publicKey;
 
-          // SPL token balance
+          // SPL balance
           let tokenAmt = 'N/A';
           try {
             const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), poolPubkey);
@@ -113,14 +124,14 @@ export default async function handler(req, res) {
             tokenAmt = balanceResponse.value.uiAmount;
           } catch (e) { console.error('SPL balance fetch failed', e); }
 
-          // SOL balance (gas token)
+          // SOL (gas) balance
           let gasAmt = 'N/A';
           try {
             const lamports = await connection.getBalance(poolPubkey, 'processed');
             gasAmt = lamports / LAMPORTS_PER_SOL;
           } catch (e) { console.error('SOL balance fetch failed', e); }
 
-          // Prices
+          // Prices (best-effort)
           let tokenUsdValue = 'N/A';
           let gasUsdValue = 'N/A';
           if (COINMARKETCAP_API_KEY) {
@@ -192,7 +203,7 @@ export default async function handler(req, res) {
         fromTokenAccount.address,
         toTokenAccount.address,
         fundingWallet.publicKey,
-        rewardAmount * (10 ** 5) // keep as-is unless you add mints with different decimals
+        rewardAmount * (10 ** 5) // keep as-is unless you move to checked transfer with dynamic decimals
       )
     );
 
