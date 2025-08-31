@@ -8,23 +8,23 @@
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    /* ====== LAYOUT (unchanged wheel area & button) ====== */
+    /* ----- Original wheel layout & button ----- */
     html, body { background:#000; color:#fff; font-family: Inter, system-ui, sans-serif; margin:0; padding:0; height:100vh; }
     .main { height:100vh; display:grid; grid-template-columns: 1fr 420px; gap:18px; align-items:center; justify-items:center; padding:16px; box-sizing:border-box; }
     @media (max-width: 980px) { .main { grid-template-columns: 1fr; grid-auto-rows: max-content; overflow:auto; } }
 
     #wheel-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; }
-    /* ← back to the original sizing so position/alignment match your old layout */
     #wheel-container { position:relative; width:min(80vmin, 640px); height:min(80vmin, 640px); }
     #pointer { position:absolute; top:-20px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:15px solid transparent; border-right:15px solid transparent; border-top:20px solid red; z-index:10; }
     #canvas-mechanics { position:absolute; inset:0; z-index:1; opacity:0; }
     #wheel-overlay { position:absolute; inset:0; z-index:2; pointer-events:none; display:none; }
     #canvas-text { position:absolute; inset:0; z-index:3; pointer-events:none; }
+
     #spin-button { display:block; margin:12px auto 0; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
     #spin-button:disabled, #spin-button.hidden { display:none; }
     #message { margin-top:10px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; }
 
-    /* ====== Admin Panel ====== */
+    /* ----- Admin Panel (right) ----- */
     #admin-panel { display:none; width:100%; max-width:420px; align-self:stretch; background:#0b0b0c; border:1px solid #1f1f20; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.5); overflow:hidden; }
     .ap-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border-bottom:1px solid #1c1c1e; }
     .ap-title { font-weight:700; letter-spacing:0.3px; }
@@ -38,12 +38,12 @@
     .usd-low  { color:#ef4444; } /* <$20 red */
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size:13px; }
 
-    /* Icon-only copy, same row as wallet text (no button chrome) */
+    /* inline copy icon (no button chrome) */
     .copy-icon { margin-left:8px; display:inline-flex; vertical-align:middle; cursor:pointer; }
     .copy-icon svg { width:16px; height:16px; }
     .copy-copied rect { stroke:#22c55e !important; }
 
-    .ap-actions { display:flex; justify-content:flex-end; padding:10px 16px 12px; border-top:1px solid #1c1c1e; }
+    .ap-actions { display:flex; justify-content:flex-end; padding:10px 16px 12px; border-top:1px solid #1c1ce; }
     #chart-button { padding:8px 12px; font-size:12px; background:#0ea5e9; color:#fff; border:none; border-radius:10px; cursor:pointer; }
 
     /* Superadmin controls */
@@ -57,7 +57,7 @@
     .token-add { display:flex; gap:8px; margin-top:10px; }
     .token-add input { flex:1; min-width:0; background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:8px 10px; font-size:12px; }
 
-    /* Leaderboards: taller & themed scrollbar */
+    /* Leaderboards: taller & dark scrollbar */
     .lb-wrap { border-top:1px solid #1c1c1e; padding:12px 16px; display:flex; flex-direction:column; gap:10px; }
     .lb-controls { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
     .lb-controls select { background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:6px 10px; font-size:12px; }
@@ -66,7 +66,6 @@
     th, td { padding:8px 10px; border-bottom:1px solid #151517; font-size:12px; text-align:left; }
     th { position:sticky; top:0; background:#121214; z-index:1; }
     tr:last-child td { border-bottom:none; }
-    /* Dark scrollbars */
     .lb-table::-webkit-scrollbar { width:10px; }
     .lb-table::-webkit-scrollbar-track { background:#0f0f10; }
     .lb-table::-webkit-scrollbar-thumb { background:#2a2a2c; border-radius:10px; }
@@ -89,7 +88,7 @@
 </head>
 <body>
   <div class="main">
-    <!-- Left: Wheel (unchanged behavior & alignment) -->
+    <!-- Left: Wheel (unchanged) -->
     <div id="wheel-wrap">
       <div id="wheel-container">
         <div id="pointer"></div>
@@ -217,7 +216,7 @@
       const messageDiv = document.getElementById("message");
       const overlayImg = document.getElementById("wheel-overlay");
 
-      // Admin panel refs
+      // Admin refs
       const adminPanel = document.getElementById('admin-panel');
       const spinNameEl = document.getElementById('spin-name');
       const spinQtyEl  = document.getElementById('spin-qty');
@@ -255,6 +254,24 @@
         return;
       }
 
+      /* ---- CRITICAL FIX: keep canvas pixel size == container size ---- */
+      function resizeCanvas() {
+        const container = document.getElementById('wheel-container');
+        const size = Math.min(container.offsetWidth, container.offsetHeight);
+        const mech = document.getElementById('canvas-mechanics');
+        const text = document.getElementById('canvas-text');
+        mech.width = mech.height = size;
+        text.width = text.height = size;
+
+        // keep Winwheel geometry in sync
+        if (mechanicsWheel) {
+          mechanicsWheel.outerRadius = size / 2;
+          mechanicsWheel.draw(false);
+          drawTextWheel(mechanicsWheel.rotationAngle - 60);
+        }
+      }
+      window.addEventListener('resize', () => { resizeCanvas(); });
+
       function usdClass(val) {
         const n = typeof val === 'string' ? Number(val.replace(/[^0-9.]/g,'')) : Number(val);
         if (!Number.isFinite(n)) return '';
@@ -286,7 +303,7 @@
             item.className = 'token-item';
             item.innerHTML = `
               <div class="meta">
-                <span class="badge">${row.enabled ? 'ENABLED' : 'DISABLED'}</span>
+                <span class="badge">ENABLED</span>
                 <span class="token-name">${row.token_name || 'Token'}</span>
                 <span class="mono" style="opacity:.8">${row.contract_address}</span>
               </div>
@@ -361,14 +378,12 @@
           // Admin / Superadmin panel
           if (role === 'admin' || role === 'superadmin') {
             const info = data.adminInfo || {};
-            // spin token (top)
             spinNameEl.textContent = info.tokenSymbol || token_name || '—';
             const tokAmt = (typeof info.tokenAmt === 'number') ? info.tokenAmt.toLocaleString(undefined, { maximumFractionDigits: 6 }) : String(info.tokenAmt ?? 'N/A');
             spinQtyEl.textContent = tokAmt;
             const tokUsd = (typeof info.tokenUsdValue === 'string') ? info.tokenUsdValue : (typeof info.tokenUsdValue === 'number' ? info.tokenUsdValue.toFixed(2) : 'N/A');
             spinUsdEl.textContent = `$${tokUsd}`; spinUsdEl.className = `usd ${usdClass(tokUsd)}`;
 
-            // gas token (below)
             gasNameEl.textContent = info.gasSymbol || 'SOL';
             const gasAmt = (typeof info.gasAmt === 'number') ? info.gasAmt.toFixed(4) : String(info.gasAmt ?? 'N/A');
             gasQtyEl.textContent = gasAmt;
@@ -402,8 +417,8 @@
               };
             }
 
-            // leaderboards
-            document.getElementById('lb-wrap').style.display = 'block';
+            // Leaderboards
+            lbWrap.style.display = 'block';
             loadLeaderboards();
           } else {
             adminPanel.style.display = 'none';
@@ -414,6 +429,9 @@
           segments = payout_amounts.map((amount) => ({ text: `${amount}`, text2: `${token_name}`, textFillStyle: 'white', textFontFamily: 'Arial' }));
           if (!segments.length) throw new Error("No payout amounts configured.");
 
+          // Pre-size canvases BEFORE creating wheel (fix for tiny text)
+          resizeCanvas();
+
           // Preload overlay image to avoid broken-image flash
           if (image_url) {
             const img = new Image();
@@ -422,8 +440,7 @@
             img.src = image_url;
           }
 
-          const container = document.getElementById('wheel-container');
-          const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
+          const radius = document.getElementById('canvas-mechanics').width / 2;
 
           mechanicsWheel = new Winwheel({
             canvasId: 'canvas-mechanics',
@@ -443,10 +460,10 @@
             }
           });
 
-          drawTextWheel();
-          /* ← SPIN button shows like before */
-          spinButton.disabled = false;
+          drawTextWheel();                   // initial labels
+          spinButton.disabled = false;       // show SPIN exactly like before
           spinButton.classList.remove("hidden");
+
         } catch (err) {
           messageDiv.textContent = (err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached')
             ? 'You have used all your free spins today'
@@ -497,10 +514,9 @@
       async function openChart(range) {
         try {
           chartTitle.textContent = `${token_name || 'Token'} • Performance`;
-          chartModal.style.display = 'flex';
+          document.getElementById('chart-modal').style.display = 'flex';
           if (image_url) {
-            const wcont = document.getElementById('wheel-container');
-            const d = Math.min(wcont.offsetWidth, wcont.offsetHeight);
+            const d = document.getElementById('canvas-mechanics').width;
             chartWheel.style.width = Math.round(d * 0.25) + 'px';
             chartWheel.style.height = Math.round(d * 0.25) + 'px';
             chartWheel.onload = () => { chartWheel.style.display = 'block'; };
@@ -585,8 +601,8 @@
         }
       };
 
-      closeChartBtn.addEventListener('click', () => { chartModal.style.display = 'none'; });
-      rangeSelect.addEventListener('change', (e) => { openChart(e.target.value); });
+      document.getElementById('closeChart').addEventListener('click', () => { chartModal.style.display = 'none'; });
+      document.getElementById('rangeSelect').addEventListener('change', (e) => { openChart(e.target.value); });
       lbMode.addEventListener('change', renderLeaderboard);
       spinButton.addEventListener("click", spinHandler);
 
