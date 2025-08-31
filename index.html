@@ -3,10 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Spin the wheel</title>
+  <title>Spin the Wheel</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.4/TweenMax.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     html, body { background: #000000; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 0; overflow: hidden; height: 100vh; }
     .container { max-height: 100vh; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; }
@@ -16,11 +15,10 @@
     #wheel-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
     #canvas-text { position: absolute; top: 0; left: 0; z-index: 3; pointer-events: none; width: 100%; height: 100%; }
     #spin-button { display: block; margin: 20px auto; padding: 8px 16px; font-size: 14px; background-color: #ff4500; color: white; border: none; border-radius: 10px; cursor: pointer; }
-    #chart-button { display: none; margin: 20px auto; padding: 8px 16px; font-size: 14px; background-color: #00ff00; color: white; border: none; border-radius: 10px; cursor: pointer; }
     #spin-button:disabled, #spin-button.hidden { display: none; }
     #error-message { margin-top: 10px; color: white; font-size: 14px; z-index: 11; position: relative; max-width: 800px; font-weight: bold; text-align: center; white-space: pre-line; }
-    #chart-container { width: 80vmin; height: 80vmin; margin: 20px auto; }
-    #date-range { margin: 10px; }
+    #admin-info { position: absolute; bottom: 10px; right: 10px; font-size: 12px; color: white; text-align: right; }
+    #copy-btn { background: none; border: none; color: white; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -32,16 +30,10 @@
       <canvas id="canvas-text"></canvas>
     </div>
     <button id="spin-button" disabled>SPIN</button>
-    <button id="chart-button">CHART</button>
     <div id="error-message"></div>
-    <div id="chart-container" style="display: none;">
-      <canvas id="stats-chart"></canvas>
-      <div id="date-range">
-        <input type="date" id="start-date">
-        <input type="date" id="end-date">
-        <button id="update-chart">Update</button>
-        <button id="all-time">All Time</button>
-      </div>
+    <div id="admin-info" style="display: none;">
+      <div id="token-balance"></div>
+      <div>POOL ADDR: <span id="pool-addr"></span> <button id="copy-btn">📋</button></div>
     </div>
   </div>
   <script>
@@ -53,16 +45,11 @@
       let isSpinning = false;
       let announcedPrize = null;
       let finalSpinsLeft = null;
-      let isAdmin = false;
-      let chart = null;
 
       const token = new URLSearchParams(window.location.search).get("token");
       const server_id = new URLSearchParams(window.location.search).get("server_id");
       const spinButton = document.getElementById("spin-button");
-      const chartButton = document.getElementById("chart-button");
       const messageDiv = document.getElementById("error-message");
-      const wheelContainer = document.getElementById("wheel-container");
-      const chartContainer = document.getElementById("chart-container");
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
@@ -95,11 +82,6 @@
           const data = await res.json();
           if (!res.ok || !data.tokenConfig) {
             throw new Error(data.error || "Failed to load spin configuration");
-          }
-
-          isAdmin = data.is_admin || false;
-          if (isAdmin) {
-            chartButton.style.display = 'block';
           }
 
           const { token_name, payout_amounts, image_url } = data.tokenConfig;
@@ -239,41 +221,6 @@
 
       spinButton.addEventListener("click", spinHandler);
       initializeWheel();
-
-      chartButton.addEventListener("click", async () => {
-        wheelContainer.style.display = 'none';
-        spinButton.style.display = 'none';
-        chartContainer.style.display = 'block';
-        await loadChart('past30');
-      });
-
-      async function loadChart(range) {
-        const res = await fetch("/api/chart", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token, server_id, range })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Server error during chart load");
-
-        const ctx = document.getElementById('stats-chart').getContext('2d');
-        if (chart) chart.destroy();
-        chart = new Chart(ctx, {
-          type: 'line',
-          data: data.chartData,
-          options: data.options
-        });
-      }
-
-      document.getElementById('update-chart').addEventListener('click', () => {
-        const start = document.getElementById('start-date').value;
-        const end = document.getElementById('end-date').value;
-        loadChart({ start, end });
-      });
-
-      document.getElementById('all-time').addEventListener('click', () => {
-        loadChart('all');
-      });
     };
   </script>
 </body>
