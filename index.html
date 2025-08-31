@@ -26,10 +26,14 @@
     <div id="wheel-container">
       <div id="pointer"></div>
       <canvas id="canvas-mechanics"></canvas>
-      <img id="wheel-overlay" src="" alt="Wheel Overlay">
+      <!-- Hide overlay image until it finishes loading to avoid broken-image flash -->
+      <img id="wheel-overlay" alt="Wheel Overlay" style="display:none;" />
       <canvas id="canvas-text"></canvas>
     </div>
-    <button id="spin-button" disabled>SPIN</button>
+    <div style="display:flex; gap:12px; align-items:center; justify-content:center; margin-top: 6px;">
+      <button id="spin-button" disabled>SPIN</button>
+      <button id="chart-button" style="display:none; padding:8px 16px; font-size:14px; background:#0ea5e9; color:#fff; border:none; border-radius:10px; cursor:pointer;">CHART</button>
+    </div>
     <div id="error-message"></div>
     <div id="admin-info" style="display: none;">
       <div id="token-balance"></div>
@@ -49,8 +53,10 @@
       const token = new URLSearchParams(window.location.search).get("token");
       const server_id = new URLSearchParams(window.location.search).get("server_id");
       const spinButton = document.getElementById("spin-button");
+      const chartButton = document.getElementById("chart-button");
       const messageDiv = document.getElementById("error-message");
       const adminInfoDiv = document.getElementById("admin-info");
+      const overlayImg = document.getElementById("wheel-overlay");
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
@@ -89,6 +95,22 @@
           // ✅ Correctly read nested shape from API
           const { token_name, payout_amounts, image_url } = data.tokenConfig;
           const adminInfo = data.adminInfo;
+          const role = data.role || null; // 'admin' or 'superadmin' when server-admin
+          const contract_address = data.contract_address || null; // for chart link
+
+          // Show CHART button for admin or superadmin if we have the role or at least adminInfo (superadmin-only)
+          if (role === 'admin' || role === 'superadmin' || adminInfo) {
+            chartButton.style.display = 'inline-block';
+            chartButton.onclick = () => {
+              if (contract_address) {
+                // Use Birdeye which accepts mint address directly
+                window.open(`https://birdeye.so/token/${contract_address}?chain=solana`, '_blank');
+              } else {
+                // Fallback: try by symbol, may be ambiguous
+                window.open(`https://birdeye.so/?chain=solana&symbol=${encodeURIComponent(token_name)}`, '_blank');
+              }
+            };
+          }
 
           if (adminInfo) {
             document.getElementById("token-balance").textContent = `${adminInfo.tokenAmt} = $${adminInfo.usdValue}`;
@@ -112,7 +134,18 @@
             throw new Error("No payout amounts configured.");
           }
 
-          document.getElementById("wheel-overlay").src = image_url;
+          // Preload overlay image to avoid broken-image icon flash
+          if (image_url) {
+            const img = new Image();
+            img.onload = () => {
+              overlayImg.src = image_url;
+              overlayImg.style.display = 'block';
+            };
+            img.onerror = () => {
+              overlayImg.style.display = 'none';
+            };
+            img.src = image_url;
+          }
 
           const container = document.getElementById('wheel-container');
           const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
@@ -212,7 +245,7 @@
             const adjustedAngle = mechanicsWheel.rotationAngle - 30;
             textWheel.rotationAngle = adjustedAngle - 60;
             textWheel.draw();
-            document.getElementById("wheel-overlay").style.transform = `rotate(${adjustedAngle}deg)`;
+            overlayImg.style.transform = `rotate(${adjustedAngle}deg)`;
           };
 
           mechanicsWheel.stopAnimation(false);
