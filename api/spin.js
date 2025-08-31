@@ -2,14 +2,17 @@ import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
 import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
+import Helius from 'helius-sdk';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL;
 
 const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const helius = new Helius(HELIUS_RPC_URL);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -97,7 +100,7 @@ export default async function handler(req, res) {
         console.error(`Spin count error: ${spinCountError.message}`);
         throw new Error('DB error checking spin history');
       }
-      spins_left = userData.spin_limit - recentSpins.length;
+      spins_left = Math.max(0, userData.spin_limit - recentSpins.length);
       if (recentSpins.length >= userData.spin_limit) {
         console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
         return res.status(403).json({ error: 'Daily spin limit reached' });
@@ -138,16 +141,17 @@ export default async function handler(req, res) {
       const fromTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, fundingWallet.publicKey);
       const toTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, userWallet);
 
-      const transaction = new Transaction().add(
-        createTransferInstruction(
-          fromTokenAccount.address,
-          toTokenAccount.address,
-          fundingWallet.publicKey,
-          rewardAmount * (10 ** 5)
-        )
+      const transferInstruction = createTransferInstruction(
+        fromTokenAccount.address,
+        toTokenAccount.address,
+        fundingWallet.publicKey,
+        rewardAmount * (10 ** 5)
       );
 
-      const txSignature = await sendAndConfirmTransaction(connection, transaction, [fundingWallet]);
+      const transaction = new Transaction().add(transferInstruction);
+
+      const txSignature = await helius.rpc.sendTransaction(transaction, fundingWallet, { skipPreflight: true });
+      await connection.confirmTransaction(txSignature);
       console.log("Transaction confirmed with signature:", txSignature);
 
       await supabase.from('daily_spins').insert({ discord_id, reward: rewardAmount, contract_address, signature: txSignature });
