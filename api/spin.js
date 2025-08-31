@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair, Transaction } from '@solana/web3.js';
 import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
 import { Helius } from 'helius-sdk';
@@ -98,7 +98,7 @@ export default async function handler(req, res) {
 
       if (spinCountError) {
         console.error(`Spin count error: ${spinCountError.message}`);
-        throw new Error('DB error checking spin history');
+        return res.status(500).json({ error: 'DB error checking spin history' });
       }
       spins_left = Math.max(0, userData.spin_limit - recentSpins.length);
       if (recentSpins.length >= userData.spin_limit) {
@@ -155,7 +155,10 @@ export default async function handler(req, res) {
 
       transaction.sign(fundingWallet);
 
-      const serializedTransaction = transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
+      const serializedTransaction = transaction.serialize({
+        requireAllSignatures: false,
+        verifySignatures: false
+      });
 
       const txSignature = await helius.rpc.sendTransaction(serializedTransaction, { skipPreflight: true });
       await connection.confirmTransaction(txSignature);
