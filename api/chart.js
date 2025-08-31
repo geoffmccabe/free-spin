@@ -26,10 +26,7 @@ export default async function handler(req, res) {
       .select('discord_id')
       .eq('token', token)
       .single();
-
-    if (tokenError || !tokenData) {
-      return res.status(400).json({ error: 'Invalid token' });
-    }
+    if (tokenError || !tokenData) return res.status(400).json({ error: 'Invalid token' });
 
     // Check admin or superadmin on this server
     const { data: adminData } = await supabase
@@ -38,7 +35,6 @@ export default async function handler(req, res) {
       .eq('discord_id', tokenData.discord_id)
       .eq('server_id', server_id)
       .single();
-
     const role = adminData?.role;
     if (role !== 'admin' && role !== 'superadmin') {
       return res.status(403).json({ error: 'Admin access required' });
@@ -55,12 +51,12 @@ export default async function handler(req, res) {
       query = query.gte('created_at', thirtyDaysAgo);
     } else if (typeof range === 'object' && range?.start && range?.end) {
       query = query.gte('created_at', range.start).lte('created_at', range.end);
-    } // 'all' => no extra time filter
+    } // 'all' => no extra filter
 
     const { data: spins, error } = await query;
     if (error) throw new Error('DB error fetching spins');
 
-    // Aggregate per day
+    // Aggregate per day: raw values (no normalization)
     const aggregated = (spins || []).reduce((acc, spin) => {
       const date = spin.created_at.split('T')[0];
       if (!acc[date]) acc[date] = { spins: 0, payout: 0 };
@@ -73,24 +69,18 @@ export default async function handler(req, res) {
     const spinsData = dates.map(d => aggregated[d].spins);
     const payoutData = dates.map(d => aggregated[d].payout);
 
-    // Safe normalization (avoid divide-by-zero)
-    const maxSpins = Math.max(1, ...(spinsData.length ? spinsData : [1]));
-    const maxPayout = Math.max(1, ...(payoutData.length ? payoutData : [1]));
-    const normalizedSpins = spinsData.map(v => (v / maxSpins) * 100);
-    const normalizedPayout = payoutData.map(v => (v / maxPayout) * 100);
-
     const chartData = {
       labels: dates,
       datasets: [
-        { label: '# of Spins (norm.)', data: normalizedSpins, yAxisID: 'y', tension: 0.2 },
-        { label: 'Payout Amount (norm.)', data: normalizedPayout, yAxisID: 'y1', tension: 0.2 }
+        { label: '# of Spins', data: spinsData, yAxisID: 'y', tension: 0.2 },
+        { label: 'Payout Amount', data: payoutData, yAxisID: 'y1', tension: 0.2 }
       ]
     };
 
     const options = {
       scales: {
-        y:  { type: 'linear', position: 'left',  title: { display: true, text: '# Spins (Normalized)' } },
-        y1: { type: 'linear', position: 'right', title: { display: true, text: 'Payout Amount (Normalized)' }, grid: { drawOnChartArea: false } }
+        y:  { type: 'linear', position: 'left',  title: { display: true, text: '# Spins' } },
+        y1: { type: 'linear', position: 'right', title: { display: true, text: 'Payout Amount' }, grid: { drawOnChartArea: false } }
       }
     };
 
