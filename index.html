@@ -9,23 +9,37 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     html, body { background:#000; color:#fff; font-family: Inter, system-ui, sans-serif; text-align:center; margin:0; padding:0; overflow:hidden; height:100vh; }
-    .container { max-height:100vh; overflow:hidden; display:flex; flex-direction:column; align-items:center; justify-content:center; }
-    #wheel-container { position:relative; width:80vmin; height:80vmin; margin:20px auto; }
+    .main { height:100vh; display:grid; grid-template-columns: 1fr 380px; gap:18px; align-items:center; justify-items:center; padding:16px; box-sizing:border-box; }
+    @media (max-width: 900px) {
+      .main { grid-template-columns: 1fr; grid-auto-rows: max-content; overflow:auto; }
+    }
+
+    #wheel-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    #wheel-container { position:relative; width:min(80vmin, 640px); height:min(80vmin, 640px); }
     #pointer { position:absolute; top:-20px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:15px solid transparent; border-right:15px solid transparent; border-top:20px solid red; z-index:10; }
     #canvas-mechanics { position:absolute; top:0; left:0; z-index:1; opacity:0; width:100%; height:100%; }
     #wheel-overlay { position:absolute; top:0; left:0; width:100%; height:100%; z-index:2; pointer-events:none; display:none; }
     #canvas-text { position:absolute; top:0; left:0; z-index:3; pointer-events:none; width:100%; height:100%; }
+
     #spin-button { display:block; margin:12px auto 0; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
     #spin-button:disabled, #spin-button.hidden { display:none; }
-    #chart-button { padding:10px 16px; font-size:14px; background:#0ea5e9; color:#fff; border:none; border-radius:12px; cursor:pointer; display:none; }
-    #error-message { margin-top:10px; color:#fff; font-size:14px; z-index:11; position:relative; max-width:800px; font-weight:600; text-align:center; white-space:pre-line; }
-    #admin-info { position:absolute; bottom:10px; right:10px; font-size:12px; color:#fff; text-align:right; }
-    #copy-btn { background:none; border:none; color:#fff; cursor:pointer; }
+
+    #message { margin-top:10px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; }
+
+    /* Admin Panel (right side) */
+    #admin-panel { display:none; width:100%; max-width:380px; align-self:stretch; background:#0b0b0c; border:1px solid #1f1f20; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.5); overflow:hidden; }
+    .ap-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border-bottom:1px solid #1c1c1e; }
+    .ap-title { font-weight:700; letter-spacing:0.3px; }
+    .ap-body { text-align:left; padding:14px 16px 18px; display:flex; flex-direction:column; gap:12px; }
+    .ap-row { font-size:14px; color:#eaeaea; line-height:1.5; }
+    .ap-row .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:13px; }
+    .ap-actions { display:flex; justify-content:flex-end; padding:10px 16px 16px; border-top:1px solid #1c1c1e; }
+    #chart-button { padding:8px 12px; font-size:12px; background:#0ea5e9; color:#fff; border:none; border-radius:10px; cursor:pointer; }
 
     /* Chart modal */
     #chart-modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.6); z-index:50; }
     .panel { width:min(1000px,92vw); height:min(650px,88vh); background:#0b0b0c; border:1px solid #1f1f20; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto 1fr; grid-template-areas:'header header' 'left right'; overflow:hidden; }
-    .panel-header { grid-area:header; display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border-bottom:1px solid #1c1c1e; }
+    .panel-header { grid-area: header; display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border-bottom:1px solid #1c1c1e; }
     .panel-title { font-weight:700; letter-spacing:0.3px; }
     .panel-left { grid-area:left; display:flex; align-items:center; justify-content:center; padding:16px; border-right:1px solid #1c1c1e; }
     .panel-right { grid-area:right; position:relative; padding:12px 16px; }
@@ -34,29 +48,44 @@
     .toolbar select { background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:6px 10px; }
     .close-btn { background:#222; border:1px solid #444; color:#fff; padding:8px 12px; border-radius:10px; cursor:pointer; }
 
-    /* Slow spin for preview wheel */
+    /* Slow spin for preview wheel in chart modal */
     @keyframes slowspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     #chart-wheel { width:20vmin; height:20vmin; animation:slowspin 15s linear infinite; filter:drop-shadow(0 8px 20px rgba(0,0,0,0.5)); display:none; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div id="wheel-container">
-      <div id="pointer"></div>
-      <canvas id="canvas-mechanics"></canvas>
-      <!-- Overlay image is preloaded then shown (prevents broken-image flash) -->
-      <img id="wheel-overlay" alt="Wheel Overlay"/>
-      <canvas id="canvas-text"></canvas>
-    </div>
-    <div style="display:flex; gap:12px; align-items:center; justify-content:center; margin-top: 6px;">
+  <div class="main">
+    <!-- Left: Wheel -->
+    <div id="wheel-wrap">
+      <div id="wheel-container">
+        <div id="pointer"></div>
+        <canvas id="canvas-mechanics"></canvas>
+        <img id="wheel-overlay" alt="Wheel Overlay"/>
+        <canvas id="canvas-text"></canvas>
+      </div>
       <button id="spin-button" disabled>SPIN</button>
-      <button id="chart-button">CHART</button>
+      <div id="message"></div>
     </div>
-    <div id="error-message"></div>
-    <div id="admin-info" style="display:none;">
-      <div id="token-balance"></div>
-      <div>POOL ADDR: <span id="pool-addr"></span> <button id="copy-btn">📋</button></div>
-    </div>
+
+    <!-- Right: Admin Panel -->
+    <aside id="admin-panel">
+      <div class="ap-header">
+        <div class="ap-title">Admin Panel</div>
+        <!-- reserved area for future controls -->
+      </div>
+      <div class="ap-body">
+        <div class="ap-row" id="balances-line">
+          <!-- [Gas]: qty / $usd — [Token]: qty / $usd -->
+        </div>
+        <div class="ap-row">
+          <span class="mono" id="pool-addr">Wallet: —</span>
+          <button id="copy-btn" title="Copy address" style="margin-left:6px; background:none; border:1px solid #444; color:#fff; padding:4px 8px; border-radius:8px; cursor:pointer;">📋</button>
+        </div>
+      </div>
+      <div class="ap-actions">
+        <button id="chart-button">Open Chart</button>
+      </div>
+    </aside>
   </div>
 
   <!-- Chart Modal -->
@@ -86,7 +115,6 @@
     window.onload = function () {
       let segments = [];
       let mechanicsWheel = null;
-      let textWheel = null;
       let hasSpun = false;
       let isSpinning = false;
       let announcedPrize = null;
@@ -100,10 +128,14 @@
       const token = new URLSearchParams(window.location.search).get("token");
       const server_id = new URLSearchParams(window.location.search).get("server_id");
       const spinButton = document.getElementById("spin-button");
-      const chartButton = document.getElementById("chart-button");
-      const messageDiv = document.getElementById("error-message");
-      const adminInfoDiv = document.getElementById("admin-info");
+      const messageDiv = document.getElementById("message");
       const overlayImg = document.getElementById("wheel-overlay");
+
+      const adminPanel = document.getElementById('admin-panel');
+      const balancesLine = document.getElementById('balances-line');
+      const poolAddrEl = document.getElementById('pool-addr');
+      const copyBtn = document.getElementById('copy-btn');
+      const chartBtn = document.getElementById('chart-button');
 
       const chartModal = document.getElementById('chart-modal');
       const chartCanvas = document.getElementById('chartCanvas');
@@ -114,7 +146,6 @@
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
-        messageDiv.style.display = "block";
         spinButton.disabled = true;
         spinButton.classList.add("hidden");
         return;
@@ -132,7 +163,6 @@
 
       window.addEventListener('resize', () => {
         resizeCanvas();
-        // Recompute font sizes on resize (fixes tiny screens while keeping desktop pretty)
         drawTextWheel();
       });
       resizeCanvas();
@@ -145,46 +175,50 @@
             body: JSON.stringify({ token, server_id })
           });
           const data = await res.json();
+          if (!res.ok || !data.tokenConfig) throw new Error(data.error || "Failed to load spin configuration");
 
-          if (!res.ok || !data.tokenConfig) {
-            throw new Error(data.error || "Failed to load spin configuration");
-          }
-
-          // Read nested config
           ({ token_name, payout_amounts: window_payout_amounts, image_url } = data.tokenConfig);
-          role = data.role || null;               // 'admin' | 'superadmin' | null
-          contract_address = data.contract_address || null; // mint for chart API
-          const adminInfo = data.adminInfo;
+          role = data.role || null;
+          contract_address = data.contract_address || null;
 
-          // CHART visible for admin/superadmin
+          // Admin panel visibility + contents
           if (role === 'admin' || role === 'superadmin') {
-            chartButton.style.display = 'inline-block';
-            chartButton.onclick = () => openChart('past30');
+            const info = data.adminInfo || {};
+            const gasSym = info.gasSymbol ?? '—';
+            const gasAmt = typeof info.gasAmt === 'number' ? info.gasAmt.toFixed(4) : String(info.gasAmt ?? 'N/A');
+            const gasUsd = typeof info.gasUsdValue === 'string' ? info.gasUsdValue : (typeof info.gasUsdValue === 'number' ? info.gasUsdValue.toFixed(2) : 'N/A');
+
+            const tokSym = info.tokenSymbol ?? (token_name || '—');
+            const tokAmt = typeof info.tokenAmt === 'number' ? info.tokenAmt.toLocaleString(undefined, { maximumFractionDigits: 6 }) : String(info.tokenAmt ?? 'N/A');
+            const tokUsd = typeof info.tokenUsdValue === 'string' ? info.tokenUsdValue : (typeof info.tokenUsdValue === 'number' ? info.tokenUsdValue.toFixed(2) : 'N/A');
+
+            balancesLine.textContent = `${gasSym}: ${gasAmt} / $${gasUsd} — ${tokSym}: ${tokAmt} / $${tokUsd}`;
+            poolAddrEl.textContent = `Wallet: ${info.poolAddr || '—'}`;
+            copyBtn.onclick = () => {
+              if (info.poolAddr) {
+                navigator.clipboard.writeText(info.poolAddr);
+                copyBtn.textContent = '✅';
+                setTimeout(() => (copyBtn.textContent = '📋'), 1200);
+              }
+            };
+
+            chartBtn.onclick = () => openChart('past30');
+            adminPanel.style.display = 'block';
+          } else {
+            adminPanel.style.display = 'none';
           }
 
-          if (adminInfo) {
-            document.getElementById("token-balance").textContent = `${adminInfo.tokenAmt} = $${adminInfo.usdValue}`;
-            document.getElementById("pool-addr").textContent = adminInfo.poolAddr;
-            adminInfoDiv.style.display = "block";
-            document.getElementById('copy-btn').addEventListener('click', () => {
-              navigator.clipboard.writeText(adminInfo.poolAddr);
-              alert('Copied to clipboard');
-            });
-          }
-
-          // Build segments
+          // Build segments for wheel labels
           const payout_amounts = Array.isArray(window_payout_amounts) ? window_payout_amounts : [];
           segments = payout_amounts.map((amount) => ({
             text: `${amount}`,
             text2: `${token_name}`,
             textFillStyle: 'white',
-            // font sizes are computed dynamically in draw
-            textFontFamily: 'Arial',
-            textAlignment: 'center'
+            textFontFamily: 'Arial'
           }));
           if (segments.length === 0) throw new Error("No payout amounts configured.");
 
-          // Preload overlay image (avoid broken-image flash)
+          // Preload overlay image to avoid broken-image flash
           if (image_url) {
             const img = new Image();
             img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
@@ -205,8 +239,7 @@
               type: 'spinToStop', duration: 5, spins: 8,
               callbackFinished: () => {
                 const spinsLeftText = typeof finalSpinsLeft === 'number' ? `Spins Left Today: ${finalSpinsLeft}` : 'Unlimited spins';
-                messageDiv.textContent = hasSpun && announcedPrize ? `You won: ${announcedPrize}\n${spinsLeftText}` : `Spin completed.\n${spinsLeftText}`;
-                messageDiv.style.display = "block";
+                messageDiv.textContent = announcedPrize ? `You won: ${announcedPrize}\n${spinsLeftText}` : `Spin completed.\n${spinsLeftText}`;
                 isSpinning = false;
                 spinButton.disabled = true;
                 spinButton.classList.add("hidden");
@@ -214,16 +247,13 @@
             }
           });
 
-          // draw text wheel for current size
           drawTextWheel();
-
           spinButton.disabled = false;
           spinButton.classList.remove("hidden");
         } catch (err) {
           messageDiv.textContent = (err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached')
             ? 'You have used all your free spins today'
             : err.message;
-          messageDiv.style.display = "block";
           spinButton.disabled = true;
           spinButton.classList.add("hidden");
         }
@@ -239,14 +269,11 @@
         const numSegments = segments.length;
         if (!numSegments) return;
 
-        // Compute radius from canvas size
         const radius = Math.min(canvas.width, canvas.height) / 2;
 
-        // Dynamic font sizes:
-        // - Make them proportional to radius
-        // - Clamp for readability (prevents overlap on small mobile screens)
-        const numberFontPx = Math.max(10, Math.min(48, Math.round(radius * 0.12)));     // e.g., ~38px on desktop, ~12-16px on phone
-        const tokenFontPx  = Math.max(8,  Math.min(36, Math.round(radius * 0.09)));     // slightly smaller
+        // Dynamic font sizes for desktop/mobile
+        const numberFontPx = Math.max(10, Math.min(48, Math.round(radius * 0.12)));
+        const tokenFontPx  = Math.max(8,  Math.min(36, Math.round(radius * 0.09)));
 
         const quantityRadius = radius * 0.8;
         const tokenRadius    = quantityRadius * 0.85;
@@ -272,9 +299,6 @@
 
           ctx.restore();
         }
-
-        // store for use in spin animation callback
-        drawTextWheel._state = { rotation, quantityRadius, tokenRadius, numberFontPx, tokenFontPx };
       }
 
       async function openChart(range) {
@@ -282,7 +306,6 @@
           chartTitle.textContent = `${token_name || 'Token'} • Performance`;
           chartModal.style.display = 'flex';
 
-          // Show small spinning wheel (25% of main diameter)
           if (image_url) {
             const wcont = document.getElementById('wheel-container');
             const d = Math.min(wcont.offsetWidth, wcont.offsetHeight);
@@ -295,7 +318,6 @@
             chartWheel.style.display = 'none';
           }
 
-          // Fetch chart data from our API (actual values, not normalized)
           const res = await fetch('/api/chart', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -304,20 +326,16 @@
           const payload = await res.json();
           if (!res.ok) throw new Error(payload.error || 'Failed to load chart');
 
-          // Build chart
-          if (chartInstance) chartInstance.destroy();
+          if (window._chartInstance) window._chartInstance.destroy();
           const ctx = chartCanvas.getContext('2d');
-          chartInstance = new Chart(ctx, {
+          window._chartInstance = new Chart(ctx, {
             type: 'line',
             data: payload.chartData,
             options: Object.assign({
               responsive: true,
               maintainAspectRatio: false,
               interaction: { mode: 'index', intersect: false },
-              plugins: {
-                legend: { labels: { color: '#ddd' } },
-                tooltip: { enabled: true }
-              },
+              plugins: { legend: { labels: { color: '#ddd' } }, tooltip: { enabled: true } },
               scales: {
                 x:  { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' } },
                 y:  { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' }, title:{ display:true, text:'# Spins', color:'#bbb' } },
@@ -348,7 +366,7 @@
           if (!res.ok) throw new Error(data.error || "Server error during spin");
 
           const segmentIndex = data.segmentIndex;
-          const seg = mechanicsWheel.segments[segmentIndex + 1]; // Winwheel is 1-indexed
+          const seg = mechanicsWheel.segments[segmentIndex + 1];
           if (!seg) throw new Error("Invalid segment returned from server");
 
           const center = (seg.startAngle + seg.endAngle) / 2;
@@ -359,8 +377,7 @@
 
           mechanicsWheel.animation.callbackBefore = () => {
             const adjustedAngle = mechanicsWheel.rotationAngle - 30;
-            const newRotationForText = adjustedAngle - 60;
-            drawTextWheel(newRotationForText);
+            drawTextWheel(adjustedAngle - 60);
             overlayImg.style.transform = `rotate(${adjustedAngle}deg)`;
           };
 
@@ -373,7 +390,6 @@
 
         } catch (err) {
           messageDiv.textContent = `Spin failed: ${err.message}`;
-          messageDiv.style.display = "block";
           isSpinning = false;
           hasSpun = false;
           spinButton.disabled = true;
@@ -381,10 +397,10 @@
         }
       };
 
-      // Close chart + range change
       closeChartBtn.addEventListener('click', () => { chartModal.style.display = 'none'; });
       rangeSelect.addEventListener('change', (e) => { openChart(e.target.value); });
       spinButton.addEventListener("click", spinHandler);
+
       initializeWheel();
     };
   </script>
