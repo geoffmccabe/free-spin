@@ -11,7 +11,7 @@ export default async function handler(req, res) {
     const { token, server_id, action, contract_address, enabled } = req.body || {};
     if (!token || !server_id || !action) return res.status(400).json({ error: 'token, server_id and action are required' });
 
-    // Validate token => discord_id
+    // Validate token -> discord_id
     const { data: tokenData, error: tokenError } = await supabase
       .from('spin_tokens')
       .select('discord_id')
@@ -30,7 +30,6 @@ export default async function handler(req, res) {
     if (adminData?.role !== 'superadmin') return res.status(403).json({ error: 'Superadmin access required' });
 
     if (action === 'list') {
-      // Always list rows (no enabled flag dependency)
       const { data: rows, error } = await supabase
         .from('server_tokens')
         .select('contract_address')
@@ -44,12 +43,8 @@ export default async function handler(req, res) {
           .from('wheel_configurations')
           .select('contract_address, token_name, image_url')
           .in('contract_address', mints);
-        if (cfgErr) {
-          // Non-fatal: just omit names if config fetch fails
-          console.error('tokens list config error:', cfgErr.message);
-        } else {
-          configs = cfg || [];
-        }
+        if (cfgErr) console.error('tokens list config error:', cfgErr.message);
+        configs = cfg || [];
       }
 
       const merged = (rows || []).map(t => {
@@ -61,7 +56,6 @@ export default async function handler(req, res) {
 
     if (action === 'add') {
       if (!contract_address) return res.status(400).json({ error: 'contract_address required' });
-      // idempotent insert
       const { data: exists, error: exErr } = await supabase
         .from('server_tokens')
         .select('contract_address')
@@ -83,7 +77,6 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'contract_address and enabled are required' });
       }
       if (enabled === false) {
-        // disable = delete row
         const { error: delErr } = await supabase
           .from('server_tokens')
           .delete()
@@ -91,7 +84,6 @@ export default async function handler(req, res) {
           .eq('contract_address', contract_address);
         if (delErr) return res.status(400).json({ error: delErr.message });
       } else {
-        // enable = ensure row exists
         const { data: exists, error: exErr } = await supabase
           .from('server_tokens')
           .select('contract_address')
