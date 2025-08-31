@@ -1,20 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
-import { Connection, PublicKey, Keypair, Transaction } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
 import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
-import Helius from 'helius-sdk';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL;
 
 const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-const helius = new Helius(HELIUS_RPC_URL);
 
 export default async function handler(req, res) {
+  res.setHeader('Content-Type', 'application/json');
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -31,7 +29,7 @@ export default async function handler(req, res) {
     const TOKEN_SECRET = process.env.SPIN_KEY;
     if (!TOKEN_SECRET) {
       console.error("FATAL: SPIN_KEY environment variable not found or is empty.");
-      return res.status(500).json({ error: 'Server configuration error' });
+      return res.status(500).json({ error: 'A server configuration error occurred. Please notify an administrator.' });
     }
 
     const [token, signature] = signedToken.split('.');
@@ -90,7 +88,7 @@ export default async function handler(req, res) {
     if (!isSuperadmin) {
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       console.log(`Checking spin limit for discord_id: ${discord_id}, contract: ${contract_address}, since: ${twentyFourHoursAgo}`);
-      const { data: recentSpins, error: spinCountError } = await supabase
+      const { data: recentSpins, error: spinCountError } = supabase
         .from('daily_spins')
         .select('contract_address')
         .eq('discord_id', discord_id)
@@ -98,7 +96,7 @@ export default async function handler(req, res) {
 
       if (spinCountError) {
         console.error(`Spin count error: ${spinCountError.message}`);
-        throw new Error('DB error checking spin history');
+        return res.status(500).json({ error: 'DB error checking spin history' });
       }
       spins_left = Math.max(0, userData.spin_limit - recentSpins.length);
       if (recentSpins.length >= userData.spin_limit) {
@@ -150,10 +148,7 @@ export default async function handler(req, res) {
         )
       );
 
-      // Use Helius relayer for gasless
-      const serializedTx = transaction.serialize({ requireAllSignatures: false });
-      const txSignature = await helius.relay(serializedTx, { payer: userWallet.toString() });
-      await connection.confirmTransaction(txSignature);
+      const txSignature = await sendAndConfirmTransaction(connection, transaction, [fundingWallet]);
       console.log("Transaction confirmed with signature:", txSignature);
 
       await supabase.from('daily_spins').insert({ discord_id, reward: rewardAmount, contract_address, signature: txSignature });
