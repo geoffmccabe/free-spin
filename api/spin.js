@@ -19,12 +19,8 @@ export default async function handler(req, res) {
 
   try {
     const { token: signedToken, spin, server_id } = req.body;
-    if (!signedToken) {
-      return res.status(400).json({ error: 'Token required' });
-    }
-    if (!server_id) {
-      return res.status(400).json({ error: 'Server ID required' });
-    }
+    if (!signedToken) return res.status(400).json({ error: 'Token required' });
+    if (!server_id) return res.status(400).json({ error: 'Server ID required' });
 
     const TOKEN_SECRET = process.env.SPIN_KEY;
     if (!TOKEN_SECRET) {
@@ -32,7 +28,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'A server configuration error occurred. Please notify an administrator.' });
     }
 
-    const [token, signature] = signedToken.split('.');
+    const [token, signature] = String(signedToken).split('.');
     if (!token || !signature) {
       console.error(`Malformed token: ${signedToken}`);
       return res.status(400).json({ error: 'Invalid token format' });
@@ -63,7 +59,7 @@ export default async function handler(req, res) {
     const [
       { data: serverTokens, error: serverTokenError },
       { data: userData, error: userError },
-      { data: adminData, error: adminError }
+      { data: adminData }
     ] = await Promise.all([
       supabase.from('server_tokens').select('contract_address').eq('server_id', server_id),
       supabase.from('users').select('spin_limit').eq('discord_id', discord_id).single(),
@@ -81,7 +77,8 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'User not found' });
     }
 
-    const isSuperadmin = adminData?.role === 'superadmin';
+    const role = adminData?.role || null; // 'admin' | 'superadmin' | null
+    const isSuperadmin = role === 'superadmin';
     console.log(`Admin check: ${discord_id} is ${isSuperadmin ? '' : 'not '}superadmin`);
 
     let spins_left = userData.spin_limit;
@@ -98,8 +95,8 @@ export default async function handler(req, res) {
         console.error(`Spin count error: ${spinCountError.message}`);
         return res.status(500).json({ error: 'DB error checking spin history' });
       }
-      spins_left = Math.max(0, userData.spin_limit - recentSpins.length);
-      if (recentSpins.length >= userData.spin_limit) {
+      spins_left = Math.max(0, userData.spin_limit - (recentSpins?.length || 0));
+      if ((recentSpins?.length || 0) >= userData.spin_limit) {
         console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
         return res.status(403).json({ error: 'Daily spin limit reached' });
       }
@@ -114,20 +111,21 @@ export default async function handler(req, res) {
       .eq('contract_address', contract_address)
       .single();
 
-    console.log(`Fetched config for ${contract_address}: ${JSON.stringify(config)}`); // Diagnostic log
-
     if (configError || !config) {
       console.error(`Config error: ${configError?.message || 'No config found'}`);
       return res.status(400).json({ error: 'Invalid wheel configuration' });
     }
 
-    if (!config.payout_amounts || config.payout_amounts.length === 0) {
+    if (!Array.isArray(config.payout_amounts) || config.payout_amounts.length === 0) {
       console.error(`No payout amounts for contract: ${contract_address}`);
       return res.status(400).json({ error: 'No payout amounts configured.' });
     }
-    
+
     if (spin) {
-      const weights = config.payout_weights || config.payout_amounts.map(() => 1);
+      const weights = Array.isArray(config.payout_weights) && config.payout_weights.length === config.payout_amounts.length
+        ? config.payout_weights
+        : config.payout_amounts.map(() => 1);
+
       const totalWeight = weights.reduce((a, b) => a + b, 0);
       const rand = randomInt(0, totalWeight);
       let sum = 0;
@@ -136,7 +134,8 @@ export default async function handler(req, res) {
         sum += weights[i];
         if (rand < sum) { selectedIndex = i; break; }
       }
-      const rewardAmount = config.payout_amounts[selectedIndex];
+
+      const rewardAmount = Number(config.payout_amounts[selectedIndex]);
       const prizeText = `${rewardAmount} ${config.token_name}`;
 
       const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
@@ -151,7 +150,7 @@ export default async function handler(req, res) {
           fromTokenAccount.address,
           toTokenAccount.address,
           fundingWallet.publicKey,
-          rewardAmount * (10 ** 5)
+          rewardAmount * (10 ** 5) // keep as-is for your current mints; switch to checked+decimals if you add others
         )
       );
 
@@ -166,10 +165,10 @@ export default async function handler(req, res) {
       const tokenConfig = {
         token_name: config.token_name,
         payout_amounts: config.payout_amounts,
-        image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Harold_800px.webp'
+        image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Generic_800px.webp'
       };
 
-      let adminInfo = {};
+      let adminInfo = undefined;
       if (isSuperadmin) {
         const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
         const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), fundingWallet.publicKey);
@@ -182,15 +181,16 @@ export default async function handler(req, res) {
         }
 
         let usdValue = 'N/A';
-        if (COINMARKETCAP_API_KEY) {
+        if (COINMARKETCAP_API_KEY && typeof balance === 'number') {
           try {
-            const cmcRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${config.token_name.toUpperCase()}&convert=USD`, {
-              headers: {
-                'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY
-              }
+            const cmcRes = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${encodeURIComponent(config.token_name.toUpperCase())}&convert=USD`, {
+              headers: { 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY }
             });
             const cmcData = await cmcRes.json();
-            usdValue = (balance * cmcData.data[config.token_name.toUpperCase()].quote.USD.price).toFixed(2);
+            const price = cmcData?.data?.[config.token_name.toUpperCase()]?.quote?.USD?.price;
+            if (typeof price === 'number') {
+              usdValue = (balance * price).toFixed(2);
+            }
           } catch (err) {
             console.error('CMC price fetch failed', err);
           }
@@ -203,7 +203,14 @@ export default async function handler(req, res) {
         };
       }
 
-      return res.status(200).json({ tokenConfig, spins_left, adminInfo });
+      // Include role and contract_address so the front end can show CHART and query by mint.
+      return res.status(200).json({
+        tokenConfig,
+        spins_left,
+        adminInfo,
+        role,
+        contract_address
+      });
     }
   } catch (err) {
     console.error("API error:", err.message, err.stack);
