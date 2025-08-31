@@ -6,6 +6,7 @@
   <title>Spin the Wheel</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.4/TweenMax.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     html, body { background: #000000; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 0; overflow: hidden; height: 100vh; }
     .container { max-height: 100vh; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; }
@@ -15,10 +16,13 @@
     #wheel-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
     #canvas-text { position: absolute; top: 0; left: 0; z-index: 3; pointer-events: none; width: 100%; height: 100%; }
     #spin-button { display: block; margin: 20px auto; padding: 8px 16px; font-size: 14px; background-color: #ff4500; color: white; border: none; border-radius: 10px; cursor: pointer; }
+    #chart-button { display: none; margin: 20px auto; padding: 8px 16px; font-size: 14px; background-color: #00ff00; color: white; border: none; border-radius: 10px; cursor: pointer; }
     #spin-button:disabled, #spin-button.hidden { display: none; }
     #error-message { margin-top: 10px; color: white; font-size: 14px; z-index: 11; position: relative; max-width: 800px; font-weight: bold; text-align: center; white-space: pre-line; }
     #admin-info { position: absolute; bottom: 10px; right: 10px; font-size: 12px; color: white; text-align: right; }
     #copy-btn { background: none; border: none; color: white; cursor: pointer; }
+    #chart-container { display: none; width: 90%; height: 90%; margin: auto; }
+    #date-range { margin: 10px; }
   </style>
 </head>
 <body>
@@ -30,10 +34,17 @@
       <canvas id="canvas-text"></canvas>
     </div>
     <button id="spin-button" disabled>SPIN</button>
+    <button id="chart-button">CHART</button>
     <div id="error-message"></div>
-    <div id="admin-info" style="display: none;">
-      <div id="token-balance"></div>
-      <div>POOL ADDR: <span id="pool-addr"></span> <button id="copy-btn">📋</button></div>
+    <div id="admin-info"></div>
+    <div id="chart-container">
+      <canvas id="stats-chart"></canvas>
+      <div id="date-range">
+        <input type="date" id="start-date">
+        <input type="date" id="end-date">
+        <button id="update-chart">Update</button>
+        <button id="all-time">All Time</button>
+      </div>
     </div>
   </div>
   <script>
@@ -49,7 +60,11 @@
       const token = new URLSearchParams(window.location.search).get("token");
       const server_id = new URLSearchParams(window.location.search).get("server_id");
       const spinButton = document.getElementById("spin-button");
+      const chartButton = document.getElementById("chart-button");
       const messageDiv = document.getElementById("error-message");
+      const adminInfo = document.getElementById("admin-info");
+      const wheelContainer = document.getElementById("wheel-container");
+      const chartContainer = document.getElementById("chart-container");
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
@@ -84,7 +99,7 @@
             throw new Error(data.error || "Failed to load spin configuration");
           }
 
-          const { token_name, payout_amounts, image_url } = data.tokenConfig;
+          const { token_name, payout_amounts, image_url, adminInfo } = data.tokenConfig;
           segments = (payout_amounts || []).map((amount) => ({
             text: `${amount}`,
             text2: `${token_name}`,
@@ -157,6 +172,17 @@
           textWheel.draw();
           spinButton.disabled = false;
           spinButton.classList.remove("hidden");
+
+          if (data.adminInfo) {
+            document.getElementById("token-balance").textContent = `${data.adminInfo.tokenAmt} = $${data.adminInfo.usdValue}`;
+            document.getElementById("pool-addr").textContent = data.adminInfo.poolAddr;
+            document.getElementById("admin-info").style.display = "block";
+
+            document.getElementById('copy-btn').addEventListener('click', () => {
+              navigator.clipboard.writeText(data.adminInfo.poolAddr);
+              alert('Copied to clipboard');
+            });
+          }
         } catch (err) {
           messageDiv.textContent = err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached' ? 'You have used all your free spins today' : err.message;
           messageDiv.style.display = "block";
