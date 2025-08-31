@@ -1,24 +1,42 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Spin the Wheel</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.4/TweenMax.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    html, body { background: #000000; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 0; overflow: hidden; height: 100vh; }
-    .container { max-height: 100vh; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-    #wheel-container { position: relative; width: 80vmin; height: 80vmin; margin: 20px auto; }
-    #pointer { position: absolute; top: -20px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 15px solid transparent; border-right: 15px solid transparent; border-top: 20px solid red; z-index: 10; }
-    #canvas-mechanics { position: absolute; top: 0; left: 0; z-index: 1; opacity: 0; width: 100%; height: 100%; }
-    #wheel-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
-    #canvas-text { position: absolute; top: 0; left: 0; z-index: 3; pointer-events: none; width: 100%; height: 100%; }
-    #spin-button { display: block; margin: 20px auto; padding: 8px 16px; font-size: 14px; background-color: #ff4500; color: white; border: none; border-radius: 10px; cursor: pointer; }
-    #spin-button:disabled, #spin-button.hidden { display: none; }
-    #error-message { margin-top: 10px; color: white; font-size: 14px; z-index: 11; position: relative; max-width: 800px; font-weight: bold; text-align: center; white-space: pre-line; }
-    #admin-info { position: absolute; bottom: 10px; right: 10px; font-size: 12px; color: white; text-align: right; }
-    #copy-btn { background: none; border: none; color: white; cursor: pointer; }
+    html, body { background:#000; color:#fff; font-family: Inter, system-ui, sans-serif; text-align:center; margin:0; padding:0; overflow:hidden; height:100vh; }
+    .container { max-height:100vh; overflow:hidden; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    #wheel-container { position:relative; width:80vmin; height:80vmin; margin:20px auto; }
+    #pointer { position:absolute; top:-20px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:15px solid transparent; border-right:15px solid transparent; border-top:20px solid red; z-index:10; }
+    #canvas-mechanics { position:absolute; top:0; left:0; z-index:1; opacity:0; width:100%; height:100%; }
+    #wheel-overlay { position:absolute; top:0; left:0; width:100%; height:100%; z-index:2; pointer-events:none; display:none; }
+    #canvas-text { position:absolute; top:0; left:0; z-index:3; pointer-events:none; width:100%; height:100%; }
+    #spin-button { display:block; margin:12px auto 0; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
+    #spin-button:disabled, #spin-button.hidden { display:none; }
+    #chart-button { padding:10px 16px; font-size:14px; background:#0ea5e9; color:#fff; border:none; border-radius:12px; cursor:pointer; display:none; }
+    #error-message { margin-top:10px; color:#fff; font-size:14px; z-index:11; position:relative; max-width:800px; font-weight:600; text-align:center; white-space:pre-line; }
+    #admin-info { position:absolute; bottom:10px; right:10px; font-size:12px; color:#fff; text-align:right; }
+    #copy-btn { background:none; border:none; color:#fff; cursor:pointer; }
+
+    /* Chart modal */
+    #chart-modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.6); z-index:50; }
+    .panel { width:min(1000px,92vw); height:min(650px,88vh); background:#0b0b0c; border:1px solid #1f1f20; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto 1fr; grid-template-areas:'header header' 'left right'; overflow:hidden; }
+    .panel-header { grid-area:header; display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border-bottom:1px solid #1c1c1e; }
+    .panel-title { font-weight:700; letter-spacing:0.3px; }
+    .panel-left { grid-area:left; display:flex; align-items:center; justify-content:center; padding:16px; border-right:1px solid #1c1c1e; }
+    .panel-right { grid-area:right; position:relative; padding:12px 16px; }
+    #chartCanvas { width:100%; height:100%; }
+    .toolbar { display:flex; align-items:center; gap:8px; }
+    .toolbar select { background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:6px 10px; }
+    .close-btn { background:#222; border:1px solid #444; color:#fff; padding:8px 12px; border-radius:10px; cursor:pointer; }
+
+    /* Slow spin for preview wheel */
+    @keyframes slowspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    #chart-wheel { width:20vmin; height:20vmin; animation:slowspin 15s linear infinite; filter:drop-shadow(0 8px 20px rgba(0,0,0,0.5)); display:none; }
   </style>
 </head>
 <body>
@@ -26,20 +44,44 @@
     <div id="wheel-container">
       <div id="pointer"></div>
       <canvas id="canvas-mechanics"></canvas>
-      <!-- Hide overlay image until it finishes loading to avoid broken-image flash -->
-      <img id="wheel-overlay" alt="Wheel Overlay" style="display:none;" />
+      <!-- Overlay image preloaded then shown; no broken-image flash -->
+      <img id="wheel-overlay" alt="Wheel Overlay"/>
       <canvas id="canvas-text"></canvas>
     </div>
     <div style="display:flex; gap:12px; align-items:center; justify-content:center; margin-top: 6px;">
       <button id="spin-button" disabled>SPIN</button>
-      <button id="chart-button" style="display:none; padding:8px 16px; font-size:14px; background:#0ea5e9; color:#fff; border:none; border-radius:10px; cursor:pointer;">CHART</button>
+      <button id="chart-button">CHART</button>
     </div>
     <div id="error-message"></div>
-    <div id="admin-info" style="display: none;">
+    <div id="admin-info" style="display:none;">
       <div id="token-balance"></div>
       <div>POOL ADDR: <span id="pool-addr"></span> <button id="copy-btn">📋</button></div>
     </div>
   </div>
+
+  <!-- Chart Modal -->
+  <div id="chart-modal">
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title" id="chart-title">Token Performance</div>
+        <div class="toolbar">
+          <label for="rangeSelect">Range</label>
+          <select id="rangeSelect">
+            <option value="past30">Past 30 days</option>
+            <option value="all">All time</option>
+          </select>
+          <button class="close-btn" id="closeChart">Close</button>
+        </div>
+      </div>
+      <div class="panel-left">
+        <img id="chart-wheel" alt="Wheel"/>
+      </div>
+      <div class="panel-right">
+        <canvas id="chartCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+
   <script>
     window.onload = function () {
       let segments = [];
@@ -49,6 +91,11 @@
       let isSpinning = false;
       let announcedPrize = null;
       let finalSpinsLeft = null;
+      let role = null;
+      let contract_address = null;
+      let token_name = null;
+      let image_url = null;
+      let chartInstance = null;
 
       const token = new URLSearchParams(window.location.search).get("token");
       const server_id = new URLSearchParams(window.location.search).get("server_id");
@@ -57,6 +104,13 @@
       const messageDiv = document.getElementById("error-message");
       const adminInfoDiv = document.getElementById("admin-info");
       const overlayImg = document.getElementById("wheel-overlay");
+
+      const chartModal = document.getElementById('chart-modal');
+      const chartCanvas = document.getElementById('chartCanvas');
+      const chartTitle = document.getElementById('chart-title');
+      const chartWheel = document.getElementById('chart-wheel');
+      const closeChartBtn = document.getElementById('closeChart');
+      const rangeSelect = document.getElementById('rangeSelect');
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
@@ -93,23 +147,15 @@
           }
 
           // ✅ Correctly read nested shape from API
-          const { token_name, payout_amounts, image_url } = data.tokenConfig;
+          ({ token_name, payout_amounts: window_payout_amounts, image_url } = data.tokenConfig);
+          role = data.role || null; // 'admin' or 'superadmin'
+          contract_address = data.contract_address || null; // for chart API
           const adminInfo = data.adminInfo;
-          const role = data.role || null; // 'admin' or 'superadmin' when server-admin
-          const contract_address = data.contract_address || null; // for chart link
 
-          // Show CHART button for admin or superadmin if we have the role or at least adminInfo (superadmin-only)
+          // Show CHART button for admin or superadmin
           if (role === 'admin' || role === 'superadmin' || adminInfo) {
             chartButton.style.display = 'inline-block';
-            chartButton.onclick = () => {
-              if (contract_address) {
-                // Use Birdeye which accepts mint address directly
-                window.open(`https://birdeye.so/token/${contract_address}?chain=solana`, '_blank');
-              } else {
-                // Fallback: try by symbol, may be ambiguous
-                window.open(`https://birdeye.so/?chain=solana&symbol=${encodeURIComponent(token_name)}`, '_blank');
-              }
-            };
+            chartButton.onclick = () => openChart('past30');
           }
 
           if (adminInfo) {
@@ -123,7 +169,9 @@
             });
           }
 
-          segments = (Array.isArray(payout_amounts) ? payout_amounts : []).map((amount) => ({
+          // Build segments
+          const payout_amounts = Array.isArray(window_payout_amounts) ? window_payout_amounts : [];
+          segments = payout_amounts.map((amount) => ({
             text: `${amount}`,
             text2: `${token_name}`,
             textFillStyle: 'white', textFontSize: 45, textFontSize2: 36,
@@ -134,16 +182,14 @@
             throw new Error("No payout amounts configured.");
           }
 
-          // Preload overlay image to avoid broken-image icon flash
+          // Preload overlay image to avoid broken-image flash
           if (image_url) {
             const img = new Image();
             img.onload = () => {
               overlayImg.src = image_url;
               overlayImg.style.display = 'block';
             };
-            img.onerror = () => {
-              overlayImg.style.display = 'none';
-            };
+            img.onerror = () => { overlayImg.style.display = 'none'; };
             img.src = image_url;
           }
 
@@ -207,10 +253,63 @@
           spinButton.disabled = false;
           spinButton.classList.remove("hidden");
         } catch (err) {
-          messageDiv.textContent = err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached' ? 'You have used all your free spins today' : err.message;
+          messageDiv.textContent = (err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached')
+            ? 'You have used all your free spins today'
+            : err.message;
           messageDiv.style.display = "block";
           spinButton.disabled = true;
           spinButton.classList.add("hidden");
+        }
+      }
+
+      async function openChart(range) {
+        try {
+          chartTitle.textContent = `${token_name || 'Token'} • Performance`;
+          chartModal.style.display = 'flex';
+
+          // Show small spinning wheel (25% of main diameter)
+          if (image_url) {
+            const wcont = document.getElementById('wheel-container');
+            const d = Math.min(wcont.offsetWidth, wcont.offsetHeight);
+            chartWheel.style.width = Math.round(d * 0.25) + 'px';
+            chartWheel.style.height = Math.round(d * 0.25) + 'px';
+            chartWheel.onload = () => { chartWheel.style.display = 'block'; };
+            chartWheel.onerror = () => { chartWheel.style.display = 'none'; };
+            chartWheel.src = image_url;
+          }
+
+          // Fetch chart data from our API
+          const res = await fetch('/api/chart', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, server_id, contract_address, range })
+          });
+          const payload = await res.json();
+          if (!res.ok) throw new Error(payload.error || 'Failed to load chart');
+
+          // Build chart
+          if (chartInstance) chartInstance.destroy();
+          const ctx = chartCanvas.getContext('2d');
+          chartInstance = new Chart(ctx, {
+            type: 'line',
+            data: payload.chartData,
+            options: Object.assign({
+              responsive: true,
+              maintainAspectRatio: false,
+              interaction: { mode: 'index', intersect: false },
+              plugins: {
+                legend: { labels: { color: '#ddd' } },
+                tooltip: { enabled: true }
+              },
+              scales: {
+                x: { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                y: { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                y1:{ position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false } }
+              }
+            }, payload.options || {})
+          });
+        } catch (e) {
+          alert('Chart error: ' + e.message);
         }
       }
 
@@ -267,6 +366,9 @@
         }
       };
 
+      // Close chart + range change
+      closeChartBtn.addEventListener('click', () => { chartModal.style.display = 'none'; });
+      rangeSelect.addEventListener('change', (e) => { openChart(e.target.value); });
       spinButton.addEventListener("click", spinHandler);
       initializeWheel();
     };
