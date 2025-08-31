@@ -81,11 +81,14 @@
             body: JSON.stringify({ token, server_id })
           });
           const data = await res.json();
+
           if (!res.ok || !data.tokenConfig) {
             throw new Error(data.error || "Failed to load spin configuration");
           }
 
-          const { token_name, payout_amounts, image_url, adminInfo } = data;
+          // ✅ Correctly read nested shape from API
+          const { token_name, payout_amounts, image_url } = data.tokenConfig;
+          const adminInfo = data.adminInfo;
 
           if (adminInfo) {
             document.getElementById("token-balance").textContent = `${adminInfo.tokenAmt} = $${adminInfo.usdValue}`;
@@ -98,7 +101,7 @@
             });
           }
 
-          segments = (payout_amounts || []).map((amount) => ({
+          segments = (Array.isArray(payout_amounts) ? payout_amounts : []).map((amount) => ({
             text: `${amount}`,
             text2: `${token_name}`,
             textFillStyle: 'white', textFontSize: 45, textFontSize2: 36,
@@ -180,7 +183,6 @@
 
       const spinHandler = async () => {
         if (hasSpun || isSpinning || !mechanicsWheel) return;
-        
         hasSpun = true;
         isSpinning = true;
         spinButton.disabled = true;
@@ -197,7 +199,7 @@
           if (!res.ok) throw new Error(data.error || "Server error during spin");
 
           const segmentIndex = data.segmentIndex;
-          const seg = mechanicsWheel.segments[segmentIndex + 1];
+          const seg = mechanicsWheel.segments[segmentIndex + 1]; // Winwheel is 1-indexed
           if (!seg) throw new Error("Invalid segment returned from server");
 
           const center = (seg.startAngle + seg.endAngle) / 2;
@@ -212,13 +214,13 @@
             textWheel.draw();
             document.getElementById("wheel-overlay").style.transform = `rotate(${adjustedAngle}deg)`;
           };
-          
+
           mechanicsWheel.stopAnimation(false);
           mechanicsWheel.rotationAngle = 0;
           mechanicsWheel.draw();
           textWheel.rotationAngle = -60;
           textWheel.draw();
-          
+
           messageDiv.textContent = "Spinning...";
           mechanicsWheel.startAnimation();
 
