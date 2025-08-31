@@ -130,7 +130,11 @@
         });
       }
 
-      window.addEventListener('resize', resizeCanvas);
+      window.addEventListener('resize', () => {
+        resizeCanvas();
+        // Recompute font sizes on resize (fixes tiny screens while keeping desktop pretty)
+        drawTextWheel();
+      });
       resizeCanvas();
 
       async function initializeWheel() {
@@ -162,7 +166,6 @@
             document.getElementById("token-balance").textContent = `${adminInfo.tokenAmt} = $${adminInfo.usdValue}`;
             document.getElementById("pool-addr").textContent = adminInfo.poolAddr;
             adminInfoDiv.style.display = "block";
-
             document.getElementById('copy-btn').addEventListener('click', () => {
               navigator.clipboard.writeText(adminInfo.poolAddr);
               alert('Copied to clipboard');
@@ -174,29 +177,23 @@
           segments = payout_amounts.map((amount) => ({
             text: `${amount}`,
             text2: `${token_name}`,
-            textFillStyle: 'white', textFontSize: 45, textFontSize2: 36,
-            textFontFamily: 'Arial', textAlignment: 'center'
+            textFillStyle: 'white',
+            // font sizes are computed dynamically in draw
+            textFontFamily: 'Arial',
+            textAlignment: 'center'
           }));
-
-          if (segments.length === 0) {
-            throw new Error("No payout amounts configured.");
-          }
+          if (segments.length === 0) throw new Error("No payout amounts configured.");
 
           // Preload overlay image (avoid broken-image flash)
           if (image_url) {
             const img = new Image();
-            img.onload = () => {
-              overlayImg.src = image_url;
-              overlayImg.style.display = 'block';
-            };
+            img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
             img.onerror = () => { overlayImg.style.display = 'none'; };
             img.src = image_url;
           }
 
           const container = document.getElementById('wheel-container');
           const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
-          const quantityRadius = radius * 0.8;
-          const tokenRadius = quantityRadius * 0.85;
 
           mechanicsWheel = new Winwheel({
             canvasId: 'canvas-mechanics',
@@ -217,39 +214,9 @@
             }
           });
 
-          textWheel = {
-            canvas: document.getElementById("canvas-text"),
-            numSegments: segments.length,
-            segments: segments,
-            rotationAngle: -60,
-            quantityRadius: quantityRadius,
-            tokenRadius: tokenRadius,
-            draw: function () {
-              const ctx = this.canvas.getContext('2d');
-              ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-              const centerX = this.canvas.width / 2;
-              const centerY = this.canvas.height / 2;
-              const segmentAngle = (2 * Math.PI) / this.numSegments;
+          // draw text wheel for current size
+          drawTextWheel();
 
-              for (let i = 1; i <= this.numSegments; i++) {
-                const seg = this.segments[i - 1];
-                const angle = this.rotationAngle * (Math.PI / 180) + (i - 1) * segmentAngle + segmentAngle / 2;
-                ctx.save();
-                ctx.translate(centerX, centerY);
-                ctx.rotate(angle);
-                ctx.fillStyle = seg.textFillStyle;
-                ctx.font = `${seg.textFontSize}px ${seg.textFontFamily}`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(seg.text, 0, -this.quantityRadius);
-                ctx.font = `${seg.textFontSize2}px ${seg.textFontFamily}`;
-                ctx.fillText(seg.text2, 0, -this.tokenRadius);
-                ctx.restore();
-              }
-            }
-          };
-
-          textWheel.draw();
           spinButton.disabled = false;
           spinButton.classList.remove("hidden");
         } catch (err) {
@@ -260,6 +227,54 @@
           spinButton.disabled = true;
           spinButton.classList.add("hidden");
         }
+      }
+
+      function drawTextWheel(rotation = -60) {
+        const canvas = document.getElementById("canvas-text");
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        const numSegments = segments.length;
+        if (!numSegments) return;
+
+        // Compute radius from canvas size
+        const radius = Math.min(canvas.width, canvas.height) / 2;
+
+        // Dynamic font sizes:
+        // - Make them proportional to radius
+        // - Clamp for readability (prevents overlap on small mobile screens)
+        const numberFontPx = Math.max(10, Math.min(48, Math.round(radius * 0.12)));     // e.g., ~38px on desktop, ~12-16px on phone
+        const tokenFontPx  = Math.max(8,  Math.min(36, Math.round(radius * 0.09)));     // slightly smaller
+
+        const quantityRadius = radius * 0.8;
+        const tokenRadius    = quantityRadius * 0.85;
+
+        const segmentAngle = (2 * Math.PI) / numSegments;
+
+        for (let i = 1; i <= numSegments; i++) {
+          const seg = segments[i - 1];
+          const angle = rotation * (Math.PI / 180) + (i - 1) * segmentAngle + segmentAngle / 2;
+
+          ctx.save();
+          ctx.translate(centerX, centerY);
+          ctx.rotate(angle);
+          ctx.fillStyle = seg.textFillStyle || 'white';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+
+          ctx.font = `${numberFontPx}px ${seg.textFontFamily || 'Arial'}`;
+          ctx.fillText(seg.text, 0, -quantityRadius);
+
+          ctx.font = `${tokenFontPx}px ${seg.textFontFamily || 'Arial'}`;
+          ctx.fillText(seg.text2, 0, -tokenRadius);
+
+          ctx.restore();
+        }
+
+        // store for use in spin animation callback
+        drawTextWheel._state = { rotation, quantityRadius, tokenRadius, numberFontPx, tokenFontPx };
       }
 
       async function openChart(range) {
@@ -280,7 +295,7 @@
             chartWheel.style.display = 'none';
           }
 
-          // Fetch chart data from our API
+          // Fetch chart data from our API (actual values, not normalized)
           const res = await fetch('/api/chart', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -304,9 +319,9 @@
                 tooltip: { enabled: true }
               },
               scales: {
-                x: { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                y: { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                y1:{ position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false } }
+                x:  { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                y:  { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' }, title:{ display:true, text:'# Spins', color:'#bbb' } },
+                y1: { position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'Payout Amount', color:'#bbb' } }
               }
             }, payload.options || {})
           });
@@ -344,18 +359,16 @@
 
           mechanicsWheel.animation.callbackBefore = () => {
             const adjustedAngle = mechanicsWheel.rotationAngle - 30;
-            textWheel.rotationAngle = adjustedAngle - 60;
-            textWheel.draw();
+            const newRotationForText = adjustedAngle - 60;
+            drawTextWheel(newRotationForText);
             overlayImg.style.transform = `rotate(${adjustedAngle}deg)`;
           };
 
+          messageDiv.textContent = "Spinning...";
           mechanicsWheel.stopAnimation(false);
           mechanicsWheel.rotationAngle = 0;
           mechanicsWheel.draw();
-          textWheel.rotationAngle = -60;
-          textWheel.draw();
-
-          messageDiv.textContent = "Spinning...";
+          drawTextWheel(-60);
           mechanicsWheel.startAnimation();
 
         } catch (err) {
