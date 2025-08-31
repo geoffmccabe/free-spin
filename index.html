@@ -4,46 +4,75 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Spin the Wheel</title>
+
+  <!-- Wheel libs -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.4/TweenMax.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
+
+  <!-- Charts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
   <style>
-    /* ----- Original wheel layout & button ----- */
-    html, body { background:#000; color:#fff; font-family: Inter, system-ui, sans-serif; margin:0; padding:0; height:100vh; }
-    .main { height:100vh; display:grid; grid-template-columns: 1fr 420px; gap:18px; align-items:center; justify-items:center; padding:16px; box-sizing:border-box; }
-    @media (max-width: 980px) { .main { grid-template-columns: 1fr; grid-auto-rows: max-content; overflow:auto; } }
+    /* ====== Layout ====== */
+    html, body { background:#000; color:#fff; margin:0; padding:0; height:100vh; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    .main {
+      height:100vh;
+      display:grid;
+      grid-template-columns: 1fr 420px;
+      gap:18px;
+      padding:16px;
+      box-sizing:border-box;
+      align-items:start;  /* keep button visible; no vertical centering that could push it off-screen */
+      justify-items:center;
+    }
+    @media (max-width: 980px) { .main { grid-template-columns: 1fr; grid-auto-rows: max-content; } }
 
-    #wheel-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; }
-    #wheel-container { position:relative; width:min(80vmin, 640px); height:min(80vmin, 640px); }
-    #pointer { position:absolute; top:-20px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:15px solid transparent; border-right:15px solid transparent; border-top:20px solid red; z-index:10; }
-    #canvas-mechanics { position:absolute; inset:0; z-index:1; opacity:0; }
-    #wheel-overlay { position:absolute; inset:0; z-index:2; pointer-events:none; display:none; }
-    #canvas-text { position:absolute; inset:0; z-index:3; pointer-events:none; }
+    /* ====== Wheel area (left) ====== */
+    #wheel-wrap { width:100%; display:flex; flex-direction:column; align-items:center; }
+    /* Clamp size so the SPIN button always has room below */
+    #wheel-container {
+      position:relative;
+      width: clamp(520px, 70vmin, 640px);
+      height: clamp(520px, 70vmin, 640px);
+    }
+    /* red pointer fixed at top-center of the wheel */
+    #pointer {
+      position:absolute; left:50%; top:-20px; transform:translateX(-50%);
+      width:0; height:0;
+      border-left:15px solid transparent; border-right:15px solid transparent; border-top:20px solid red;
+      z-index:10;
+    }
+    /* mechanics canvas = Winwheel drawing; text canvas = our labels; overlay = token art */
+    #canvas-mechanics, #canvas-text { position:absolute; inset:0; }
+    #canvas-mechanics { z-index:1; opacity:0; }   /* we only use its geometry/rotation */
+    #wheel-overlay   { position:absolute; inset:0; z-index:2; pointer-events:none; display:none; }
+    #canvas-text     { z-index:3; pointer-events:none; }
 
-    #spin-button { display:block; margin:12px auto 0; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
+    #spin-button { margin:14px auto 0; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
     #spin-button:disabled, #spin-button.hidden { display:none; }
-    #message { margin-top:10px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; }
+    #message { margin-top:10px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; text-align:center; }
 
-    /* ----- Admin Panel (right) ----- */
+    /* ====== Admin Panel (right) ====== */
     #admin-panel { display:none; width:100%; max-width:420px; align-self:stretch; background:#0b0b0c; border:1px solid #1f1f20; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.5); overflow:hidden; }
     .ap-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border-bottom:1px solid #1c1c1e; }
-    .ap-title { font-weight:700; letter-spacing:0.3px; }
-    .ap-body { text-align:left; padding:14px 16px 6px; display:flex; flex-direction:column; gap:10px; }
-    .ap-row { font-size:14px; color:#eaeaea; line-height:1.5; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .ap-title { font-weight:700; }
+    .ap-body  { padding:14px 16px 6px; display:flex; flex-direction:column; gap:10px; }
+    .ap-row   { font-size:14px; color:#eaeaea; line-height:1.5; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+
     .token-line { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-    .token-name { color:#d4af37; font-weight:800; } /* gold & bold */
+    .token-name { color:#d4af37; font-weight:800; }
     .usd { font-weight:700; }
-    .usd-high { color:#22c55e; } /* ≥$50 bright green */
-    .usd-mid  { color:#f59e0b; } /* $20–$50 gold */
-    .usd-low  { color:#ef4444; } /* <$20 red */
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size:13px; }
+    .usd-high { color:#22c55e; }  /* ≥$50 */
+    .usd-mid  { color:#f59e0b; }  /* $20–$50 */
+    .usd-low  { color:#ef4444; }  /* <$20 */
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:13px; }
 
     /* inline copy icon (no button chrome) */
     .copy-icon { margin-left:8px; display:inline-flex; vertical-align:middle; cursor:pointer; }
     .copy-icon svg { width:16px; height:16px; }
     .copy-copied rect { stroke:#22c55e !important; }
 
-    .ap-actions { display:flex; justify-content:flex-end; padding:10px 16px 12px; border-top:1px solid #1c1ce; }
+    .ap-actions { display:flex; justify-content:flex-end; padding:10px 16px 12px; border-top:1px solid #1c1c1e; }
     #chart-button { padding:8px 12px; font-size:12px; background:#0ea5e9; color:#fff; border:none; border-radius:10px; cursor:pointer; }
 
     /* Superadmin controls */
@@ -57,7 +86,7 @@
     .token-add { display:flex; gap:8px; margin-top:10px; }
     .token-add input { flex:1; min-width:0; background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:8px 10px; font-size:12px; }
 
-    /* Leaderboards: taller & dark scrollbar */
+    /* Leaderboards (tall + dark scrollbar) */
     .lb-wrap { border-top:1px solid #1c1c1e; padding:12px 16px; display:flex; flex-direction:column; gap:10px; }
     .lb-controls { display:flex; gap:8px; align-items:center; justify-content:flex-end; }
     .lb-controls select { background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:6px 10px; font-size:12px; }
@@ -71,11 +100,11 @@
     .lb-table::-webkit-scrollbar-thumb { background:#2a2a2c; border-radius:10px; }
     .lb-table::-webkit-scrollbar-thumb:hover { background:#3a3a3d; }
 
-    /* Chart modal (unchanged) */
+    /* Chart modal */
     #chart-modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.6); z-index:50; }
     .panel { width:min(1000px,92vw); height:min(650px,88vh); background:#0b0b0c; border:1px solid #1f1f20; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,0.5); display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto 1fr; grid-template-areas:'header header' 'left right'; overflow:hidden; }
     .panel-header { grid-area: header; display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border-bottom:1px solid #1c1c1e; }
-    .panel-title { font-weight:700; letter-spacing:0.3px; }
+    .panel-title { font-weight:700; }
     .panel-left { grid-area:left; display:flex; align-items:center; justify-content:center; padding:16px; border-right:1px solid #1c1c1e; }
     .panel-right { grid-area:right; position:relative; padding:12px 16px; }
     #chartCanvas { width:100%; height:100%; }
@@ -88,7 +117,7 @@
 </head>
 <body>
   <div class="main">
-    <!-- Left: Wheel (unchanged) -->
+    <!-- Left: Wheel -->
     <div id="wheel-wrap">
       <div id="wheel-container">
         <div id="pointer"></div>
@@ -164,7 +193,7 @@
         <div class="lb-table">
           <table id="lb-table">
             <thead>
-              <tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr>
+            <tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr>
             </thead>
             <tbody id="lb-body"><tr><td colspan="4" class="mono" style="opacity:.8">Loading…</td></tr></tbody>
           </table>
@@ -187,12 +216,8 @@
           <button class="close-btn" id="closeChart">Close</button>
         </div>
       </div>
-      <div class="panel-left">
-        <img id="chart-wheel" alt="Wheel"/>
-      </div>
-      <div class="panel-right">
-        <canvas id="chartCanvas"></canvas>
-      </div>
+      <div class="panel-left"><img id="chart-wheel" alt="Wheel"/></div>
+      <div class="panel-right"><canvas id="chartCanvas"></canvas></div>
     </div>
   </div>
 
@@ -228,7 +253,7 @@
       const copyIcon   = document.getElementById('copy-icon');
       const chartBtn   = document.getElementById('chart-button');
 
-      // Superadmin controls
+      // Superadmin
       const superControls = document.getElementById('superadmin-controls');
       const tokenListEl   = document.getElementById('token-list');
       const addTokenBtn   = document.getElementById('add-token-btn');
@@ -254,23 +279,30 @@
         return;
       }
 
-      /* ---- CRITICAL FIX: keep canvas pixel size == container size ---- */
-      function resizeCanvas() {
-        const container = document.getElementById('wheel-container');
-        const size = Math.min(container.offsetWidth, container.offsetHeight);
-        const mech = document.getElementById('canvas-mechanics');
-        const text = document.getElementById('canvas-text');
-        mech.width = mech.height = size;
-        text.width = text.height = size;
+      /* ========= CANVAS SIZING (fixes pointer/text alignment) ========= */
+      function setCanvasSize(canvas, size) {
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        canvas.style.width = size + 'px';
+        canvas.style.height = size + 'px';
+        canvas.width = Math.floor(size * dpr);
+        canvas.height = Math.floor(size * dpr);
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);   // scale all drawings to CSS pixels
+        return { ctx, dpr };
+      }
 
-        // keep Winwheel geometry in sync
+      function resizeCanvases() {
+        const cont = document.getElementById('wheel-container');
+        const size = Math.min(cont.clientWidth, cont.clientHeight);
+        setCanvasSize(document.getElementById('canvas-mechanics'), size);
+        setCanvasSize(document.getElementById('canvas-text'), size);
         if (mechanicsWheel) {
           mechanicsWheel.outerRadius = size / 2;
           mechanicsWheel.draw(false);
-          drawTextWheel(mechanicsWheel.rotationAngle - 60);
+          drawTextWheel(mechanicsWheel.rotationAngle);
         }
       }
-      window.addEventListener('resize', () => { resizeCanvas(); });
+      window.addEventListener('resize', resizeCanvases);
 
       function usdClass(val) {
         const n = typeof val === 'string' ? Number(val.replace(/[^0-9.]/g,'')) : Number(val);
@@ -307,11 +339,9 @@
                 <span class="token-name">${row.token_name || 'Token'}</span>
                 <span class="mono" style="opacity:.8">${row.contract_address}</span>
               </div>
-              <div>
-                <button data-contract="${row.contract_address}">Disable</button>
-              </div>`;
-            const btn = item.querySelector('button');
-            btn.onclick = async () => {
+              <div><button data-contract="${row.contract_address}">Disable</button></div>`;
+            item.querySelector('button').onclick = async () => {
+              const btn = item.querySelector('button');
               btn.disabled = true;
               const res2 = await fetch('/api/admin/tokens', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -352,13 +382,7 @@
           lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="opacity:.8">No data yet.</td></tr>`;
           return;
         }
-        lbBody.innerHTML = rows.map(r => `
-          <tr>
-            <td>${r.rank}</td>
-            <td>${r.user}</td>
-            <td>${r.spins}</td>
-            <td>${r.payout}</td>
-          </tr>`).join('');
+        lbBody.innerHTML = rows.map(r => `<tr><td>${r.rank}</td><td>${r.user}</td><td>${r.spins}</td><td>${r.payout}</td></tr>`).join('');
       }
       lbMode.addEventListener('change', renderLeaderboard);
 
@@ -375,19 +399,17 @@
           token_name = tn; image_url = iu; contract_address = data.contract_address || null;
           role = data.role || null;
 
-          // Admin / Superadmin panel
+          /* Admin panel */
           if (role === 'admin' || role === 'superadmin') {
             const info = data.adminInfo || {};
             spinNameEl.textContent = info.tokenSymbol || token_name || '—';
-            const tokAmt = (typeof info.tokenAmt === 'number') ? info.tokenAmt.toLocaleString(undefined, { maximumFractionDigits: 6 }) : String(info.tokenAmt ?? 'N/A');
-            spinQtyEl.textContent = tokAmt;
-            const tokUsd = (typeof info.tokenUsdValue === 'string') ? info.tokenUsdValue : (typeof info.tokenUsdValue === 'number' ? info.tokenUsdValue.toFixed(2) : 'N/A');
+            spinQtyEl.textContent  = (typeof info.tokenAmt === 'number') ? info.tokenAmt.toLocaleString(undefined, { maximumFractionDigits: 6 }) : String(info.tokenAmt ?? 'N/A');
+            const tokUsd = typeof info.tokenUsdValue === 'number' ? info.tokenUsdValue.toFixed(2) : String(info.tokenUsdValue ?? 'N/A');
             spinUsdEl.textContent = `$${tokUsd}`; spinUsdEl.className = `usd ${usdClass(tokUsd)}`;
 
             gasNameEl.textContent = info.gasSymbol || 'SOL';
-            const gasAmt = (typeof info.gasAmt === 'number') ? info.gasAmt.toFixed(4) : String(info.gasAmt ?? 'N/A');
-            gasQtyEl.textContent = gasAmt;
-            const gasUsd = (typeof info.gasUsdValue === 'string') ? info.gasUsdValue : (typeof info.gasUsdValue === 'number' ? info.gasUsdValue.toFixed(2) : 'N/A');
+            gasQtyEl.textContent  = (typeof info.gasAmt === 'number') ? info.gasAmt.toFixed(4) : String(info.gasAmt ?? 'N/A');
+            const gasUsd = typeof info.gasUsdValue === 'number' ? info.gasUsdValue.toFixed(2) : String(info.gasUsdValue ?? 'N/A');
             gasUsdEl.textContent = `$${gasUsd}`; gasUsdEl.className = `usd ${usdClass(gasUsd)}`;
 
             poolAddrEl.textContent = `Wallet: ${info.poolAddr || '—'}`;
@@ -417,22 +439,21 @@
               };
             }
 
-            // Leaderboards
             lbWrap.style.display = 'block';
             loadLeaderboards();
           } else {
             adminPanel.style.display = 'none';
           }
 
-          // Build wheel labels (unchanged)
+          /* Build wheel labels */
           const payout_amounts = Array.isArray(pa) ? pa : [];
-          segments = payout_amounts.map((amount) => ({ text: `${amount}`, text2: `${token_name}`, textFillStyle: 'white', textFontFamily: 'Arial' }));
+          segments = payout_amounts.map(amount => ({ text: `${amount}`, text2: `${token_name}`, textFillStyle: 'white', textFontFamily: 'Arial' }));
           if (!segments.length) throw new Error("No payout amounts configured.");
 
-          // Pre-size canvases BEFORE creating wheel (fix for tiny text)
-          resizeCanvas();
+          /* Size canvases BEFORE creating the wheel (key to alignment) */
+          resizeCanvases();
 
-          // Preload overlay image to avoid broken-image flash
+          /* Preload overlay image (no broken-img flash) */
           if (image_url) {
             const img = new Image();
             img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
@@ -440,28 +461,23 @@
             img.src = image_url;
           }
 
-          const radius = document.getElementById('canvas-mechanics').width / 2;
+          const radius = document.getElementById('canvas-mechanics').clientWidth / 2;
 
           mechanicsWheel = new Winwheel({
             canvasId: 'canvas-mechanics',
             numSegments: segments.length,
             segments: segments.map(() => ({ fillStyle: 'transparent', strokeStyle: 'none' })),
             outerRadius: radius,
-            pointerAngle: 90,
             animation: {
-              type: 'spinToStop', duration: 5, spins: 8,
-              callbackFinished: () => {
-                const spinsLeftText = typeof finalSpinsLeft === 'number' ? `Spins Left Today: ${finalSpinsLeft}` : 'Unlimited spins';
-                messageDiv.textContent = announcedPrize ? `You won: ${announcedPrize}\n${spinsLeftText}` : `Spin completed.\n${spinsLeftText}`;
-                isSpinning = false;
-                spinButton.disabled = true;
-                spinButton.classList.add("hidden");
-              }
+              type: 'spinToStop',
+              duration: 5,
+              spins: 8
             }
           });
 
-          drawTextWheel();                   // initial labels
-          spinButton.disabled = false;       // show SPIN exactly like before
+          /* Initial draw */
+          drawTextWheel(0);
+          spinButton.disabled = false;
           spinButton.classList.remove("hidden");
 
         } catch (err) {
@@ -473,40 +489,42 @@
         }
       }
 
-      function drawTextWheel(rotation = -60) {
+      /* Draw labels centered per segment, aligned to TOP baseline */
+      function drawTextWheel(currentRotationDeg = 0) {
         const canvas = document.getElementById("canvas-text");
         const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const W = canvas.clientWidth, H = canvas.clientHeight;
+        ctx.clearRect(0, 0, W, H);
 
-        const centerX = canvas.width / 2;
-        const centerY = canvas.height / 2;
-        const numSegments = segments.length;
-        if (!numSegments) return;
+        const cx = W / 2, cy = H / 2;
+        const n = segments.length; if (!n) return;
 
-        const radius = Math.min(canvas.width, canvas.height) / 2;
-        const numberFontPx = Math.max(10, Math.min(48, Math.round(radius * 0.12)));
-        const tokenFontPx  = Math.max(8,  Math.min(36, Math.round(radius * 0.09)));
-        const quantityRadius = radius * 0.8;
-        const tokenRadius    = quantityRadius * 0.85;
-        const segmentAngle = (2 * Math.PI) / numSegments;
+        const r = Math.min(W, H) / 2;
+        const qtyRadius   = r * 0.80;
+        const tokenRadius = r * 0.85;
 
-        for (let i = 1; i <= numSegments; i++) {
-          const seg = segments[i - 1];
-          const angle = rotation * (Math.PI / 180) + (i - 1) * segmentAngle + segmentAngle / 2;
+        const numberFontPx = Math.max(12, Math.min(48, Math.round(r * 0.12)));
+        const tokenFontPx  = Math.max(10, Math.min(36, Math.round(r * 0.09)));
+
+        const segmentAngle = (2 * Math.PI) / n;
+        const rotationRad  = (currentRotationDeg - 90) * Math.PI / 180; // -90° => top-center baseline
+
+        for (let i = 0; i < n; i++) {
+          const seg = segments[i];
+          const angle = rotationRad + (i + 0.5) * segmentAngle; // center of segment
 
           ctx.save();
-          ctx.translate(centerX, centerY);
+          ctx.translate(cx, cy);
           ctx.rotate(angle);
           ctx.fillStyle = seg.textFillStyle || 'white';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
 
           ctx.font = `${numberFontPx}px ${seg.textFontFamily || 'Arial'}`;
-          ctx.fillText(seg.text, 0, -quantityRadius);
+          ctx.fillText(seg.text, 0, -qtyRadius);
 
           ctx.font = `${tokenFontPx}px ${seg.textFontFamily || 'Arial'}`;
           ctx.fillText(seg.text2, 0, -tokenRadius);
-
           ctx.restore();
         }
       }
@@ -514,15 +532,15 @@
       async function openChart(range) {
         try {
           chartTitle.textContent = `${token_name || 'Token'} • Performance`;
-          document.getElementById('chart-modal').style.display = 'flex';
+          chartModal.style.display = 'flex';
           if (image_url) {
-            const d = document.getElementById('canvas-mechanics').width;
-            chartWheel.style.width = Math.round(d * 0.25) + 'px';
-            chartWheel.style.height = Math.round(d * 0.25) + 'px';
+            const size = document.getElementById('wheel-container').clientWidth * 0.25;
+            chartWheel.style.width = Math.round(size) + 'px';
+            chartWheel.style.height = Math.round(size) + 'px';
             chartWheel.onload = () => { chartWheel.style.display = 'block'; };
             chartWheel.onerror = () => { chartWheel.style.display = 'none'; };
             chartWheel.src = image_url;
-          } else { chartWheel.style.display = 'none'; }
+          } else chartWheel.style.display = 'none';
 
           const res = await fetch('/api/chart', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -537,8 +555,7 @@
             type: 'line',
             data: payload.chartData,
             options: Object.assign({
-              responsive: true,
-              maintainAspectRatio: false,
+              responsive: true, maintainAspectRatio: false,
               interaction: { mode: 'index', intersect: false },
               plugins: { legend: { labels: { color: '#ddd' } }, tooltip: { enabled: true } },
               scales: {
@@ -555,16 +572,13 @@
 
       const spinHandler = async () => {
         if (hasSpun || isSpinning || !mechanicsWheel) return;
-        hasSpun = true;
-        isSpinning = true;
-        spinButton.disabled = true;
-        spinButton.classList.add("hidden");
+        hasSpun = true; isSpinning = true;
+        spinButton.disabled = true; spinButton.classList.add("hidden");
         messageDiv.textContent = "Preparing your spin...";
 
         try {
           const res = await fetch("/api/spin", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
+            method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ token, spin: true, server_id })
           });
           const data = await res.json();
@@ -574,35 +588,37 @@
           const seg = mechanicsWheel.segments[segmentIndex + 1];
           if (!seg) throw new Error("Invalid segment returned from server");
 
-          const center = (seg.startAngle + seg.endAngle) / 2;
-          const randomOffset = (Math.random() * (seg.endAngle - seg.startAngle) * 0.8) - ((seg.endAngle - seg.startAngle) * 0.4);
-          mechanicsWheel.animation.stopAngle = (center + randomOffset) % 360;
+          const centerDeg = (seg.startAngle + seg.endAngle) / 2;
+          const span = (seg.endAngle - seg.startAngle) * 0.8;
+          const randomOffset = (Math.random() * span) - (span / 2);
+
+          mechanicsWheel.animation.stopAngle = (centerDeg + randomOffset) % 360;
+
           announcedPrize = data.prize;
           finalSpinsLeft = data.spins_left;
 
+          /* keep overlay + labels in sync with mechanics rotation while spinning */
           mechanicsWheel.animation.callbackBefore = () => {
-            const adjustedAngle = mechanicsWheel.rotationAngle - 30;
-            drawTextWheel(adjustedAngle - 60);
-            overlayImg.style.transform = `rotate(${adjustedAngle}deg)`;
+            const deg = mechanicsWheel.rotationAngle;
+            overlayImg.style.transform = `rotate(${deg}deg)`;
+            drawTextWheel(deg);
           };
 
           messageDiv.textContent = "Spinning...";
           mechanicsWheel.stopAnimation(false);
           mechanicsWheel.rotationAngle = 0; mechanicsWheel.draw();
-          drawTextWheel(-60);
+          drawTextWheel(0);
           mechanicsWheel.startAnimation();
 
         } catch (err) {
           messageDiv.textContent = `Spin failed: ${err.message}`;
-          isSpinning = false;
-          hasSpun = false;
-          spinButton.disabled = true;
-          spinButton.classList.add("hidden");
+          isSpinning = false; hasSpun = false;
+          spinButton.disabled = true; spinButton.classList.add("hidden");
         }
       };
 
       document.getElementById('closeChart').addEventListener('click', () => { chartModal.style.display = 'none'; });
-      document.getElementById('rangeSelect').addEventListener('change', (e) => { openChart(e.target.value); });
+      rangeSelect.addEventListener('change', (e) => { openChart(e.target.value); });
       lbMode.addEventListener('change', renderLeaderboard);
       spinButton.addEventListener("click", spinHandler);
 
