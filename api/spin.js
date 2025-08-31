@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, Transaction } from '@solana/web3.js';
-import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getMint } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
 import { Helius } from 'helius-sdk';
 
@@ -98,7 +98,7 @@ export default async function handler(req, res) {
 
       if (spinCountError) {
         console.error(`Spin count error: ${spinCountError.message}`);
-        return res.status(500).json({ error: 'DB error checking spin history' });
+        throw new Error('DB error checking spin history');
       }
       spins_left = Math.max(0, userData.spin_limit - recentSpins.length);
       if (recentSpins.length >= userData.spin_limit) {
@@ -138,6 +138,10 @@ export default async function handler(req, res) {
       const userWallet = new PublicKey(wallet_address);
       const tokenMint = new PublicKey(contract_address);
 
+      const mintInfo = await getMint(connection, tokenMint);
+      const decimals = mintInfo.decimals;
+      const rawAmount = BigInt(rewardAmount) * (10n ** BigInt(decimals));
+
       const fromTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, fundingWallet.publicKey);
       const toTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, userWallet);
 
@@ -146,22 +150,18 @@ export default async function handler(req, res) {
           fromTokenAccount.address,
           toTokenAccount.address,
           fundingWallet.publicKey,
-          rewardAmount * (10 ** 5)
+          rawAmount
         )
       );
 
-      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+      transaction.recentBlockhash = blockhash;
       transaction.feePayer = fundingWallet.publicKey;
 
       transaction.sign(fundingWallet);
 
-      const serializedTransaction = transaction.serialize({
-        requireAllSignatures: false,
-        verifySignatures: false
-      });
-
-      const txSignature = await helius.rpc.sendTransaction(serializedTransaction, { skipPreflight: true });
-      await connection.confirmTransaction(txSignature);
+      const txSignature = await helius.rpc.sendTransaction(transaction, { skipPreflight: true });
+      await connection.confirmTransaction({ signature: txSignature, blockhash, lastValidBlockHeight }, 'confirmed');
       console.log("Transaction confirmed with signature:", txSignature);
 
       await supabase.from('daily_spins').insert({ discord_id, reward: rewardAmount, contract_address, signature: txSignature });
