@@ -1,15 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
+import { Helius } from 'helius-sdk';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL;
+const COINMARKETCAP_API_KEY = process.env.COINMARKETCAP_API_KEY;
 
 const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const helius = new Helius(HELIUS_RPC_URL);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -28,7 +32,7 @@ export default async function handler(req, res) {
     const TOKEN_SECRET = process.env.SPIN_KEY;
     if (!TOKEN_SECRET) {
       console.error("FATAL: SPIN_KEY environment variable not found or is empty.");
-      return res.status(500).json({ error: 'A server configuration error occurred. Please notify an administrator.' });
+      return res.status(500).json({ error: 'Server configuration error' });
     }
 
     const [token, signature] = signedToken.split('.');
@@ -160,7 +164,42 @@ export default async function handler(req, res) {
         payout_amounts: config.payout_amounts,
         image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Harold_800px.webp'
       };
-      return res.status(200).json({ tokenConfig, spins_left, is_admin: isSuperadmin });
+
+      let adminInfo = {};
+      if (isSuperadmin) {
+        const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+        const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), fundingWallet.publicKey);
+        let balance;
+        try {
+          balance = await helius.rpc.getTokenAccountBalance(ata.toString());
+        } catch (err) {
+          balance = await connection.getTokenAccountBalance(ata);
+        }
+        let usdValue = 0;
+        try {
+          const cmcRes = await fetch('https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?slug=harold-sol', {
+            headers: {
+              'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY
+            }
+          });
+          const cmcData = await cmcRes.json();
+          usdValue = balance.value.uiAmount * cmcData.data.HAROLD.quote.USD.price;
+        } catch (err) {
+          try {
+            const heliusPrice = await helius.rpc.getAssetPrice(contract_address);
+            usdValue = balance.value.uiAmount * heliusPrice.price;
+          } catch (err) {
+            console.error('Price fetch failed');
+          }
+        }
+        adminInfo = {
+          tokenAmt: balance.value.uiAmount,
+          usdValue,
+          poolAddr: fundingWallet.publicKey.toString()
+        };
+      }
+
+      return res.status(200).json({ tokenConfig, spins_left, adminInfo });
     }
   } catch (err) {
     console.error("API error:", err.message, err.stack);
