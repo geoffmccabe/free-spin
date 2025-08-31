@@ -171,12 +171,11 @@ export default async function handler(req, res) {
         const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), fundingWallet.publicKey);
         let balance = 0;
         try {
-          const heliusBalance = await helius.rpc.getTokenAccountBalance(ata.toString());
-          balance = heliusBalance.value.uiAmount;
+          const balanceResponse = await connection.getTokenAccountBalance(ata);
+          balance = balanceResponse.value.uiAmount;
         } catch (err) {
-          console.error('Helius balance fetch failed', err);
-          const solanaBalance = await connection.getTokenAccountBalance(ata);
-          balance = solanaBalance.value.uiAmount;
+          console.error('Balance fetch failed', err);
+          balance = 'N/A';
         }
 
         let usdValue = 0;
@@ -190,12 +189,18 @@ export default async function handler(req, res) {
           usdValue = balance * cmcData.data.HAROLD.quote.USD.price;
         } catch (err) {
           console.error('CMC price fetch failed', err);
-          usdValue = 'N/A';
+          try {
+            const asset = await helius.rpc.getAsset(contract_address);
+            usdValue = balance * asset.price_per_token.usd;
+          } catch (heliusErr) {
+            console.error('Helius price fetch failed', heliusErr);
+            usdValue = 'N/A';
+          }
         }
 
         adminInfo = {
           tokenAmt: balance,
-          usdValue: usdValue,
+          usdValue,
           poolAddr: fundingWallet.publicKey.toString()
         };
       }
