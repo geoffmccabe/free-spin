@@ -1,19 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
-import { Helius } from 'helius-sdk';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL;
-const COINMARKETCAP_API_KEY = process.env.COINMARKETCAP_API_KEY;
 
 const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-const helius = new Helius(HELIUS_RPC_URL);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -32,7 +28,7 @@ export default async function handler(req, res) {
     const TOKEN_SECRET = process.env.SPIN_KEY;
     if (!TOKEN_SECRET) {
       console.error("FATAL: SPIN_KEY environment variable not found or is empty.");
-      return res.status(500).json({ error: 'Server configuration error' });
+      return res.status(500).json({ error: 'A server configuration error occurred. Please notify an administrator.' });
     }
 
     const [token, signature] = signedToken.split('.');
@@ -189,13 +185,7 @@ export default async function handler(req, res) {
           usdValue = balance * cmcData.data.HAROLD.quote.USD.price;
         } catch (err) {
           console.error('CMC price fetch failed', err);
-          try {
-            const asset = await helius.rpc.getAsset(contract_address);
-            usdValue = balance * asset.price_per_token.usd;
-          } catch (heliusErr) {
-            console.error('Helius price fetch failed', heliusErr);
-            usdValue = 'N/A';
-          }
+          usdValue = 'N/A';
         }
 
         adminInfo = {
