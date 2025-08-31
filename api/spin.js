@@ -1,18 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
-import { Connection, PublicKey, Keypair, Transaction } from '@solana/web3.js';
-import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getMint } from '@solana/spl-token';
+import { Connection, PublicKey, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { getOrCreateAssociatedTokenAccount, createTransferInstruction } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
-import { Helius } from 'helius-sdk';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FUNDING_WALLET_PRIVATE_KEY = process.env.FUNDING_WALLET_PRIVATE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL;
 
 const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-const helius = new Helius(HELIUS_RPC_URL);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -31,7 +28,7 @@ export default async function handler(req, res) {
     const TOKEN_SECRET = process.env.SPIN_KEY;
     if (!TOKEN_SECRET) {
       console.error("FATAL: SPIN_KEY environment variable not found or is empty.");
-      return res.status(500).json({ error: 'Server configuration error' });
+      return res.status(500).json({ error: 'A server configuration error occurred. Please notify an administrator.' });
     }
 
     const [token, signature] = signedToken.split('.');
@@ -98,7 +95,7 @@ export default async function handler(req, res) {
 
       if (spinCountError) {
         console.error(`Spin count error: ${spinCountError.message}`);
-        throw new Error('DB error checking spin history');
+        return res.status(500).json({ error: 'DB error checking spin history' });
       }
       spins_left = Math.max(0, userData.spin_limit - recentSpins.length);
       if (recentSpins.length >= userData.spin_limit) {
@@ -138,10 +135,6 @@ export default async function handler(req, res) {
       const userWallet = new PublicKey(wallet_address);
       const tokenMint = new PublicKey(contract_address);
 
-      const mintInfo = await getMint(connection, tokenMint);
-      const decimals = mintInfo.decimals;
-      const rawAmount = BigInt(rewardAmount) * (10n ** BigInt(decimals));
-
       const fromTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, fundingWallet.publicKey);
       const toTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, userWallet);
 
@@ -150,18 +143,11 @@ export default async function handler(req, res) {
           fromTokenAccount.address,
           toTokenAccount.address,
           fundingWallet.publicKey,
-          rawAmount
+          rewardAmount * (10 ** 5)
         )
       );
 
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
-      transaction.recentBlockhash = blockhash;
-      transaction.feePayer = fundingWallet.publicKey;
-
-      transaction.sign(fundingWallet);
-
-      const txSignature = await helius.rpc.sendTransaction(transaction, { skipPreflight: true });
-      await connection.confirmTransaction({ signature: txSignature, blockhash, lastValidBlockHeight }, 'confirmed');
+      const txSignature = await sendAndConfirmTransaction(connection, transaction, [fundingWallet]);
       console.log("Transaction confirmed with signature:", txSignature);
 
       await supabase.from('daily_spins').insert({ discord_id, reward: rewardAmount, contract_address, signature: txSignature });
@@ -174,7 +160,7 @@ export default async function handler(req, res) {
         payout_amounts: config.payout_amounts,
         image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Harold_800px.webp'
       };
-      return res.status(200).json({ tokenConfig, spins_left });
+      return res.status(200).json({ tokenConfig, spins_left, is_admin: isSuperadmin });
     }
   } catch (err) {
     console.error("API error:", err.message, err.stack);
