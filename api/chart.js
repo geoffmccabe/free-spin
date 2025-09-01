@@ -2,91 +2,109 @@ import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+// Format yyyy-mm-dd (UTC)
+function toYMD(d) {
+  const yr = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth()+1).padStart(2,'0');
+  const da = String(d.getUTCDate()).padStart(2,'0');
+  return `${yr}-${mo}-${da}`;
+}
+function addDays(d, n){ const x = new Date(d); x.setUTCDate(x.getUTCDate()+n); return x; }
 
-  try {
-    const { token, server_id, range = 'past30', contract_address } = req.body;
+export default async function handler(req,res){
+  if (req.method !== 'POST') return res.status(405).json({ error:'Method not allowed' });
+  try{
+    const { token, server_id, contract_address, range } = req.body || {};
+    if (!token || !server_id) return res.status(400).json({ error:'token and server_id required' });
 
-    if (!token || !server_id) {
-      return res.status(400).json({ error: 'Token and server ID required' });
-    }
-    if (!contract_address) {
-      return res.status(400).json({ error: 'contract_address (mint) is required' });
-    }
-
-    // Validate token => get discord_id
-    const { data: tokenData, error: tokenError } = await supabase
+    // Validate token to discord_id
+    const { data: tok, error: tokErr } = await supabase
       .from('spin_tokens')
       .select('discord_id')
       .eq('token', token)
       .single();
-    if (tokenError || !tokenData) return res.status(400).json({ error: 'Invalid token' });
+    if (tokErr || !tok) return res.status(400).json({ error:'Invalid token' });
 
-    // Check admin or superadmin on this server
-    const { data: adminData } = await supabase
-      .from('server_admins')
-      .select('role')
-      .eq('discord_id', tokenData.discord_id)
-      .eq('server_id', server_id)
-      .single();
-    const role = adminData?.role;
-    if (role !== 'admin' && role !== 'superadmin') {
-      return res.status(403).json({ error: 'Admin access required' });
+    // Verify contract belongs to the server (if provided)
+    let mintList = [];
+    if (contract_address) {
+      const { data: st, error: stErr } = await supabase
+        .from('server_tokens')
+        .select('contract_address')
+        .eq('server_id', server_id);
+      if (stErr) return res.status(400).json({ error: stErr.message });
+      mintList = (st||[]).map(r=>r.contract_address);
+      if (!mintList.includes(contract_address)) {
+        return res.status(400).json({ error:'Invalid token for this server' });
+      }
     }
 
-    // Query spins for this mint + range
-    let query = supabase
-      .from('daily_spins')
-      .select('created_at, reward, contract_address')
-      .eq('contract_address', contract_address);
+    // Time window
+    const today = new Date(); // UTC "today"
+    let start;
+    if (range === 'all') {
+      // earliest spin
+      const { data: first, error: firstErr } = await supabase
+        .from('daily_spins').select('created_at').order('created_at', { ascending: true }).limit(1);
+      start = first && first[0] ? new Date(first[0].created_at) : addDays(today, -30);
+    } else {
+      start = addDays(today, -29); // past30 includes today -> 30 buckets
+    }
+    // Normalize start to 00:00:00 UTC
+    start = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
 
-    if (range === 'past30') {
-      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-      query = query.gte('created_at', thirtyDaysAgo);
-    } else if (typeof range === 'object' && range?.start && range?.end) {
-      query = query.gte('created_at', range.start).lte('created_at', range.end);
-    } // 'all' => no extra filter
+    // Get spins for this contract & range
+    let q = supabase.from('daily_spins')
+      .select('created_at,reward,contract_address')
+      .gte('created_at', start.toISOString());
+    if (contract_address) q = q.eq('contract_address', contract_address);
+    const { data: spins, error: spinsErr } = await q;
+    if (spinsErr) return res.status(400).json({ error: spinsErr.message });
 
-    const { data: spins, error } = await query;
-    if (error) throw new Error('DB error fetching spins');
+    // Bucket by day (UTC)
+    const buckets = {};
+    for (let d = new Date(start); toYMD(d) <= toYMD(today); d = addDays(d, 1)) {
+      buckets[toYMD(d)] = { count: 0, sum: 0 };
+    }
+    for (const s of (spins||[])) {
+      const dt = new Date(s.created_at);
+      const key = toYMD(dt);
+      if (!buckets[key]) buckets[key] = { count: 0, sum: 0 };
+      buckets[key].count += 1;
+      buckets[key].sum += Number(s.reward || 0);
+    }
 
-    // Aggregate per day: raw values (no normalization)
-    const aggregated = (spins || []).reduce((acc, spin) => {
-      const date = spin.created_at.split('T')[0];
-      if (!acc[date]) acc[date] = { spins: 0, payout: 0 };
-      acc[date].spins += 1;
-      acc[date].payout += Number(spin.reward || 0);
-      return acc;
-    }, {});
-
-    const dates = Object.keys(aggregated).sort();
-    const spinsData = dates.map(d => aggregated[d].spins);
-    const payoutData = dates.map(d => aggregated[d].payout);
+    const labels = Object.keys(buckets).sort();
+    const spinsSeries = labels.map(k => buckets[k].count);
+    const avgSeries   = labels.map(k => buckets[k].count ? +(buckets[k].sum / buckets[k].count).toFixed(2) : 0);
 
     const chartData = {
-      labels: dates,
+      labels,
       datasets: [
-        { label: '# of Spins', data: spinsData, yAxisID: 'y', tension: 0.2 },
-        { label: 'Payout Amount', data: payoutData, yAxisID: 'y1', tension: 0.2 }
+        {
+          label: 'Spins',
+          yAxisID: 'y',
+          data: spinsSeries,
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.2
+        },
+        {
+          label: 'Avg Payout',
+          yAxisID: 'y1',
+          data: avgSeries,
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.2
+        }
       ]
     };
 
-    const options = {
-      scales: {
-        y:  { type: 'linear', position: 'left',  title: { display: true, text: '# Spins' } },
-        y1: { type: 'linear', position: 'right', title: { display: true, text: 'Payout Amount' }, grid: { drawOnChartArea: false } }
-      }
-    };
-
-    return res.status(200).json({ chartData, options });
-  } catch (err) {
-    console.error('API error:', err.message, err.stack);
-    return res.status(500).json({ error: 'An internal error occurred.' });
+    return res.status(200).json({ chartData, options: {} });
+  }catch(e){
+    console.error('chart error:', e);
+    return res.status(500).json({ error:'Internal error' });
   }
 }
