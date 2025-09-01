@@ -4,30 +4,27 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin • Spin</title>
-<link rel="preconnect" href="https://cdn.jsdelivr.net">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
   html,body{margin:0;height:100%;background:#000;color:#fff;font-family:Inter,system-ui,Arial,sans-serif}
-  .page{min-height:100%;display:grid;grid-template-columns:1.2fr 1fr;gap:14px;padding:14px;box-sizing:border-box}
+  .page{min-height:100%;display:grid;grid-template-columns:2fr 1fr;gap:14px;padding:14px;box-sizing:border-box}
   @media (max-width: 1100px){ .page{grid-template-columns:1fr;grid-auto-rows:max-content} }
 
-  /* Left: Chart panel */
+  /* Shared panel style for both sides */
   .panel{background:#0b0b0c;border:1px solid #1f1f20;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;min-height:60vh}
   .panel-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border-bottom:1px solid #1c1c1e}
   .panel-title{font-weight:700}
   .panel-body{flex:1;min-height:300px;position:relative;padding:12px 16px}
+
+  /* Chart specifics */
   #chartCanvas{width:100%;height:100%}
   .toolbar{display:flex;align-items:center;gap:8px}
   .toolbar select{background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:6px 10px}
   .back{background:#222;border:1px solid #444;color:#fff;padding:8px 12px;border-radius:10px;text-decoration:none}
-
   @keyframes slowspin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
   #chart-wheel{position:absolute;left:16px;bottom:16px;width:140px;height:140px;animation:slowspin 15s linear infinite;filter:drop-shadow(0 8px 20px rgba(0,0,0,.5));display:none}
 
-  /* Right: Admin panel */
-  .admin{background:#0b0b0c;border:1px solid #1f1f20;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);display:flex;flex-direction:column}
-  .admin-sec{border-top:1px solid #1c1c1e;padding:12px 16px}
-  .admin-sec:first-child{border-top:none}
+  /* Admin panel contents */
   .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .token-name{color:#d4af37;font-weight:800}
   .usd{font-weight:700}
@@ -36,6 +33,9 @@
   .copy-icon{margin-left:8px;display:inline-flex;vertical-align:middle;cursor:pointer}
   .copy-icon svg{width:16px;height:16px}
   .copy-copied rect{stroke:#22c55e!important}
+
+  .section{border-top:1px solid #1c1c1e;padding:12px 0}
+  .section:first-child{border-top:none}
 
   /* Manage Token Types */
   #token-list{display:flex;flex-direction:column;gap:6px;max-height:180px;overflow:auto}
@@ -62,7 +62,7 @@
 </head>
 <body>
   <div class="page">
-    <!-- Left: Chart -->
+    <!-- Left: Chart panel (2/3) -->
     <section class="panel">
       <div class="panel-header">
         <div class="panel-title" id="chart-title">Token Performance</div>
@@ -81,59 +81,63 @@
       </div>
     </section>
 
-    <!-- Right: Admin panel -->
-    <aside class="admin" id="admin-panel">
-      <div class="admin-sec">
-        <h3 style="margin:0 0 8px 0">Admin Panel</h3>
-        <div class="row">
-          <span class="token-name" id="spin-name">—</span>:
-          <span id="spin-qty">—</span> /
-          <span class="usd" id="spin-usd">$—</span>
-        </div>
-        <div class="row" style="margin-top:6px">
-          <span class="token-name" id="gas-name">—</span>:
-          <span id="gas-qty">—</span> /
-          <span class="usd" id="gas-usd">$—</span>
-        </div>
+    <!-- Right: Admin panel (1/3) -->
+    <aside class="panel" id="admin-panel">
+      <div class="panel-header">
+        <div class="panel-title">Admin Panel</div>
       </div>
-
-      <div class="admin-sec">
-        <div class="row" style="align-items:center">
-          <span class="mono" id="pool-addr">Wallet: —</span>
-          <span class="copy-icon" id="copy-icon" title="Copy address">
-            <svg viewBox="0 0 24 24" fill="none">
-              <rect x="7" y="7" width="12" height="12" rx="2" stroke="#bbb" />
-              <rect x="4" y="4" width="12" height="12" rx="2" stroke="#bbb" />
-            </svg>
-          </span>
-        </div>
-      </div>
-
-      <div class="admin-sec" id="superadmin-controls" style="display:none;">
-        <h4 style="margin:0 0 8px 0">Manage Token Types</h4>
-        <div id="token-list"></div>
-        <div class="token-add">
-          <input type="text" id="new-token-contract" placeholder="New token mint address (contract_address)">
-          <button id="add-token-btn">Add Token</button>
-        </div>
-      </div>
-
-      <div class="admin-sec">
-        <div class="lb-head">
-          <h4 style="margin:0">Leaderboards (Top 200)</h4>
-          <div class="lb-controls">
-            <label for="lbMode">Sort by</label>
-            <select id="lbMode">
-              <option value="spins">Spins</option>
-              <option value="payout">Payout</option>
-            </select>
+      <div class="panel-body">
+        <div class="section">
+          <div class="row">
+            <span class="token-name" id="spin-name">—</span>:
+            <span id="spin-qty">—</span> /
+            <span class="usd" id="spin-usd">$—</span>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <span class="token-name" id="gas-name">—</span>:
+            <span id="gas-qty">—</span> /
+            <span class="usd" id="gas-usd">$—</span>
           </div>
         </div>
-        <div class="lb-table">
-          <table>
-            <thead><tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr></thead>
-            <tbody id="lb-body"><tr><td colspan="4" class="mono" style="opacity:.8">Loading…</td></tr></tbody>
-          </table>
+
+        <div class="section">
+          <div class="row" style="align-items:center">
+            <span class="mono" id="pool-addr">Wallet: —</span>
+            <span class="copy-icon" id="copy-icon" title="Copy address">
+              <svg viewBox="0 0 24 24" fill="none">
+                <rect x="7" y="7" width="12" height="12" rx="2" stroke="#bbb" />
+                <rect x="4" y="4" width="12" height="12" rx="2" stroke="#bbb" />
+              </svg>
+            </span>
+          </div>
+        </div>
+
+        <div class="section" id="superadmin-controls" style="display:none;">
+          <h4 style="margin:0 0 8px 0">Manage Token Types</h4>
+          <div id="token-list"></div>
+          <div class="token-add">
+            <input type="text" id="new-token-contract" placeholder="New token mint address (contract_address)">
+            <button id="add-token-btn">Add Token</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="lb-head">
+            <h4 style="margin:0">Leaderboards (Top 200)</h4>
+            <div class="lb-controls">
+              <label for="lbMode">Sort by</label>
+              <select id="lbMode">
+                <option value="spins">Spins</option>
+                <option value="payout">Payout</option>
+              </select>
+            </div>
+          </div>
+          <div class="lb-table">
+            <table>
+              <thead><tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr></thead>
+              <tbody id="lb-body"><tr><td colspan="4" class="mono" style="opacity:.8">Loading…</td></tr></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </aside>
@@ -144,14 +148,12 @@
   const qs = new URLSearchParams(location.search);
   const token = qs.get('token');
   const server_id = qs.get('server_id');
-  if (!token || !server_id) {
-    alert('Missing token or server_id');
-    return;
-  }
+  if (!token || !server_id) { alert('Missing token or server_id'); return; }
+
   const backLink = document.getElementById('backLink');
   backLink.href = `index.html?token=${encodeURIComponent(token)}&server_id=${encodeURIComponent(server_id)}`;
 
-  // Admin panel refs
+  // Admin refs
   const spinNameEl = document.getElementById('spin-name');
   const spinQtyEl  = document.getElementById('spin-qty');
   const spinUsdEl  = document.getElementById('spin-usd');
