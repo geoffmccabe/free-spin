@@ -6,40 +6,32 @@
 <title>Admin • Spin</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-  * { box-sizing: border-box; }
+  *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:#000;color:#fff;font-family:Inter,system-ui,Arial,sans-serif;overflow-x:hidden}
   .page{
     min-height:100%;
     display:grid;
     grid-template-columns:minmax(0,2fr) minmax(0,1fr);
-    gap:14px; padding:14px; box-sizing:border-box;
+    gap:14px; padding:14px;
     max-width:100vw; overflow-x:hidden;
   }
   @media (max-width:1100px){ .page{grid-template-columns:1fr;grid-auto-rows:max-content} }
 
   /* Shared panel style */
-  .panel{background:#0b0b0c;border:1px solid #1f1f20;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;min-height:60vh}
+  .panel{background:#0b0b0c;border:1px solid #1f1f20;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;min-height:60vh;min-width:0}
   .panel-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border-bottom:1px solid #1c1c1e}
   .panel-title{font-weight:700}
   .panel-body{flex:1;min-height:300px;position:relative;padding:12px 16px;overflow:hidden}
 
-  /* Chart panel (left, 2/3) */
+  /* Chart (left, 2/3) */
   #chartCanvas{width:100%;height:100%}
   .toolbar{display:flex;align-items:center;gap:8px}
   .toolbar select{background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:6px 10px}
   .back{background:#222;border:1px solid #444;color:#fff;padding:8px 12px;border-radius:10px;text-decoration:none;white-space:nowrap}
 
-  /* Admin panel (right, 1/3) */
-  .admin-grid{
-    display:grid;
-    grid-template-columns:1fr auto; /* info left, wheel right */
-    gap:12px; align-items:start;
-  }
-  .admin-wheel{
-    width:140px; height:140px; flex:0 0 auto;
-    animation:slowspin 15s linear infinite; filter:drop-shadow(0 8px 20px rgba(0,0,0,.5));
-    display:none; /* shown when image loads */
-  }
+  /* Admin (right, 1/3) */
+  .admin-grid{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start}
+  .admin-wheel{width:140px;height:140px;animation:slowspin 15s linear infinite;filter:drop-shadow(0 8px 20px rgba(0,0,0,.5));display:none}
   @keyframes slowspin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 
   .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -55,18 +47,20 @@
   .section:first-child{border-top:none}
 
   /* Manage Token Types */
+  .hint{margin:10px 0 0 0; font-size:12px; color:#bbb}
   #token-list{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto}
   .token-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#0f0f10;border:1px solid #1f1f20;border-radius:10px}
-  .token-item .meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .badge{font-size:11px;padding:2px 8px;border-radius:999px;opacity:.95}
+  .token-item .meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;min-width:0}
+  .badge{font-size:11px;padding:2px 8px;border-radius:999px;opacity:.95;white-space:nowrap}
   .badge.enabled{color:#22c55e;border:1px solid #22c55e;background:rgba(34,197,94,.08)}
   .badge.disabled{color:#ef4444;border:1px solid #ef4444;background:rgba(239,68,68,.08)}
-  .token-item button{padding:6px 10px;font-size:12px;border-radius:10px;border:1px solid #2a2a2c;background:#1a1a1c;color:#fff;cursor:pointer;white-space:nowrap}
+  .token-item .mono{opacity:.8;overflow:hidden;text-overflow:ellipsis;max-width:36ch}
+
+  .token-item button,
+  #add-token-btn{padding:6px 10px;font-size:12px;border-radius:10px;border:1px solid #2a2a2c;background:#1a1a1c;color:#fff;cursor:pointer;white-space:nowrap}
 
   .token-add{display:flex;gap:8px;margin-top:10px}
   .token-add input{flex:1;min-width:0;background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:8px 10px;font-size:12px}
-  /* Match Disable button: black w/ gray border */
-  #add-token-btn{padding:6px 10px;font-size:12px;border-radius:10px;border:1px solid #2a2a2c;background:#1a1a1c;color:#fff;cursor:pointer}
 
   /* Leaderboards */
   .lb-head{display:flex;justify-content:space-between;align-items:center}
@@ -131,13 +125,17 @@
               </span>
             </div>
           </div>
-
           <img class="admin-wheel" id="admin-wheel" alt="Wheel">
         </div>
 
         <!-- Manage Token Types -->
         <div class="section" id="superadmin-controls" style="display:none;">
           <h4 style="margin:10px 0 8px 0">Manage Token Types</h4>
+          <div id="supports-hint" class="hint" style="display:none">
+            Toggling requires an <code>enabled boolean</code> column on <code>server_tokens</code>.
+            Run once:
+            <code>ALTER TABLE server_tokens ADD COLUMN enabled boolean DEFAULT true;</code>
+          </div>
           <div id="token-list"></div>
           <div class="token-add">
             <input type="text" id="new-token-contract" placeholder="New token mint address (contract_address)">
@@ -145,7 +143,7 @@
           </div>
         </div>
 
-        <!-- Leaderboards (pushed down by the taller info area) -->
+        <!-- Leaderboards -->
         <div class="section">
           <div class="lb-head">
             <h4 style="margin:0">Leaderboards (Top 200)</h4>
@@ -189,6 +187,7 @@
   const copyIcon   = document.getElementById('copy-icon');
 
   const superControls = document.getElementById('superadmin-controls');
+  const supportsHint  = document.getElementById('supports-hint');
   const tokenListEl   = document.getElementById('token-list');
   const addTokenBtn   = document.getElementById('add-token-btn');
   const newTokenInput = document.getElementById('new-token-contract');
@@ -206,7 +205,7 @@
   let token_name = null;
   let image_url = null;
 
-  // Admin wheel (moved into admin panel, top-right)
+  // Admin wheel (top-right)
   const adminWheel = document.getElementById('admin-wheel');
 
   function usdClass(val) {
@@ -218,7 +217,7 @@
   }
 
   async function init() {
-    // Use /api/spin (no spin) to get role, adminInfo, token config
+    // /api/spin (no spin): role + adminInfo + token config
     const res = await fetch('/api/spin', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ token, server_id })
@@ -260,7 +259,7 @@
     // Superadmin features
     if (role === 'superadmin') {
       superControls.style.display = 'block';
-      loadServerTokens();
+      await loadServerTokens(); // shows hint if toggling isn't supported yet
       addTokenBtn.onclick = async () => {
         const mint = newTokenInput.value.trim();
         if (!mint) return;
@@ -270,7 +269,11 @@
           body: JSON.stringify({ token, server_id, action:'add', contract_address: mint })
         });
         addTokenBtn.disabled = false;
-        if (resX.ok) { newTokenInput.value=''; loadServerTokens(); } else { alert('Failed to add token'); }
+        if (resX.ok) { newTokenInput.value=''; loadServerTokens(); }
+        else {
+          const p = await resX.json().catch(()=>({}));
+          alert('Failed to add token' + (p?.error ? `: ${p.error}` : ''));
+        }
       };
     }
 
@@ -312,7 +315,7 @@
         scales:{
           x:{ ticks:{ color:'#bbb' }, grid:{ color:'rgba(255,255,255,0.05)' } },
           y:{ ticks:{ color:'#bbb' }, grid:{ color:'rgba(255,255,255,0.05)' }, title:{ display:true, text:'# Spins', color:'#bbb' } },
-          y1:{ position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'Payout Amount', color:'#bbb' } }
+          y1:{ position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'Avg Payout', color:'#bbb' } }
         }
       }, payload.options || {})
     });
@@ -329,30 +332,44 @@
       if (!res.ok) { tokenListEl.innerHTML = `<div class="mono" style="color:#f66">Error: ${payload.error || 'failed to load'}</div>`; return; }
 
       const rows = payload.tokens || [];
-      if (!rows.length) { tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">No tokens added yet.</div>'; return; }
+      const supportsEnabled = !!payload.supportsEnabled;
+      supportsHint.style.display = supportsEnabled ? 'none' : 'block';
 
+      if (!rows.length) { tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">No tokens added yet.</div>'; return; }
       tokenListEl.innerHTML = '';
       rows.forEach(row=>{
-        const isEnabled = !!row.enabled;
+        const isEnabled = row.enabled !== false; // default true when column missing
         const el = document.createElement('div');
         el.className = 'token-item';
         el.innerHTML = `
           <div class="meta">
             <span class="badge ${isEnabled ? 'enabled' : 'disabled'}">${isEnabled ? 'ENABLED' : 'DISABLED'}</span>
             <span class="token-name">${row.token_name || 'Token'}</span>
-            <span class="mono" style="opacity:.8">${row.contract_address}</span>
+            <span class="mono">${row.contract_address}</span>
           </div>
-          <div><button data-contract="${row.contract_address}">${isEnabled ? 'Disable' : 'Re-enable'}</button></div>
+          <div>
+            ${supportsEnabled
+              ? `<button data-contract="${row.contract_address}">${isEnabled ? 'Disable' : 'Re-enable'}</button>`
+              : `<button disabled title="Add 'enabled' column to toggle">Toggle</button>`
+            }
+          </div>
         `;
-        el.querySelector('button').onclick = async () => {
-          const btn = el.querySelector('button'); btn.disabled = true;
-          const res2 = await fetch('/api/admin/tokens', {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ token, server_id, action:'setEnabled', contract_address: row.contract_address, enabled: !isEnabled })
-          });
-          btn.disabled = false;
-          if (res2.ok) loadServerTokens(); else alert('Failed to update token state');
-        };
+        const btn = el.querySelector('button');
+        if (supportsEnabled && btn) {
+          btn.onclick = async () => {
+            btn.disabled = true;
+            const res2 = await fetch('/api/admin/tokens', {
+              method:'POST', headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({ token, server_id, action:'setEnabled', contract_address: row.contract_address, enabled: !isEnabled })
+            });
+            btn.disabled = false;
+            if (res2.ok) loadServerTokens();
+            else {
+              const p = await res2.json().catch(()=>({}));
+              alert(p?.migration || p?.error || 'Failed to update token');
+            }
+          };
+        }
         tokenListEl.appendChild(el);
       });
     } catch(e) {
@@ -375,7 +392,6 @@
       lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="color:#f66">Error: ${e.message}</td></tr>`;
     }
   }
-
   function renderLeaderboard() {
     const mode = lbMode.value;
     const rows = (window._LB && (mode === 'spins' ? window._LB.bySpins : window._LB.byPayout)) || [];
