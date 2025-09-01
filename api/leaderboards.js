@@ -4,66 +4,78 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+function displayNameFor(id, map) {
+  const rec = map.get(id);
+  return rec?.display_name || rec?.username || rec?.name || id; // fallback to ID if unknown
+}
 
-  try {
+export default async function handler(req,res){
+  if (req.method !== 'POST') return res.status(405).json({ error:'Method not allowed' });
+  try{
     const { token, server_id } = req.body || {};
-    if (!token || !server_id) return res.status(400).json({ error: 'token and server_id required' });
+    if (!token || !server_id) return res.status(400).json({ error:'token and server_id required' });
 
-    // Validate token => discord_id
-    const { data: tokenData, error: tokenError } = await supabase
+    // Validate token
+    const { data: tok, error: tokErr } = await supabase
       .from('spin_tokens')
       .select('discord_id')
       .eq('token', token)
       .single();
-    if (tokenError || !tokenData) return res.status(400).json({ error: 'Invalid token' });
+    if (tokErr || !tok) return res.status(400).json({ error:'Invalid token' });
 
-    // Must be admin/superadmin
-    const { data: adminData } = await supabase
-      .from('server_admins')
-      .select('role')
-      .eq('discord_id', tokenData.discord_id)
-      .eq('server_id', server_id)
-      .single();
-    const role = adminData?.role;
-    if (role !== 'admin' && role !== 'superadmin') return res.status(403).json({ error: 'Admin access required' });
+    // Tokens allowed for this server
+    const { data: st, error: stErr } = await supabase
+      .from('server_tokens')
+      .select('contract_address')
+      .eq('server_id', server_id);
+    if (stErr) return res.status(400).json({ error: stErr.message });
+    const mints = (st||[]).map(r=>r.contract_address);
+    if (!mints.length) return res.status(200).json({ bySpins:[], byPayout:[] });
 
-    // Aggregate daily_spins (all time). If you add a server_id column later, filter here.
-    const { data: spins, error } = await supabase
+    // Fetch spins for these tokens (all-time leaderboards)
+    const { data: spins, error: spErr } = await supabase
       .from('daily_spins')
-      .select('discord_id, reward');
-    if (error) return res.status(500).json({ error: 'DB error fetching spins' });
+      .select('discord_id,reward,contract_address')
+      .in('contract_address', mints);
+    if (spErr) return res.status(400).json({ error: spErr.message });
 
-    const agg = {};
-    for (const row of (spins || [])) {
+    // Aggregate per user
+    const agg = new Map(); // id -> { spins, payout }
+    (spins||[]).forEach(row=>{
       const id = row.discord_id;
-      if (!agg[id]) agg[id] = { spins: 0, payout: 0 };
-      agg[id].spins += 1;
-      agg[id].payout += Number(row.reward || 0);
-    }
-    const all = Object.entries(agg).map(([discord_id, v]) => ({ discord_id, spins: v.spins, payout: v.payout }));
-    const bySpins = all.slice().sort((a, b) => b.spins - a.spins).slice(0, 200);
-    const byPayout = all.slice().sort((a, b) => b.payout - a.payout).slice(0, 200);
-
-    // Optional usernames
-    const ids = Array.from(new Set([...bySpins, ...byPayout].map(x => x.discord_id)));
-    let nameMap = {};
-    if (ids.length) {
-      const { data: users } = await supabase
-        .from('users')
-        .select('discord_id, username')
-        .in('discord_id', ids);
-      for (const u of (users || [])) nameMap[u.discord_id] = u.username || u.discord_id;
-    }
-    const label = id => nameMap[id] || id;
-
-    return res.status(200).json({
-      bySpins: bySpins.map((x, i) => ({ rank: i + 1, user: label(x.discord_id), spins: x.spins, payout: x.payout })),
-      byPayout: byPayout.map((x, i) => ({ rank: i + 1, user: label(x.discord_id), spins: x.spins, payout: x.payout }))
+      if (!agg.has(id)) agg.set(id, { spins: 0, payout: 0 });
+      const o = agg.get(id);
+      o.spins += 1;
+      o.payout += Number(row.reward || 0);
     });
-  } catch (e) {
-    console.error('leaderboards error:', e.message);
-    return res.status(500).json({ error: 'Internal error' });
+
+    // Top 200 by spins and by payout
+    const all = Array.from(agg.entries()).map(([id, v]) => ({ id, ...v }));
+    const bySpins  = all.slice().sort((a,b)=> b.spins - a.spins || b.payout - a.payout).slice(0,200);
+    const byPayout = all.slice().sort((a,b)=> b.payout - a.payout || b.spins - a.spins).slice(0,200);
+
+    // Try to resolve Discord usernames from likely tables
+    const ids = all.map(r=>r.id);
+    const nameMap = new Map();
+    // Try discord_users (preferred)
+    let { data: d1 } = await supabase.from('discord_users').select('discord_id,username,display_name').in('discord_id', ids);
+    if (Array.isArray(d1)) d1.forEach(r=> nameMap.set(r.discord_id, r));
+    // Fallback: users table may also carry names
+    if (nameMap.size < ids.length) {
+      let { data: d2 } = await supabase.from('users').select('discord_id,username,display_name,name').in('discord_id', ids);
+      if (Array.isArray(d2)) d2.forEach(r=> { if (!nameMap.has(r.discord_id)) nameMap.set(r.discord_id, r); });
+    }
+
+    const shapedSpins = bySpins.map((r,i)=> ({
+      rank: i+1, user: displayNameFor(r.id, nameMap), spins: r.spins, payout: r.payout
+    }));
+    const shapedPayout = byPayout.map((r,i)=> ({
+      rank: i+1, user: displayNameFor(r.id, nameMap), spins: r.spins, payout: r.payout
+    }));
+
+    return res.status(200).json({ bySpins: shapedSpins, byPayout: shapedPayout });
+  }catch(e){
+    console.error('leaderboards error:', e);
+    return res.status(500).json({ error:'Internal error' });
   }
 }
