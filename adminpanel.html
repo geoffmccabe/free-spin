@@ -6,25 +6,42 @@
 <title>Admin • Spin</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-  html,body{margin:0;height:100%;background:#000;color:#fff;font-family:Inter,system-ui,Arial,sans-serif}
-  .page{min-height:100%;display:grid;grid-template-columns:2fr 1fr;gap:14px;padding:14px;box-sizing:border-box}
-  @media (max-width: 1100px){ .page{grid-template-columns:1fr;grid-auto-rows:max-content} }
+  * { box-sizing: border-box; }
+  html,body{margin:0;height:100%;background:#000;color:#fff;font-family:Inter,system-ui,Arial,sans-serif;overflow-x:hidden}
+  .page{
+    min-height:100%;
+    display:grid;
+    grid-template-columns:minmax(0,2fr) minmax(0,1fr);
+    gap:14px; padding:14px; box-sizing:border-box;
+    max-width:100vw; overflow-x:hidden;
+  }
+  @media (max-width:1100px){ .page{grid-template-columns:1fr;grid-auto-rows:max-content} }
 
-  /* Shared panel style for both sides */
+  /* Shared panel style */
   .panel{background:#0b0b0c;border:1px solid #1f1f20;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;min-height:60vh}
   .panel-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border-bottom:1px solid #1c1c1e}
   .panel-title{font-weight:700}
-  .panel-body{flex:1;min-height:300px;position:relative;padding:12px 16px}
+  .panel-body{flex:1;min-height:300px;position:relative;padding:12px 16px;overflow:hidden}
 
-  /* Chart specifics */
+  /* Chart panel (left, 2/3) */
   #chartCanvas{width:100%;height:100%}
   .toolbar{display:flex;align-items:center;gap:8px}
   .toolbar select{background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:6px 10px}
-  .back{background:#222;border:1px solid #444;color:#fff;padding:8px 12px;border-radius:10px;text-decoration:none}
-  @keyframes slowspin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
-  #chart-wheel{position:absolute;left:16px;bottom:16px;width:140px;height:140px;animation:slowspin 15s linear infinite;filter:drop-shadow(0 8px 20px rgba(0,0,0,.5));display:none}
+  .back{background:#222;border:1px solid #444;color:#fff;padding:8px 12px;border-radius:10px;text-decoration:none;white-space:nowrap}
 
-  /* Admin panel contents */
+  /* Admin panel (right, 1/3) */
+  .admin-grid{
+    display:grid;
+    grid-template-columns:1fr auto; /* info left, wheel right */
+    gap:12px; align-items:start;
+  }
+  .admin-wheel{
+    width:140px; height:140px; flex:0 0 auto;
+    animation:slowspin 15s linear infinite; filter:drop-shadow(0 8px 20px rgba(0,0,0,.5));
+    display:none; /* shown when image loads */
+  }
+  @keyframes slowspin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+
   .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .token-name{color:#d4af37;font-weight:800}
   .usd{font-weight:700}
@@ -38,13 +55,18 @@
   .section:first-child{border-top:none}
 
   /* Manage Token Types */
-  #token-list{display:flex;flex-direction:column;gap:6px;max-height:180px;overflow:auto}
+  #token-list{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto}
   .token-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#0f0f10;border:1px solid #1f1f20;border-radius:10px}
-  .token-item .meta{display:flex;gap:10px;align-items:center}
-  .badge{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid #2a2a2c;background:#141416;opacity:.9}
-  .token-item button{padding:6px 10px;font-size:12px;border-radius:10px;border:1px solid #2a2a2c;background:#1a1a1c;color:#fff;cursor:pointer}
+  .token-item .meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .badge{font-size:11px;padding:2px 8px;border-radius:999px;opacity:.95}
+  .badge.enabled{color:#22c55e;border:1px solid #22c55e;background:rgba(34,197,94,.08)}
+  .badge.disabled{color:#ef4444;border:1px solid #ef4444;background:rgba(239,68,68,.08)}
+  .token-item button{padding:6px 10px;font-size:12px;border-radius:10px;border:1px solid #2a2a2c;background:#1a1a1c;color:#fff;cursor:pointer;white-space:nowrap}
+
   .token-add{display:flex;gap:8px;margin-top:10px}
   .token-add input{flex:1;min-width:0;background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:8px 10px;font-size:12px}
+  /* Match Disable button: black w/ gray border */
+  #add-token-btn{padding:6px 10px;font-size:12px;border-radius:10px;border:1px solid #2a2a2c;background:#1a1a1c;color:#fff;cursor:pointer}
 
   /* Leaderboards */
   .lb-head{display:flex;justify-content:space-between;align-items:center}
@@ -77,7 +99,6 @@
       </div>
       <div class="panel-body">
         <canvas id="chartCanvas"></canvas>
-        <img id="chart-wheel" alt="Wheel">
       </div>
     </section>
 
@@ -87,33 +108,36 @@
         <div class="panel-title">Admin Panel</div>
       </div>
       <div class="panel-body">
-        <div class="section">
-          <div class="row">
-            <span class="token-name" id="spin-name">—</span>:
-            <span id="spin-qty">—</span> /
-            <span class="usd" id="spin-usd">$—</span>
+        <!-- Top area: info left, spinning wheel top-right -->
+        <div class="admin-grid">
+          <div>
+            <div class="row">
+              <span class="token-name" id="spin-name">—</span>:
+              <span id="spin-qty">—</span> /
+              <span class="usd" id="spin-usd">$—</span>
+            </div>
+            <div class="row" style="margin-top:6px">
+              <span class="token-name" id="gas-name">—</span>:
+              <span id="gas-qty">—</span> /
+              <span class="usd" id="gas-usd">$—</span>
+            </div>
+            <div class="row" style="margin-top:10px; align-items:center">
+              <span class="mono" id="pool-addr">Wallet: —</span>
+              <span class="copy-icon" id="copy-icon" title="Copy address">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <rect x="7" y="7" width="12" height="12" rx="2" stroke="#bbb" />
+                  <rect x="4" y="4" width="12" height="12" rx="2" stroke="#bbb" />
+                </svg>
+              </span>
+            </div>
           </div>
-          <div class="row" style="margin-top:6px">
-            <span class="token-name" id="gas-name">—</span>:
-            <span id="gas-qty">—</span> /
-            <span class="usd" id="gas-usd">$—</span>
-          </div>
+
+          <img class="admin-wheel" id="admin-wheel" alt="Wheel">
         </div>
 
-        <div class="section">
-          <div class="row" style="align-items:center">
-            <span class="mono" id="pool-addr">Wallet: —</span>
-            <span class="copy-icon" id="copy-icon" title="Copy address">
-              <svg viewBox="0 0 24 24" fill="none">
-                <rect x="7" y="7" width="12" height="12" rx="2" stroke="#bbb" />
-                <rect x="4" y="4" width="12" height="12" rx="2" stroke="#bbb" />
-              </svg>
-            </span>
-          </div>
-        </div>
-
+        <!-- Manage Token Types -->
         <div class="section" id="superadmin-controls" style="display:none;">
-          <h4 style="margin:0 0 8px 0">Manage Token Types</h4>
+          <h4 style="margin:10px 0 8px 0">Manage Token Types</h4>
           <div id="token-list"></div>
           <div class="token-add">
             <input type="text" id="new-token-contract" placeholder="New token mint address (contract_address)">
@@ -121,6 +145,7 @@
           </div>
         </div>
 
+        <!-- Leaderboards (pushed down by the taller info area) -->
         <div class="section">
           <div class="lb-head">
             <h4 style="margin:0">Leaderboards (Top 200)</h4>
@@ -174,13 +199,15 @@
 
   // Chart
   const chartCanvas = document.getElementById('chartCanvas');
-  const chartWheel  = document.getElementById('chart-wheel');
   const chartTitle  = document.getElementById('chart-title');
   const rangeSelect = document.getElementById('rangeSelect');
   let chartInstance = null;
   let contract_address = null;
   let token_name = null;
   let image_url = null;
+
+  // Admin wheel (moved into admin panel, top-right)
+  const adminWheel = document.getElementById('admin-wheel');
 
   function usdClass(val) {
     const n = typeof val === 'string' ? Number(val.replace(/[^0-9.]/g,'')) : Number(val);
@@ -197,10 +224,7 @@
       body: JSON.stringify({ token, server_id })
     });
     const data = await res.json();
-    if (!res.ok) {
-      alert(data.error || 'Access denied');
-      return;
-    }
+    if (!res.ok) { alert(data.error || 'Access denied'); return; }
 
     const role = data.role || null;
     if (role !== 'admin' && role !== 'superadmin') {
@@ -214,7 +238,7 @@
     contract_address = data.contract_address || null;
     image_url = data?.tokenConfig?.image_url || null;
 
-    // Admin balances
+    // Balances UI
     spinNameEl.textContent = info.tokenSymbol || token_name || '—';
     spinQtyEl.textContent  = (typeof info.tokenAmt === 'number') ? info.tokenAmt.toLocaleString(undefined,{ maximumFractionDigits: 6 }) : String(info.tokenAmt ?? 'N/A');
     const tokUsd = (typeof info.tokenUsdValue === 'number') ? info.tokenUsdValue.toFixed(2) : String(info.tokenUsdValue ?? 'N/A');
@@ -252,19 +276,20 @@
 
     // Chart
     chartTitle.textContent = `${token_name} • Performance`;
-    if (image_url) {
-      chartWheel.onload = () => { chartWheel.style.display = 'block'; };
-      chartWheel.onerror = () => { chartWheel.style.display = 'none'; };
-      chartWheel.src = image_url;
-    }
     await loadChart('past30');
+    rangeSelect.addEventListener('change', (e)=> loadChart(e.target.value));
+
+    // Admin panel spinning wheel (top-right)
+    if (image_url) {
+      const img = new Image();
+      img.onload = () => { adminWheel.src = image_url; adminWheel.style.display = 'block'; };
+      img.onerror = () => { adminWheel.style.display = 'none'; };
+      img.src = image_url;
+    }
 
     // Leaderboards
     await loadLeaderboards();
     lbMode.addEventListener('change', renderLeaderboard);
-
-    // Range change
-    rangeSelect.addEventListener('change', (e)=> loadChart(e.target.value));
   }
 
   async function loadChart(range) {
@@ -302,28 +327,31 @@
       });
       const payload = await res.json();
       if (!res.ok) { tokenListEl.innerHTML = `<div class="mono" style="color:#f66">Error: ${payload.error || 'failed to load'}</div>`; return; }
+
       const rows = payload.tokens || [];
       if (!rows.length) { tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">No tokens added yet.</div>'; return; }
+
       tokenListEl.innerHTML = '';
       rows.forEach(row=>{
+        const isEnabled = !!row.enabled;
         const el = document.createElement('div');
         el.className = 'token-item';
         el.innerHTML = `
           <div class="meta">
-            <span class="badge">ENABLED</span>
+            <span class="badge ${isEnabled ? 'enabled' : 'disabled'}">${isEnabled ? 'ENABLED' : 'DISABLED'}</span>
             <span class="token-name">${row.token_name || 'Token'}</span>
             <span class="mono" style="opacity:.8">${row.contract_address}</span>
           </div>
-          <div><button data-contract="${row.contract_address}">Disable</button></div>
+          <div><button data-contract="${row.contract_address}">${isEnabled ? 'Disable' : 'Re-enable'}</button></div>
         `;
         el.querySelector('button').onclick = async () => {
           const btn = el.querySelector('button'); btn.disabled = true;
           const res2 = await fetch('/api/admin/tokens', {
             method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ token, server_id, action:'setEnabled', contract_address: row.contract_address, enabled:false })
+            body: JSON.stringify({ token, server_id, action:'setEnabled', contract_address: row.contract_address, enabled: !isEnabled })
           });
           btn.disabled = false;
-          if (res2.ok) loadServerTokens(); else alert('Failed to disable token');
+          if (res2.ok) loadServerTokens(); else alert('Failed to update token state');
         };
         tokenListEl.appendChild(el);
       });
@@ -347,6 +375,7 @@
       lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="color:#f66">Error: ${e.message}</td></tr>`;
     }
   }
+
   function renderLeaderboard() {
     const mode = lbMode.value;
     const rows = (window._LB && (mode === 'spins' ? window._LB.bySpins : window._LB.byPayout)) || [];
