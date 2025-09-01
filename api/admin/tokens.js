@@ -30,45 +30,44 @@ export default async function handler(req, res) {
     if (adminData?.role !== 'superadmin') return res.status(403).json({ error: 'Superadmin access required' });
 
     if (action === 'list') {
+      // Expect an `enabled` boolean column on server_tokens. If it’s NULL/missing per-row, default to true.
       const { data: rows, error } = await supabase
         .from('server_tokens')
-        .select('contract_address')
+        .select('contract_address, enabled')
         .eq('server_id', server_id);
       if (error) return res.status(400).json({ error: error.message });
 
       const mints = (rows || []).map(r => r.contract_address);
-      let configs = [];
-      if (mints.length) {
-        const { data: cfg, error: cfgErr } = await supabase
-          .from('wheel_configurations')
-          .select('contract_address, token_name, image_url')
-          .in('contract_address', mints);
-        if (cfgErr) console.error('tokens list config error:', cfgErr.message);
-        configs = cfg || [];
-      }
+      const { data: cfg, error: cfgErr } = mints.length
+        ? await supabase
+            .from('wheel_configurations')
+            .select('contract_address, token_name, image_url')
+            .in('contract_address', mints)
+        : { data: [], error: null };
+      if (cfgErr) console.error('tokens list config error:', cfgErr.message);
 
       const merged = (rows || []).map(t => {
-        const c = configs.find(x => x.contract_address === t.contract_address) || {};
-        return { contract_address: t.contract_address, token_name: c.token_name || '', image_url: c.image_url || '', enabled: true };
+        const c = (cfg || []).find(x => x.contract_address === t.contract_address) || {};
+        const isEnabled = (t.enabled === null || typeof t.enabled === 'undefined') ? true : !!t.enabled;
+        return {
+          contract_address: t.contract_address,
+          token_name: c.token_name || '',
+          image_url: c.image_url || '',
+          enabled: isEnabled
+        };
       });
       return res.status(200).json({ tokens: merged });
     }
 
     if (action === 'add') {
       if (!contract_address) return res.status(400).json({ error: 'contract_address required' });
-      const { data: exists, error: exErr } = await supabase
+
+      // Upsert with enabled=true
+      const { error: upErr } = await supabase
         .from('server_tokens')
-        .select('contract_address')
-        .eq('server_id', server_id)
-        .eq('contract_address', contract_address)
-        .maybeSingle();
-      if (exErr) return res.status(400).json({ error: exErr.message });
-      if (!exists) {
-        const { error: insErr } = await supabase
-          .from('server_tokens')
-          .insert({ server_id, contract_address });
-        if (insErr) return res.status(400).json({ error: insErr.message });
-      }
+        .upsert({ server_id, contract_address, enabled: true }, { onConflict: 'server_id,contract_address' });
+      if (upErr) return res.status(400).json({ error: upErr.message });
+
       return res.status(200).json({ ok: true });
     }
 
@@ -76,28 +75,12 @@ export default async function handler(req, res) {
       if (!contract_address || typeof enabled !== 'boolean') {
         return res.status(400).json({ error: 'contract_address and enabled are required' });
       }
-      if (enabled === false) {
-        const { error: delErr } = await supabase
-          .from('server_tokens')
-          .delete()
-          .eq('server_id', server_id)
-          .eq('contract_address', contract_address);
-        if (delErr) return res.status(400).json({ error: delErr.message });
-      } else {
-        const { data: exists, error: exErr } = await supabase
-          .from('server_tokens')
-          .select('contract_address')
-          .eq('server_id', server_id)
-          .eq('contract_address', contract_address)
-          .maybeSingle();
-        if (exErr) return res.status(400).json({ error: exErr.message });
-        if (!exists) {
-          const { error: insErr } = await supabase
-            .from('server_tokens')
-            .insert({ server_id, contract_address });
-          if (insErr) return res.status(400).json({ error: insErr.message });
-        }
-      }
+      const { error: updErr } = await supabase
+        .from('server_tokens')
+        .update({ enabled })
+        .eq('server_id', server_id)
+        .eq('contract_address', contract_address);
+      if (updErr) return res.status(400).json({ error: updErr.message });
       return res.status(200).json({ ok: true });
     }
 
