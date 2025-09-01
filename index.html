@@ -9,8 +9,6 @@
   <style>
     html, body { background:#000; color:#fff; font-family: Inter, system-ui, sans-serif; text-align:center; margin:0; padding:0; overflow:hidden; height:100vh; }
     .main { height:100vh; display:grid; grid-template-columns: 1fr; align-items:center; justify-items:center; padding:16px; box-sizing:border-box; gap:8px; }
-    #admin-link { display:none; font-size:12px; color:#93c5fd; text-decoration:none; margin-top:6px; }
-    #admin-link:hover { text-decoration:underline; }
 
     #wheel-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; }
     #wheel-container { position:relative; width:min(80vmin, 640px); height:min(80vmin, 640px); }
@@ -23,14 +21,21 @@
     #spin-button:disabled, #spin-button.hidden { display:none; }
 
     #message { margin-top:10px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; }
+
+    /* Bottom-right ADMIN button */
+    #admin-fab {
+      position:fixed; right:16px; bottom:16px; z-index:1000;
+      display:none; padding:10px 14px; font-size:13px; border-radius:999px;
+      background:#0ea5e9; color:#fff; text-decoration:none; border:1px solid #0b7fb3;
+      box-shadow:0 10px 30px rgba(14,165,233,.35);
+    }
+    #admin-fab:hover { filter:brightness(1.08); }
   </style>
 </head>
 <body>
-  <div class="main">
-    <!-- Admin link (only shown for admins/superadmins) -->
-    <a id="admin-link">ADMIN</a>
+  <a id="admin-fab">ADMIN</a>
 
-    <!-- Wheel -->
+  <div class="main">
     <div id="wheel-wrap">
       <div id="wheel-container">
         <div id="pointer"></div>
@@ -61,7 +66,7 @@
       const spinButton = document.getElementById("spin-button");
       const messageDiv = document.getElementById("message");
       const overlayImg = document.getElementById("wheel-overlay");
-      const adminLink = document.getElementById('admin-link');
+      const adminFab = document.getElementById('admin-fab');
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
@@ -79,10 +84,7 @@
           canvas.height = Math.max(size, 1);
         });
       }
-      window.addEventListener('resize', () => {
-        resizeCanvas();
-        drawTextWheel();
-      });
+      window.addEventListener('resize', () => { resizeCanvas(); drawTextWheel(); });
       resizeCanvas();
 
       async function initializeWheel() {
@@ -101,12 +103,12 @@
           role = data.role || null;
           contract_address = data.contract_address || null;
 
-          // Show ADMIN link only for admins
+          // Show ADMIN button (bottom-right) only for admins
           if (role === 'admin' || role === 'superadmin') {
-            adminLink.href = `adminpanel.html?token=${encodeURIComponent(token)}&server_id=${encodeURIComponent(server_id)}`;
-            adminLink.style.display = 'inline';
+            adminFab.href = `adminpanel.html?token=${encodeURIComponent(token)}&server_id=${encodeURIComponent(server_id)}`;
+            adminFab.style.display = 'inline-block';
           } else {
-            adminLink.style.display = 'none';
+            adminFab.style.display = 'none';
           }
 
           const payout_amounts = Array.isArray(pa) ? pa : [];
@@ -118,7 +120,7 @@
           }));
           if (segments.length === 0) throw new Error("No payout amounts configured.");
 
-          // Preload overlay image to avoid broken-image flash
+          // Preload overlay image
           if (image_url) {
             const img = new Image();
             img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
