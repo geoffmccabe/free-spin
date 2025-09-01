@@ -17,7 +17,6 @@
   }
   @media (max-width:1100px){ .page{grid-template-columns:1fr;grid-auto-rows:max-content} }
 
-  /* Shared panel style */
   .panel{background:#0b0b0c;border:1px solid #1f1f20;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;min-height:60vh;min-width:0}
   .panel-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border-bottom:1px solid #1c1c1e}
   .panel-title{font-weight:700}
@@ -55,7 +54,6 @@
   .badge.enabled{color:#22c55e;border:1px solid #22c55e;background:rgba(34,197,94,.08)}
   .badge.disabled{color:#ef4444;border:1px solid #ef4444;background:rgba(239,68,68,.08)}
   .token-item .mono{opacity:.8;overflow:hidden;text-overflow:ellipsis;max-width:36ch}
-
   .token-item button,
   #add-token-btn{padding:6px 10px;font-size:12px;border-radius:10px;border:1px solid #2a2a2c;background:#1a1a1c;color:#fff;cursor:pointer;white-space:nowrap}
 
@@ -290,7 +288,7 @@
       img.src = image_url;
     }
 
-    // Leaderboards
+    // Leaderboards (renamed endpoint)
     await loadLeaderboards();
     lbMode.addEventListener('change', renderLeaderboard);
   }
@@ -298,7 +296,11 @@
   async function loadChart(range) {
     const res = await fetch('/api/chart', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ token, server_id, contract_address, range })
+      body: JSON.stringify({
+        token, server_id, contract_address, range,
+        // CR is UTC-6 (no DST)
+        tzOffsetMin: -360
+      })
     });
     const payload = await res.json();
     if (!res.ok) { alert(payload.error || 'Failed to load chart'); return; }
@@ -333,7 +335,7 @@
 
       const rows = payload.tokens || [];
       const supportsEnabled = !!payload.supportsEnabled;
-      supportsHint.style.display = supportsEnabled ? 'none' : 'block';
+      document.getElementById('supports-hint').style.display = supportsEnabled ? 'none' : 'block';
 
       if (!rows.length) { tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">No tokens added yet.</div>'; return; }
       tokenListEl.innerHTML = '';
@@ -350,7 +352,7 @@
           <div>
             ${supportsEnabled
               ? `<button data-contract="${row.contract_address}">${isEnabled ? 'Disable' : 'Re-enable'}</button>`
-              : `<button disabled title="Add 'enabled' column to toggle">Toggle</button>`
+              : `<button disabled title="Add 'enabled' column to toggle">Disable / Re-enable</button>`
             }
           </div>
         `;
@@ -380,7 +382,7 @@
   async function loadLeaderboards() {
     lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="opacity:.8">Loading…</td></tr>`;
     try {
-      const res = await fetch('/api/leaderboards', {
+      const res = await fetch('/api/adminleaderboards', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ token, server_id })
       });
