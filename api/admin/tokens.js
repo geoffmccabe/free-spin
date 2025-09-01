@@ -4,32 +4,31 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Helper: try selecting `enabled`; fallback cleanly if column doesn't exist
+// Detect presence of `enabled` column and fetch rows accordingly
 async function selectServerTokensWithMaybeEnabled(server_id) {
   let supportsEnabled = true;
   let rows = [];
-  // First attempt: contract_address + enabled
+
   let { data, error } = await supabase
     .from('server_tokens')
     .select('contract_address, enabled')
     .eq('server_id', server_id);
+
   if (error) {
-    // Column may not exist; fallback to contract_address only
-    if (String(error.message || '').toLowerCase().includes('enabled') ||
-        String(error.details || '').toLowerCase().includes('enabled')) {
+    // Column may not exist
+    if ((error.message || '').toLowerCase().includes('enabled')) {
       supportsEnabled = false;
-      const fallback = await supabase
+      const fb = await supabase
         .from('server_tokens')
         .select('contract_address')
         .eq('server_id', server_id);
-      if (fallback.error) return { error: fallback.error, supportsEnabled: false, rows: [] };
-      rows = (fallback.data || []).map(r => ({ contract_address: r.contract_address, enabled: true }));
+      if (fb.error) return { error: fb.error, supportsEnabled: false, rows: [] };
+      rows = (fb.data || []).map(r => ({ contract_address: r.contract_address, enabled: true }));
     } else {
       return { error, supportsEnabled: true, rows: [] };
     }
-  } else {
-    rows = data || [];
-  }
+  } else rows = data || [];
+
   return { rows, supportsEnabled, error: null };
 }
 
@@ -40,7 +39,7 @@ export default async function handler(req, res) {
     const { token, server_id, action, contract_address, enabled } = req.body || {};
     if (!token || !server_id || !action) return res.status(400).json({ error: 'token, server_id and action are required' });
 
-    // Validate token -> discord_id
+    // Validate token holder
     const { data: tokenData, error: tokenError } = await supabase
       .from('spin_tokens')
       .select('discord_id')
@@ -48,7 +47,7 @@ export default async function handler(req, res) {
       .single();
     if (tokenError || !tokenData) return res.status(400).json({ error: 'Invalid token' });
 
-    // Require superadmin
+    // Must be SUPERADMIN
     const { data: adminData, error: adminErr } = await supabase
       .from('server_admins')
       .select('role')
@@ -62,6 +61,7 @@ export default async function handler(req, res) {
       const sel = await selectServerTokensWithMaybeEnabled(server_id);
       if (sel.error) return res.status(400).json({ error: sel.error.message });
 
+      // Pull config to get token_name + image
       const mints = (sel.rows || []).map(r => r.contract_address);
       const { data: cfg, error: cfgErr } = mints.length
         ? await supabase.from('wheel_configurations')
@@ -79,17 +79,20 @@ export default async function handler(req, res) {
           enabled: (typeof t.enabled === 'boolean') ? t.enabled : true
         };
       });
+
       return res.status(200).json({ tokens: merged, supportsEnabled: sel.supportsEnabled });
     }
 
     if (action === 'add') {
       if (!contract_address) return res.status(400).json({ error: 'contract_address required' });
 
-      // Try upsert with enabled; fallback to upsert without it if column missing
+      // Upsert (prefer with enabled)
       let { error: upErr } = await supabase
         .from('server_tokens')
         .upsert({ server_id, contract_address, enabled: true }, { onConflict: 'server_id,contract_address' });
-      if (upErr && (String(upErr.message||'').toLowerCase().includes('enabled') || String(upErr.details||'').toLowerCase().includes('enabled'))) {
+
+      // Fallback without enabled if column missing
+      if (upErr && (upErr.message||'').toLowerCase().includes('enabled')) {
         const fb = await supabase
           .from('server_tokens')
           .upsert({ server_id, contract_address }, { onConflict: 'server_id,contract_address' });
@@ -97,6 +100,7 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true, supportsEnabled: false });
       }
       if (upErr) return res.status(400).json({ error: upErr.message });
+
       return res.status(200).json({ ok: true, supportsEnabled: true });
     }
 
@@ -109,11 +113,16 @@ export default async function handler(req, res) {
         .update({ enabled })
         .eq('server_id', server_id)
         .eq('contract_address', contract_address);
+
       if (updErr) {
-        if (String(updErr.message||'').toLowerCase().includes('enabled') || String(updErr.details||'').toLowerCase().includes('enabled')) {
+        // Column missing: instruct migration
+        if ((updErr.message||'').toLowerCase().includes('enabled')) {
           return res.status(409).json({
-            error: 'Feature not enabled',
-            migration: "Run once:\nALTER TABLE server_tokens ADD COLUMN enabled boolean DEFAULT true;\nUPDATE server_tokens SET enabled = true WHERE enabled IS NULL;"
+            error: "Feature not enabled",
+            migration:
+              "Run once:\n" +
+              "ALTER TABLE server_tokens ADD COLUMN enabled boolean DEFAULT true;\n" +
+              "UPDATE server_tokens SET enabled = true WHERE enabled IS NULL;"
           });
         }
         return res.status(400).json({ error: updErr.message });
