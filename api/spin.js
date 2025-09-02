@@ -1,4 +1,3 @@
-// /api/spin.js
 import { createClient } from '@supabase/supabase-js';
 import {
   Connection, PublicKey, Keypair, Transaction, LAMPORTS_PER_SOL, ComputeBudgetProgram
@@ -17,63 +16,67 @@ const COINMARKETCAP_API_KEY = process.env.COINMARKETCAP_API_KEY;
 const connection = new Connection(SOLANA_RPC_URL, { commitment: 'processed' });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// ---- small helpers ----
+// ---------- helpers ----------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function sendWithRetryAndHTTPConfirm(connection, tx, signer, { maxWaitMs = 6000 } = {}) {
-  // Attempt up to 2 rounds: fresh blockhash -> send -> HTTP poll confirm.
-  // If blockheight expires, rebuild with a fresh blockhash and resend once.
-  let lastErr = null;
+async function fetchServerTokens(server_id) {
+  // Try to read `enabled`; if the column doesn't exist, fall back to just `contract_address`
+  let tokens = [];
+  try {
+    const { data, error } = await supabase
+      .from('server_tokens')
+      .select('contract_address, enabled')
+      .eq('server_id', server_id);
+    if (error) throw error;
+    tokens = data || [];
+  } catch (e) {
+    const msg = ((e?.message || '') + ' ' + (e?.details || '')).toLowerCase();
+    if (msg.includes('enabled')) {
+      const fb = await supabase
+        .from('server_tokens')
+        .select('contract_address')
+        .eq('server_id', server_id);
+      if (fb.error) throw fb.error;
+      tokens = (fb.data || []).map(r => ({ contract_address: r.contract_address, enabled: true }));
+    } else {
+      throw e;
+    }
+  }
+  return tokens;
+}
 
+async function sendWithRetryAndHTTPConfirm(connection, tx, signer, { maxWaitMs = 6000 } = {}) {
+  let lastErr = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    // Fresh blockhash just-in-time
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('processed');
     tx.recentBlockhash = blockhash;
     tx.feePayer = signer.publicKey;
     tx.sign(signer);
 
-    // Send with preflight and some retries; priority fees already included on tx.
     const sig = await connection.sendRawTransaction(tx.serialize(), {
       skipPreflight: false,
       preflightCommitment: 'processed',
       maxRetries: 5,
     });
 
-    // HTTP polling (no websockets) until confirmed or expired or timeout
     const start = Date.now();
     while (Date.now() - start < maxWaitMs) {
-      // Check signature status
       const st = await connection.getSignatureStatuses([sig]);
       const info = st?.value?.[0] || null;
+      if (info?.err) { lastErr = new Error(`Transaction failed: ${JSON.stringify(info.err)}`); break; }
+      if (info?.confirmationStatus === 'confirmed' || info?.confirmationStatus === 'finalized') return sig;
 
-      if (info?.err) {
-        lastErr = new Error(`Transaction failed: ${JSON.stringify(info.err)}`);
-        break;
-      }
-      if (info?.confirmationStatus === 'confirmed' || info?.confirmationStatus === 'finalized') {
-        return sig; // success
-      }
-
-      // Check expiry against current block height
       const currentBH = await connection.getBlockHeight('processed');
-      if (currentBH > lastValidBlockHeight) {
-        lastErr = new Error('Blockheight exceeded (expired before confirmation).');
-        break; // rebuild with fresh blockhash (next attempt)
-      }
-
-      await sleep(400); // short poll interval
+      if (currentBH > lastValidBlockHeight) { lastErr = new Error('Blockheight exceeded'); break; }
+      await sleep(400);
     }
-
-    if (!lastErr) {
-      // Timed out without expiry or error — treat as soft-failure and retry once with fresh blockhash
-      lastErr = new Error('Confirm timeout; retrying with fresh blockhash.');
-    }
-    // If we get here, we’ll try once more (attempt 2). Rebuild the tx outside loop (caller provides a fresh tx).
+    if (!lastErr) lastErr = new Error('Confirm timeout; retrying with fresh blockhash.');
+    // loop to retry once
   }
-
   throw lastErr || new Error('Failed to confirm transaction.');
 }
 
+// ---------- handler ----------
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -110,26 +113,31 @@ export default async function handler(req, res) {
 
     const { discord_id, wallet_address, contract_address } = tokenData;
 
-    const [
-      { data: serverTokens, error: serverTokenError },
-      { data: userData, error: userError },
-      { data: adminData }
-    ] = await Promise.all([
-      supabase.from('server_tokens').select('contract_address, enabled').eq('server_id', server_id),
+    // >>> Robust server token fetch (tolerates missing `enabled` column)
+    let serverTokens = [];
+    try {
+      serverTokens = await fetchServerTokens(server_id);
+    } catch (e) {
+      console.error('server_tokens fetch error:', e?.message || e);
+      return res.status(400).json({ error: 'Invalid token for this server' });
+    }
+
+    if (!serverTokens?.some(t => String(t.contract_address).trim() === String(contract_address).trim())) {
+      console.error(`Invalid contract_address ${contract_address} for server ${server_id}`);
+      return res.status(400).json({ error: 'Invalid token for this server' });
+    }
+
+    // user & role
+    const [{ data: userData, error: userError }, { data: adminData }] = await Promise.all([
       supabase.from('users').select('spin_limit').eq('discord_id', discord_id).single(),
       supabase.from('server_admins').select('role').eq('discord_id', discord_id).eq('server_id', server_id).single()
     ]);
 
-    if (serverTokenError || !serverTokens?.some(t => t.contract_address === contract_address)) {
-      console.error(`Invalid contract_address ${contract_address} for server ${server_id}`);
-      return res.status(400).json({ error: 'Invalid token for this server' });
-    }
     if (userError || !userData) return res.status(400).json({ error: 'User not found' });
-
-    const role = adminData?.role || null; // 'admin' | 'superadmin' | null
+    const role = adminData?.role || null;
     const isSuperadmin = role === 'superadmin';
 
-    // ---- Spin limit ----
+    // spin limit (non-superadmin)
     let spins_left = userData.spin_limit;
     if (!isSuperadmin) {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -149,7 +157,7 @@ export default async function handler(req, res) {
       spins_left = 'Unlimited';
     }
 
-    // ---- Load wheel config ----
+    // wheel config
     const { data: config, error: configError } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -161,7 +169,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No payout amounts configured.' });
     }
 
-    // ---------- CONFIG PATH (no spin) ----------
+    // ---------- CONFIG PATH ----------
     if (!spin) {
       const tokenConfig = {
         token_name: config.token_name,
@@ -169,36 +177,30 @@ export default async function handler(req, res) {
         image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Generic_800px.webp'
       };
 
-      // Admin info for admin/superadmin
       let adminInfo = undefined;
       if (role === 'admin' || role === 'superadmin') {
         try {
           const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
           const poolPubkey = fundingWallet.publicKey;
 
-          // SPL token balance
+          // SPL balance
           let tokenAmt = 'N/A';
           try {
             const ata = await getAssociatedTokenAddress(new PublicKey(contract_address), poolPubkey);
             const balanceResponse = await connection.getTokenAccountBalance(ata);
             tokenAmt = balanceResponse.value.uiAmount;
-          } catch (e) {
-            console.error('SPL balance fetch failed', e);
-          }
+          } catch (e) { console.error('SPL balance fetch failed', e); }
 
-          // SOL balance (gas token)
+          // SOL balance
           let gasAmt = 'N/A';
           try {
             const lamports = await connection.getBalance(poolPubkey, 'processed');
             gasAmt = lamports / LAMPORTS_PER_SOL;
-          } catch (e) {
-            console.error('SOL balance fetch failed', e);
-          }
+          } catch (e) { console.error('SOL balance fetch failed', e); }
 
-          // USD values (best-effort)
+          // USD (best effort)
           let tokenUsdValue = 'N/A';
           let gasUsdValue = 'N/A';
-
           if (COINMARKETCAP_API_KEY) {
             try {
               const gasRes = await fetch('https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOL&convert=USD', {
@@ -209,9 +211,7 @@ export default async function handler(req, res) {
               if (typeof solPrice === 'number' && typeof gasAmt === 'number') {
                 gasUsdValue = (gasAmt * solPrice).toFixed(2);
               }
-            } catch (e) {
-              console.error('SOL price fetch failed', e);
-            }
+            } catch (e) { console.error('SOL price fetch failed', e); }
 
             try {
               const sym = String(config.token_name || '').toUpperCase().trim();
@@ -225,9 +225,7 @@ export default async function handler(req, res) {
                   tokenUsdValue = (tokenAmt * price).toFixed(2);
                 }
               }
-            } catch (e) {
-              console.error('Spin token price fetch failed', e);
-            }
+            } catch (e) { console.error('Spin token price fetch failed', e); }
           }
 
           adminInfo = {
@@ -253,7 +251,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ---------- SPIN PATH (robust send + resend if expired) ----------
+    // ---------- SPIN PATH ----------
     const weights = Array.isArray(config.payout_weights) && config.payout_weights.length === config.payout_amounts.length
       ? config.payout_weights
       : config.payout_amounts.map(() => 1);
@@ -277,34 +275,27 @@ export default async function handler(req, res) {
     const fromTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, fundingWallet.publicKey);
     const toTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, userWallet);
 
-    // buildTx() returns a fresh Transaction each time (so we can rebuild on expiry)
     const buildTx = () => {
       const tx = new Transaction();
-
       // Priority fee & compute limit for faster inclusion
       tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }));
-      tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2_000 })); // ~0.000002 SOL per 1M CU
-
+      tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2_000 }));
       tx.add(createTransferInstruction(
         fromTokenAccount.address,
         toTokenAccount.address,
         fundingWallet.publicKey,
-        rewardAmount * (10 ** 5) // keep your current decimals; switch to transferChecked if you want to validate mint decimals
+        rewardAmount * (10 ** 5)
       ));
       return tx;
     };
 
-    const tx1 = buildTx();
     let finalSig;
     try {
-      finalSig = await sendWithRetryAndHTTPConfirm(connection, tx1, fundingWallet, { maxWaitMs: 6000 });
+      finalSig = await sendWithRetryAndHTTPConfirm(connection, buildTx(), fundingWallet, { maxWaitMs: 6000 });
     } catch (err) {
-      // If expired/timeout, rebuild and try once more
-      const tx2 = buildTx();
-      finalSig = await sendWithRetryAndHTTPConfirm(connection, tx2, fundingWallet, { maxWaitMs: 6000 });
+      finalSig = await sendWithRetryAndHTTPConfirm(connection, buildTx(), fundingWallet, { maxWaitMs: 6000 });
     }
 
-    // Record the spin AFTER we have a good signature (prevents dup rows if we had to resend)
     await supabase.from('daily_spins').insert({ discord_id, reward: rewardAmount, contract_address, signature: finalSig });
     await supabase.from('spin_tokens').update({ used: true, signature: finalSig }).eq('token', signedToken);
 
