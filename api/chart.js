@@ -24,6 +24,29 @@ async function safeSelect(table, columns, build){
   }catch{ return []; }
 }
 
+// NEW: robust server_tokens fetch with fallback when `enabled` column doesn't exist
+async function fetchServerTokens(server_id){
+  try{
+    const { data, error } = await supabase
+      .from('server_tokens')
+      .select('contract_address, enabled')
+      .eq('server_id', server_id);
+    if (error) throw error;
+    return data || [];
+  }catch(e){
+    const msg = ((e?.message||'') + ' ' + (e?.details||'')).toLowerCase();
+    if (msg.includes('enabled')) {
+      const fb = await supabase
+        .from('server_tokens')
+        .select('contract_address')
+        .eq('server_id', server_id);
+      if (fb.error) return [];
+      return (fb.data || []).map(r => ({ contract_address: r.contract_address, enabled: true }));
+    }
+    return [];
+  }
+}
+
 export default async function handler(req,res){
   if (req.method !== 'POST') return res.status(405).json({ error:'Method not allowed' });
 
@@ -31,7 +54,7 @@ export default async function handler(req,res){
     const { token, server_id, contract_address, range = 'past30', tzOffsetMin = CR_TZ_OFFSET_MIN } = req.body || {};
     if (!token || !server_id) return res.status(400).json({ error:'token and server_id required' });
 
-    // Validate token
+    // Validate token exists (we allow used tokens for charts)
     const { data: tok, error: tokErr } = await supabase
       .from('spin_tokens')
       .select('discord_id')
@@ -39,11 +62,11 @@ export default async function handler(req,res){
       .single();
     if (tokErr || !tok) return res.status(400).json({ error:'Invalid token' });
 
-    // Allowed mints for this server (enabled + disabled)
-    const serverTokens = await safeSelect('server_tokens', 'contract_address, enabled', q => q.eq('server_id', server_id));
+    // Allowed mints for this server (enabled + disabled; with fallback)
+    const serverTokens = await fetchServerTokens(server_id);
     const allowed = new Set((serverTokens || []).map(r => r.contract_address));
 
-    // Limit to a specific mint if provided
+    // If a specific mint is requested, validate it is in this server
     let filterMints;
     if (contract_address) {
       if (!allowed.has(contract_address)) return res.status(400).json({ error:'Invalid token for this server' });
@@ -54,30 +77,29 @@ export default async function handler(req,res){
 
     // Local-day window
     const nowUTC = new Date();
-    const endUTC = atLocalMidnightUTC(nowUTC, tzOffsetMin); // UTC instant for today's local midnight
-    const startUTC = (range === 'all') ? null : addDaysUTC(endUTC, -29); // inclusive 30 days (local)
-    // *** Important: add a 1-day buffer on the LOWER bound to catch edge-case timestamps ***
+    const endUTC = atLocalMidnightUTC(nowUTC, tzOffsetMin); // today @ 00:00 local (as UTC instant)
+    const startUTC = (range === 'all') ? null : addDaysUTC(endUTC, -29); // 30 local days inclusive
+    // 1-day buffer on both ends to catch skew
     const startUTCBuffered = startUTC ? addDaysUTC(startUTC, -1) : null;
+    const endUTCBuffered = addDaysUTC(endUTC, 1);
 
-    // Pull rows: current + legacy (if exist)
+    // Read rows from current + legacy (if present)
     const read = async (table) => safeSelect(
       table, 'created_at, reward, contract_address',
       q => {
         let qq = q;
         if (startUTCBuffered) qq = qq.gte('created_at', startUTCBuffered.toISOString());
-        // Optional small upper buffer (+1 day) to include late-writer rows stamped slightly ahead
-        const upper = addDaysUTC(endUTC, 1);
-        qq = qq.lte('created_at', upper.toISOString());
+        qq = qq.lte('created_at', endUTCBuffered.toISOString());
         if (filterMints.length) qq = qq.in('contract_address', filterMints);
         return qq;
       }
     );
     let rows = await read('daily_spins');
-    const legacy1 = await read('spins');        // legacy (if present)
-    const legacy2 = await read('wheel_spins');  // legacy (if present)
+    const legacy1 = await read('spins');
+    const legacy2 = await read('wheel_spins');
     rows = rows.concat(legacy1, legacy2);
 
-    // If "all", extend the start to the earliest row’s local day
+    // If "all", extend the start to earliest local day we have
     let bucketStartUTC = startUTC;
     if (range === 'all') {
       let minUTC = null;
@@ -85,13 +107,12 @@ export default async function handler(req,res){
       bucketStartUTC = minUTC ? atLocalMidnightUTC(minUTC, tzOffsetMin) : addDaysUTC(endUTC, -29);
     }
 
-    // Build day buckets from bucketStartUTC .. endUTC (inclusive)
+    // Build buckets for local days (keys are UTC-midnights representing those local days)
     const buckets = {};
     for (let d = bucketStartUTC; ymdUTC(d) <= ymdUTC(endUTC); d = addDaysUTC(d, 1)) {
       buckets[ymdUTC(d)] = { count: 0, sum: 0 };
     }
 
-    // Fill buckets by local day; place into the UTC key representing that local midnight
     for (const r of rows) {
       const utc = new Date(r.created_at);
       const localMidUTC = atLocalMidnightUTC(utc, tzOffsetMin);
