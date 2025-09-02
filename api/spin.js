@@ -109,7 +109,8 @@ export default async function handler(req, res) {
       .single();
 
     if (tokenError || !tokenData) return res.status(400).json({ error: 'Invalid token' });
-    if (tokenData.used) return res.status(400).json({ error: 'This spin token has already been used' });
+    // ✅ Only block on SPIN path; allow used tokens for CONFIG path (admin/metrics need this).
+    if (spin && tokenData.used) return res.status(400).json({ error: 'This spin token has already been used' });
 
     const { discord_id, wallet_address, contract_address } = tokenData;
 
@@ -151,7 +152,7 @@ export default async function handler(req, res) {
 
       const used = recentSpins?.length || 0;
       const limit = Number(userData.spin_limit ?? 0);
-      if (used >= limit) return res.status(403).json({ error: 'Daily spin limit reached' });
+      if (used >= limit && spin) return res.status(403).json({ error: 'Daily spin limit reached' }); // only block on spin
       spins_left = Math.max(0, limit - used);
     } else {
       spins_left = 'Unlimited';
