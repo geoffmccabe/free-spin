@@ -1,3 +1,4 @@
+// /api/spin.js
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
@@ -18,16 +19,17 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { token: signedToken, spin, server_id } = req.body;
+    const { token: signedToken, spin, server_id } = req.body || {};
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
-    if (!server_id) return res.status(400).json({ error: 'Server ID required' });
+    if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
 
     const TOKEN_SECRET = process.env.SPIN_KEY;
     if (!TOKEN_SECRET) {
-      console.error("FATAL: SPIN_KEY environment variable not found or is empty.");
+      console.error('FATAL: SPIN_KEY environment variable not found or is empty.');
       return res.status(500).json({ error: 'A server configuration error occurred. Please notify an administrator.' });
     }
 
+    // Verify signed token (HMAC)
     const [token, signature] = String(signedToken).split('.');
     if (!token || !signature) {
       console.error(`Malformed token: ${signedToken}`);
@@ -39,6 +41,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Invalid or forged token' });
     }
 
+    // Look up token record
     const { data: tokenData, error: tokenError } = await supabase
       .from('spin_tokens')
       .select('discord_id, wallet_address, contract_address, used')
@@ -49,19 +52,16 @@ export default async function handler(req, res) {
       console.error(`Token query error: ${tokenError?.message || 'No token found'}`);
       return res.status(400).json({ error: 'Invalid token' });
     }
-    if (tokenData.used) {
-      console.error(`Token already used: ${signedToken}`);
-      return res.status(400).json({ error: 'This spin token has already been used' });
-    }
 
-    const { discord_id, wallet_address, contract_address } = tokenData;
+    const { discord_id, wallet_address, contract_address, used } = tokenData;
 
+    // Server & role checks
     const [
       { data: serverTokens, error: serverTokenError },
       { data: userData, error: userError },
       { data: adminData }
     ] = await Promise.all([
-      supabase.from('server_tokens').select('contract_address').eq('server_id', server_id),
+      supabase.from('server_tokens').select('contract_address, enabled').eq('server_id', server_id),
       supabase.from('users').select('spin_limit').eq('discord_id', discord_id).single(),
       supabase.from('server_admins').select('role').eq('discord_id', discord_id).eq('server_id', server_id).single()
     ]);
@@ -78,27 +78,7 @@ export default async function handler(req, res) {
     const role = adminData?.role || null; // 'admin' | 'superadmin' | null
     const isSuperadmin = role === 'superadmin';
 
-    let spins_left = userData.spin_limit;
-    if (!isSuperadmin) {
-      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const { data: recentSpins, error: spinCountError } = await supabase
-        .from('daily_spins')
-        .select('contract_address')
-        .eq('discord_id', discord_id)
-        .gte('created_at', twentyFourHoursAgo);
-
-      if (spinCountError) {
-        console.error(`Spin count error: ${spinCountError.message}`);
-        return res.status(500).json({ error: 'DB error checking spin history' });
-      }
-      const used = recentSpins?.length || 0;
-      const limit = Number(userData.spin_limit ?? 0);
-      if (used >= limit) return res.status(403).json({ error: 'Daily spin limit reached' });
-      spins_left = Math.max(0, limit - used);
-    } else {
-      spins_left = 'Unlimited';
-    }
-
+    // Pull wheel configuration
     const { data: config, error: configError } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -114,16 +94,37 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No payout amounts configured.' });
     }
 
-    // -------- CONFIG PATH (no spin) --------
+    // ---------- CONFIG PATH (no spin) ----------
     if (!spin) {
+      // Compute remaining spins (or Unlimited); do NOT block if token already used.
+      let spins_left = userData.spin_limit;
+      if (!isSuperadmin) {
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const { data: recentSpins, error: spinCountError } = await supabase
+          .from('daily_spins')
+          .select('contract_address')
+          .eq('discord_id', discord_id)
+          .gte('created_at', twentyFourHoursAgo);
+
+        if (spinCountError) {
+          console.error(`Spin count error: ${spinCountError.message}`);
+          return res.status(500).json({ error: 'DB error checking spin history' });
+        }
+        const usedCount = recentSpins?.length || 0;
+        const limit = Number(userData.spin_limit ?? 0);
+        spins_left = usedCount >= limit ? 0 : (limit - usedCount);
+      } else {
+        spins_left = 'Unlimited';
+      }
+
       const tokenConfig = {
         token_name: config.token_name,
         payout_amounts: config.payout_amounts,
         image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Generic_800px.webp'
       };
 
-      // Admin panel data for admins & superadmins
-      let adminInfo = undefined;
+      // Build admin info (best-effort; errors are swallowed)
+      let adminInfo;
       if (role === 'admin' || role === 'superadmin') {
         try {
           const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
@@ -137,14 +138,14 @@ export default async function handler(req, res) {
             tokenAmt = balanceResponse.value.uiAmount;
           } catch (e) { console.error('SPL balance fetch failed', e); }
 
-          // SOL balance (gas token)
+          // SOL balance
           let gasAmt = 'N/A';
           try {
             const lamports = await connection.getBalance(poolPubkey, 'processed');
             gasAmt = lamports / LAMPORTS_PER_SOL;
           } catch (e) { console.error('SOL balance fetch failed', e); }
 
-          // Prices (best-effort)
+          // USD conversions (optional)
           let tokenUsdValue = 'N/A', gasUsdValue = 'N/A';
           if (COINMARKETCAP_API_KEY) {
             try {
@@ -166,23 +167,57 @@ export default async function handler(req, res) {
           }
 
           adminInfo = {
-            gasSymbol: 'SOL', gasAmt, gasUsdValue,
-            tokenSymbol: config.token_name, tokenAmt, tokenUsdValue,
+            gasSymbol: 'SOL',
+            gasAmt,
+            gasUsdValue,
+            tokenSymbol: config.token_name,
+            tokenAmt,
+            tokenUsdValue,
             poolAddr: poolPubkey.toString()
           };
-        } catch (e) { console.error('Admin panel build failed', e); }
+        } catch (e) {
+          console.error('Admin panel build failed', e);
+        }
       }
 
+      // Include a hint back to the client about token used state (UI can decide what to show)
       return res.status(200).json({
         tokenConfig,
         spins_left,
         adminInfo,
         role,
-        contract_address
+        contract_address,
+        token_used: !!used
       });
     }
 
-    // -------- SPIN PATH (fast return; async confirm) --------
+    // ---------- SPIN PATH (only block here if token already used) ----------
+    if (used) {
+      console.error(`Token already used: ${signedToken}`);
+      return res.status(400).json({ error: 'This spin token has already been used' });
+    }
+
+    // Enforce daily limits for non-superadmins
+    if (!isSuperadmin) {
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recentSpins, error: spinCountError } = await supabase
+        .from('daily_spins')
+        .select('contract_address')
+        .eq('discord_id', discord_id)
+        .gte('created_at', twentyFourHoursAgo);
+
+      if (spinCountError) {
+        console.error(`Spin count error: ${spinCountError.message}`);
+        return res.status(500).json({ error: 'DB error checking spin history' });
+      }
+      const usedCount = recentSpins?.length || 0;
+      const limit = Number(userData.spin_limit ?? 0);
+      if (usedCount >= limit) {
+        return res.status(403).json({ error: 'Daily spin limit reached' });
+      }
+    }
+
+    // Select weighted reward
     const weights = Array.isArray(config.payout_weights) && config.payout_weights.length === config.payout_amounts.length
       ? config.payout_weights
       : config.payout_amounts.map(() => 1);
@@ -198,6 +233,7 @@ export default async function handler(req, res) {
     const rewardAmount = Number(config.payout_amounts[selectedIndex]);
     const prizeText = `${rewardAmount} ${config.token_name}`;
 
+    // Build & send transfer
     const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
     const userWallet = new PublicKey(wallet_address);
     const tokenMint = new PublicKey(contract_address);
@@ -210,7 +246,7 @@ export default async function handler(req, res) {
         fromTokenAccount.address,
         toTokenAccount.address,
         fundingWallet.publicKey,
-        rewardAmount * (10 ** 5) // keep as-is for your current mint
+        rewardAmount * (10 ** 5) // (keep your current mint decimals)
       )
     );
 
@@ -221,19 +257,25 @@ export default async function handler(req, res) {
 
     const sig = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true, maxRetries: 3 });
 
-    // 👇 NEW: write server_id with the spin so charts filter by server directly
-    await supabase.from('daily_spins').insert({ server_id, discord_id, reward: rewardAmount, contract_address, signature: sig });
+    // Write spin (now also stores server_id for robust charting)
+    await supabase.from('daily_spins').insert({
+      server_id,
+      discord_id,
+      reward: rewardAmount,
+      contract_address,
+      signature: sig
+    });
     await supabase.from('spin_tokens').update({ used: true, signature: sig }).eq('token', signedToken);
 
-    // background confirm
+    // Background confirm
     connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'processed')
       .then(() => console.log('Transfer processed:', sig))
       .catch((e) => console.error('Confirm error:', e));
 
-    return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText, spins_left });
+    return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText, spins_left: isSuperadmin ? 'Unlimited' : (userData.spin_limit - 1) });
 
   } catch (err) {
-    console.error("API error:", err.message, err.stack);
+    console.error('API error:', err.message, err.stack);
     return res.status(500).json({ error: 'An internal error occurred.' });
   }
 }
