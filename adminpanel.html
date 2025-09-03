@@ -22,6 +22,7 @@
 
     /* admin side */
     .admin-top { display:flex; align-items:flex-start; gap:12px; }
+    .admin-top-right { margin-left:auto; }
     #chart-wheel { width:92px; height:92px; border-radius:50%; filter:drop-shadow(0 8px 18px rgba(0,0,0,.5));
       display:none; opacity:0; transition:opacity .18s ease; animation: slowspin 15s linear infinite; }
     #chart-wheel.show { display:block; opacity:1; }
@@ -29,10 +30,319 @@
     @keyframes slowspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
     .balance-line { margin-top:6px; font-size:14px; line-height:1.5; }
+    .gold { color:#f4c542; font-weight:700; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:13px; }
+    .usd { font-weight:700; }
+    .usd.green { color:#50fa7b; }
+    .usd.gold  { color:#f4c542; }
+    .usd.red   { color:#ff6b6b; }
 
     .badge { display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; margin-right:8px; }
     .green-outline { color:#9FE870; border:1px solid #335B27; background:#0b1209; }
     .red-outline   { color:#ff6b6b; border:1px solid #612; background:#120b0b; }
 
-    .token-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border:1px solid
+    .token-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border:1px solid #1f1f20; border-radius:12px; margin-bottom:10px; background:#0e0e0f; }
+    .token-left { display:flex; flex-direction:column; gap:6px; min-width:0; }
+    .token-name { font-weight:700; color:#f4c542; }
+    .addr { color:#bbb; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:500px; }
+    .btn { background:#111; color:#fff; border:1px solid #333; border-radius:10px; padding:8px 12px; cursor:pointer; }
+    .btn:disabled { opacity:.6; cursor:not-allowed; }
+    .btn-dark { background:#0f0f10; border:1px solid #2a2a2c; }
+
+    .input { width:100%; background:#0f0f10; color:#fff; border:1px solid #2a2a2c; border-radius:10px; padding:10px 12px; }
+    .row { display:flex; gap:10px; align-items:center; }
+
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:8px 10px; border-bottom:1px solid #1e1e1f; font-size:13px; text-align:left; }
+    th { color:#cfcfcf; font-weight:600; }
+    .scroll { max-height:48vh; overflow:auto; }
+    .copy { margin-left:6px; cursor:pointer; opacity:.9; }
+    .copy:hover { opacity:1; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- CHART (left) -->
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title" id="chart-title">Server • Performance (All tokens)</div>
+        <div class="row">
+          <select id="scopeSelect" class="btn">
+            <option value="token">This token</option>
+            <option value="all">All tokens</option>
+          </select>
+          <select id="rangeSelect" class="btn">
+            <option value="past30">Past 30 days</option>
+            <option value="all">All time</option>
+          </select>
+        </div>
+      </div>
+      <div class="panel-body chart-box">
+        <canvas id="chartCanvas"></canvas>
+      </div>
+    </section>
+
+    <!-- ADMIN (right) -->
+    <aside class="panel">
+      <div class="panel-head">
+        <div class="panel-title">Admin Panel</div>
+      </div>
+      <div class="panel-body">
+        <div class="admin-top">
+          <div>
+            <div class="balance-line">
+              <span class="gold" id="tokenNameTop">—</span> :
+              <span id="tokenAmt">—</span> /
+              <span class="usd" id="tokenUsd">$—</span>
+            </div>
+            <div class="balance-line">
+              <span class="gold" id="gasNameTop">SOL</span> :
+              <span id="gasAmt">—</span> /
+              <span class="usd" id="gasUsd">$—</span>
+            </div>
+            <div class="balance-line mono">
+              Wallet: <span id="poolAddr">—</span>
+              <span id="copyAddr" class="copy" title="Copy address">▣▣</span>
+            </div>
+          </div>
+          <div class="admin-top-right">
+            <img id="chart-wheel" alt="Wheel"/>
+          </div>
+        </div>
+
+        <h3 style="margin:14px 0 8px;">Manage Token Types</h3>
+        <div id="tokensList"></div>
+
+        <div class="row" style="margin-top:10px;">
+          <input id="newMint" class="input" placeholder="New token mint address (contract_address)" />
+          <button id="addTokenBtn" class="btn btn-dark">Add Token</button>
+        </div>
+
+        <h3 style="margin:18px 0 8px;">Leaderboards (Top 200)</h3>
+        <div class="row" style="margin-bottom:8px;">
+          <span style="opacity:.8;">Sort by</span>
+          <select id="sortBy" class="btn">
+            <option value="spins">Spins</option>
+            <option value="payout">Payout</option>
+          </select>
+        </div>
+        <div class="scroll">
+          <table id="lbTable">
+            <thead><tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    // Helpers
+    function usdClass(v){
+      if (v >= 50) return 'usd green';
+      if (v >= 20) return 'usd gold';
+      return 'usd red';
+    }
+    function setUSD(el, val){
+      el.className = 'usd';
+      if (typeof val === 'number') el.className = usdClass(val);
+      el.textContent = (typeof val === 'number') ? ('$' + val.toFixed(2)) : '$—';
+    }
+
+    const qs = new URLSearchParams(location.search);
+    const token = qs.get('token');
+    const server_id = qs.get('server_id');
+
+    const chartTitle = document.getElementById('chart-title');
+    const rangeSelect = document.getElementById('rangeSelect');
+    const scopeSelect = document.getElementById('scopeSelect');
+    const chartCanvas = document.getElementById('chartCanvas');
+    let chart;
+
+    const tokenNameTop = document.getElementById('tokenNameTop');
+    const gasNameTop = document.getElementById('gasNameTop');
+    const tokenAmtEl = document.getElementById('tokenAmt');
+    const gasAmtEl = document.getElementById('gasAmt');
+    const tokenUsdEl = document.getElementById('tokenUsd');
+    const gasUsdEl = document.getElementById('gasUsd');
+    const poolAddrEl = document.getElementById('poolAddr');
+    const copyAddr = document.getElementById('copyAddr');
+    const wheelImg = document.getElementById('chart-wheel');
+
+    const tokensList = document.getElementById('tokensList');
+    const addTokenBtn = document.getElementById('addTokenBtn');
+    const newMint = document.getElementById('newMint');
+
+    let contract_address = null;
+    let token_name = null;
+    let image_url = null;
+
+    async function loadConfig(){
+      const res = await fetch('/api/spin', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ token, server_id })
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Config error');
+
+      token_name = data?.tokenConfig?.token_name || 'Token';
+      image_url = data?.tokenConfig?.image_url || '';
+      contract_address = data?.contract_address || null;
+
+      // preview wheel: hide until loaded (no broken icon)
+      if (image_url){
+        wheelImg.style.display='none'; wheelImg.classList.remove('show');
+        const preload = new Image();
+        preload.onload = ()=>{ wheelImg.src = image_url; wheelImg.style.display='block'; requestAnimationFrame(()=>wheelImg.classList.add('show')); };
+        preload.onerror = ()=>{ wheelImg.style.display='none'; };
+        preload.src = image_url;
+      } else {
+        wheelImg.style.display='none';
+      }
+
+      tokenNameTop.textContent = token_name;
+      gasNameTop.textContent = 'SOL';
+
+      const info = data.adminInfo || {};
+      tokenAmtEl.textContent = (typeof info.tokenAmt === 'number') ? info.tokenAmt.toLocaleString(undefined,{maximumFractionDigits:6}) : String(info.tokenAmt ?? '—');
+      gasAmtEl.textContent = (typeof info.gasAmt === 'number') ? info.gasAmt.toFixed(4) : String(info.gasAmt ?? '—');
+
+      setUSD(tokenUsdEl, (typeof info.tokenUsdValue === 'string') ? Number(info.tokenUsdValue) : (typeof info.tokenUsdValue === 'number' ? info.tokenUsdValue : NaN));
+      setUSD(gasUsdEl, (typeof info.gasUsdValue === 'string') ? Number(info.gasUsdValue) : (typeof info.gasUsdValue === 'number' ? info.gasUsdValue : NaN));
+
+      poolAddrEl.textContent = info.poolAddr || '—';
+      copyAddr.onclick = () => {
+        if (info.poolAddr) { navigator.clipboard.writeText(info.poolAddr); copyAddr.textContent='✅'; setTimeout(()=>copyAddr.textContent='▣▣', 900); }
+      };
+    }
+
+    async function loadChart(){
+      const range = rangeSelect.value;
+      const scope = scopeSelect.value; // token | all
+      const body = { token, server_id, range };
+      if (scope === 'token' && contract_address) body.contract_address = contract_address;
+
+      const res = await fetch('/api/chart', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      const payload = await res.json();
+      if(!res.ok) throw new Error(payload.error || 'Chart error');
+
+      // title
+      chartTitle.textContent = (scope === 'token' ? `${token_name} • Performance` : 'Server • Performance (All tokens)');
+
+      if (chart) chart.destroy();
+      const ctx = chartCanvas.getContext('2d');
+      chart = new Chart(ctx, {
+        type:'line',
+        data: payload.chartData,
+        options: Object.assign({
+          responsive:true, maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
+          plugins:{ legend:{ labels:{ color:'#ddd' }}, tooltip:{ enabled:true }},
+          scales:{
+            x:{ ticks:{ color:'#bbb' }, grid:{ color:'rgba(255,255,255,0.05)' } },
+            y:{ ticks:{ color:'#bbb' }, grid:{ color:'rgba(255,255,255,0.05)' }, title:{ display:true, text:'# Spins', color:'#bbb' }},
+            y1:{ position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false }, title:{ display:(scope==='token'), text:'Avg Payout', color:'#bbb' } }
+          }
+        }, payload.options || {})
+      });
+    }
+
+    function tokenRow(t){
+      const enabled = !!t.enabled;
+      const status = enabled ? '<span class="badge green-outline">ENABLED</span>' : '<span class="badge red-outline">DISABLED</span>';
+      const btnText = enabled ? 'Disable' : 'Re-enable';
+      const id = `${t.contract_address}`;
+
+      return `
+        <div class="token-row" data-mint="${id}">
+          <div class="token-left">
+            <div>${status} <span class="token-name">${t.token_name || 'Token'}</span></div>
+            <div class="addr">${t.contract_address}</div>
+          </div>
+          <div>
+            <button class="btn btn-dark toggle-btn">${btnText}</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function loadTokens(){
+      tokensList.innerHTML = '';
+      const res = await fetch('/api/admin_tokens', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ token, server_id, action:'list' })
+      });
+      const data = await res.json();
+      if(!res.ok) { tokensList.innerHTML = `<div style="color:#f55">Error: ${data.error||'Unable to load tokens'}</div>`; return; }
+      (data.tokens||[]).forEach(t => { tokensList.insertAdjacentHTML('beforeend', tokenRow(t)); });
+      // wire up buttons
+      tokensList.querySelectorAll('.toggle-btn').forEach(btn => {
+        btn.onclick = async (e) => {
+          const row = e.currentTarget.closest('.token-row');
+          const mint = row.getAttribute('data-mint');
+          const isDisable = e.currentTarget.textContent.trim().toLowerCase() === 'disable';
+          e.currentTarget.disabled = true;
+          const res2 = await fetch('/api/admin_tokens', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ token, server_id, action: isDisable ? 'disable' : 'enable', contract_address: mint })
+          });
+          const out = await res2.json();
+          e.currentTarget.disabled = false;
+          if(!res2.ok){ alert(out.error || 'Toggle failed'); return; }
+          await loadTokens();
+          // if we disabled the active mint, keep chart scope = token but title still fine
+        };
+      });
+    }
+
+    async function addToken(){
+      const mint = newMint.value.trim();
+      if(!mint) return;
+      addTokenBtn.disabled = true;
+      const res = await fetch('/api/admin_tokens', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ token, server_id, action:'add', contract_address: mint })
+      });
+      const out = await res.json();
+      addTokenBtn.disabled = false;
+      if(!res.ok){ alert(out.error || 'Add failed'); return; }
+      newMint.value = '';
+      await loadTokens();
+    }
+
+    async function loadLeaderboards(){
+      const sortBy = document.getElementById('sortBy').value; // spins|payout
+      const res = await fetch('/api/adminleaderboards', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ token, server_id, sortBy })
+      });
+      const data = await res.json();
+      if(!res.ok){ alert(data.error || 'Leaderboard error'); return; }
+      const tbody = document.querySelector('#lbTable tbody');
+      tbody.innerHTML = '';
+      (data.rows||[]).forEach((r,i)=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${i+1}</td><td>${r.username || r.user || r.discord_id}</td><td>${r.spins}</td><td>${r.payout}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // events
+    rangeSelect.onchange = loadChart;
+    scopeSelect.onchange = loadChart;
+    addTokenBtn.onclick = addToken;
+    document.getElementById('sortBy').onchange = loadLeaderboards;
+
+    // boot
+    (async function init(){
+      if(!token || !server_id){ alert('Missing token or server_id'); return; }
+      await loadConfig();
+      await loadTokens();
+      await loadLeaderboards();
+      await loadChart();
+    })();
+  </script>
+</body>
+</html>
