@@ -15,7 +15,6 @@
   .pc{flex:1;min-height:0;display:flex;flex-direction:column}
   /* chart */
   #chartBox{position:relative;flex:0 0 auto;height:60vh;min-height:360px;max-height:70vh;padding:16px;overflow:hidden}
-  /* IMPORTANT: let Chart.js size inside a fixed-height box */
   #chartCanvas{display:block;width:100% !important;height:100% !important}
   /* right panel */
   .right-top{display:grid;grid-template-columns:auto 1fr;gap:12px;padding:12px 16px;border-bottom:1px solid var(--bd)}
@@ -56,7 +55,7 @@
 <div class="wrap">
   <!-- Left: Chart -->
   <section class="panel">
-    <div class="ph"><div class="pt" id="chartTitle">Token Performance</div>
+    <div class="ph"><div class="pt" id="chartTitle">Server • Performance (All tokens)</div>
       <div>
         <select id="rangeSelect" style="background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:6px 10px">
           <option value="past30">Past 30 days</option>
@@ -126,7 +125,6 @@ function usdClass(v){
   if (n >= 50) return 'green'; if (n >= 20) return 'gold'; return 'red';
 }
 
-// Safe JSON parse for fetch
 async function readJsonSafe(res){
   const text = await res.text();
   try { return { ok:true, json: JSON.parse(text) }; }
@@ -159,30 +157,6 @@ async function fetchSpinConfig(){
 
   if (image_url) { $('wheelThumb').src = image_url; $('wheelThumb').style.display = 'block'; }
   else { $('wheelThumb').style.display = 'none'; }
-}
-
-async function loadChart(range='past30'){
-  const res = await fetch('/api/chart', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ token, server_id, contract_address, range })
-  });
-  const payload = await res.json();
-  if (!res.ok) { alert(payload.error || 'chart error'); return; }
-  const ctx = $('chartCanvas').getContext('2d');
-  if (chartInstance) chartInstance.destroy();
-  chartInstance = new Chart(ctx, {
-    type:'line',
-    data: payload.chartData,
-    options: Object.assign({
-      responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
-      plugins:{ legend:{ labels:{ color:'#ddd' } } },
-      scales:{
-        x:{ ticks:{ color:'#bbb' }, grid:{ color:'rgba(255,255,255,.05)' } },
-        y:{ ticks:{ color:'#bbb' },  grid:{ color:'rgba(255,255,255,.05)' }, title:{ display:true, text:'# Spins', color:'#bbb' } },
-        y1:{ position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'Avg Payout', color:'#bbb' } }
-      }
-    }, payload.options || {})
-  });
 }
 
 function tokenRow(item){
@@ -272,11 +246,36 @@ async function loadLeaderboards(sortBy='spins'){
   });
 }
 
+async function loadChart(range='past30'){
+  // NOTE: aggregated server-wide chart (no contract_address sent)
+  const res = await fetch('/api/chart', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ token, server_id, range })
+  });
+  const payload = await res.json();
+  if (!res.ok) { alert(payload.error || 'chart error'); return; }
+  const ctx = $('chartCanvas').getContext('2d');
+  if (chartInstance) chartInstance.destroy();
+  chartInstance = new Chart(ctx, {
+    type:'line',
+    data: payload.chartData,
+    options: Object.assign({
+      responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      plugins:{ legend:{ labels:{ color:'#ddd' } } },
+      scales:{
+        x:{ ticks:{ color:'#bbb' }, grid:{ color:'rgba(255,255,255,.05)' } },
+        y:{ ticks:{ color:'#bbb' },  grid:{ color:'rgba(255,255,255,.05)' }, title:{ display:true, text:'# Spins', color:'#bbb' } },
+        y1:{ position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'Avg Payout', color:'#bbb' } }
+      }
+    }, payload.options || {})
+  });
+}
+
 (async function init(){
   if (!token || !server_id){ alert('Missing token/server_id'); return; }
 
   await fetchSpinConfig();
-  $('chartTitle').textContent = `${token_name} • Performance`;
+  $('chartTitle').textContent = 'Server • Performance (All tokens)';
   $('rangeSelect').onchange = (e)=> loadChart(e.target.value);
   await loadChart('past30');
   await loadTokens();
