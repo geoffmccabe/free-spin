@@ -11,61 +11,82 @@ function addDays(d,n){ const x = new Date(d.getTime()); x.setUTCDate(x.getUTCDat
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
   try {
-    const { token, server_id, range = 'past30' } = req.body || {};
+    const { token, server_id, range = 'past30', contract_address } = req.body || {};
     if (!token || !server_id) return res.status(400).json({ error: 'token and server_id required' });
 
-    // lite token check (existence)
+    // existence check only
     const { data: tok, error: tokErr } = await supabase
       .from('spin_tokens').select('discord_id').eq('token', token).single();
     if (tokErr || !tok) return res.status(400).json({ error: 'Invalid token' });
 
-    // time window
+    // time window (UTC)
     const now = new Date();
     const todayUTC = dayUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    const fetchStart = addDays(todayUTC, -60); // wide fetch window
-    let startDay = addDays(todayUTC, -29);
-    let endDay = todayUTC;
+    const fetchStart = addDays(todayUTC, -90); // wide fetch window
+    let startDay = addDays(todayUTC, -29);     // default past 30
+    let endDay   = todayUTC;
 
-    // primary path: read by server_id directly
-    let q = supabase.from('daily_spins')
-      .select('created_at,reward')
-      .eq('server_id', server_id)
-      .gte('created_at', fetchStart.toISOString());
+    // fetch the server's mints (enabled or disabled)
+    const { data: st, error: stErr } = await supabase
+      .from('server_tokens').select('contract_address').eq('server_id', server_id);
+    if (stErr) return res.status(400).json({ error: stErr.message });
+    const mints = (st || []).map(r => String(r.contract_address||'').trim()).filter(Boolean);
 
-    let { data: rows, error } = await q;
+    const perToken = !!contract_address; // if a specific mint is requested
 
-    // fallback once (for any older rows that didn't have server_id yet):
-    if (!error && (!rows || rows.length === 0)) {
-      const { data: st, error: stErr } = await supabase
-        .from('server_tokens').select('contract_address').eq('server_id', server_id);
-      if (!stErr && st && st.length) {
-        const mints = st.map(r => String(r.contract_address||'').trim()).filter(Boolean);
-        if (mints.length) {
-          const retry = await supabase.from('daily_spins')
-            .select('created_at,reward,contract_address')
-            .gte('created_at', fetchStart.toISOString())
-            .in('contract_address', mints);
-          rows = retry.data || [];
-        }
+    // Query rows
+    let rows = [];
+    if (perToken) {
+      // Specific token:
+      // A) rows that already have server_id
+      const a = await supabase.from('daily_spins')
+        .select('created_at,reward')
+        .eq('server_id', server_id)
+        .eq('contract_address', contract_address)
+        .gte('created_at', fetchStart.toISOString());
+      if (!a.error && a.data) rows = rows.concat(a.data);
+
+      // B) legacy rows without server_id but matching the mint
+      const b = await supabase.from('daily_spins')
+        .select('created_at,reward')
+        .is('server_id', null)
+        .eq('contract_address', contract_address)
+        .gte('created_at', fetchStart.toISOString());
+      if (!b.error && b.data) rows = rows.concat(b.data);
+    } else {
+      // ALL tokens (server-wide):
+      // A) rows that already have server_id
+      const a = await supabase.from('daily_spins')
+        .select('created_at,reward')
+        .eq('server_id', server_id)
+        .gte('created_at', fetchStart.toISOString());
+      if (!a.error && a.data) rows = rows.concat(a.data);
+
+      // B) legacy rows without server_id but with mint belonging to this server
+      if (mints.length) {
+        const b = await supabase.from('daily_spins')
+          .select('created_at,reward,contract_address')
+          .is('server_id', null)
+          .gte('created_at', fetchStart.toISOString())
+          .in('contract_address', mints);
+        if (!b.error && b.data) rows = rows.concat(b.data);
       }
     }
-    if (!rows) rows = [];
 
     if (range === 'all') {
-      const min = rows.length ? rows.reduce((m, r) => Math.min(m, +new Date(r.created_at)), +todayUTC) : +todayUTC;
-      const md = new Date(min);
+      const minTs = rows.length ? rows.reduce((m, r) => Math.min(m, +new Date(r.created_at)), +todayUTC) : +todayUTC;
+      const md = new Date(minTs);
       startDay = dayUTC(md.getUTCFullYear(), md.getUTCMonth(), md.getUTCDate());
     }
 
-    // seed buckets (UTC calendar days)
+    // Seed buckets (UTC)
     const buckets = {};
     for (let d = startDay; ymdUTC(d) <= ymdUTC(endDay); d = addDays(d, 1)) {
       buckets[ymdUTC(d)] = { count: 0, sum: 0 };
     }
 
-    // fill buckets
+    // Fill buckets
     for (const r of rows) {
       const key = ymdUTC(new Date(r.created_at));
       if (key >= ymdUTC(startDay) && key <= ymdUTC(endDay)) {
@@ -77,16 +98,19 @@ export default async function handler(req, res) {
 
     const labels = Object.keys(buckets).sort();
     const spins = labels.map(k => buckets[k].count);
-    const avg   = labels.map(k => buckets[k].count ? +(buckets[k].sum / buckets[k].count).toFixed(2) : 0);
+
+    const datasets = [
+      { label:'Spins', yAxisID:'y', data: spins, borderWidth:2, pointRadius:0, tension:0.2 }
+    ];
+
+    // Only include Avg Payout line when charting a single token
+    if (perToken) {
+      const avg = labels.map(k => buckets[k].count ? +(buckets[k].sum / buckets[k].count).toFixed(2) : 0);
+      datasets.push({ label:'Avg Payout', yAxisID:'y1', data: avg, borderWidth:2, pointRadius:0, tension:0.2 });
+    }
 
     return res.status(200).json({
-      chartData: {
-        labels,
-        datasets: [
-          { label:'Spins', yAxisID:'y',  data: spins, borderWidth:2, pointRadius:0, tension:0.2 },
-          { label:'Avg Payout', yAxisID:'y1', data: avg, borderWidth:2, pointRadius:0, tension:0.2 }
-        ]
-      },
+      chartData: { labels, datasets },
       options: {}
     });
   } catch (e) {
