@@ -1,348 +1,286 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin • Spin</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Admin</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:#000;color:#fff;font-family:Inter,system-ui,Arial,sans-serif;overflow-x:hidden}
-  .page{min-height:100%;display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:14px;padding:14px;max-width:100vw;overflow-x:hidden}
-  @media (max-width:1100px){ .page{grid-template-columns:1fr;grid-auto-rows:max-content} }
-  .panel{background:#0b0b0c;border:1px solid #1f1f20;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;min-height:60vh;min-width:0}
-  .panel-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border-bottom:1px solid #1c1c1e}
-  .panel-title{font-weight:700}
-  .panel-body{flex:1;min-height:300px;position:relative;padding:12px 16px;overflow:hidden}
+  :root { --bg:#0b0b0c; --panel:#0b0b0c; --bd:#1f1f20; --txt:#eaeaea; --muted:#a0a0a0; --gold:#eab308; --green:#22c55e; --red:#ef4444; }
+  html,body{margin:0;height:100%;background:#000;color:#fff;font-family:Inter,system-ui,sans-serif}
+  .wrap{display:grid;grid-template-columns:2fr 1fr;gap:16px;padding:16px;box-sizing:border-box;max-width:100vw;overflow:hidden}
+  .panel{background:var(--panel);border:1px solid var(--bd);border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;min-height:70vh;overflow:hidden}
+  .ph{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border-bottom:1px solid var(--bd)}
+  .pt{font-weight:700;letter-spacing:.3px}
+  .pc{flex:1;min-height:0;display:flex;flex-direction:column}
+  /* chart */
+  #chartBox{position:relative;flex:1;padding:16px}
   #chartCanvas{width:100%;height:100%}
-  .toolbar{display:flex;align-items:center;gap:8px}
-  .toolbar select{background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:6px 10px}
-  .back{background:#222;border:1px solid #444;color:#fff;padding:8px 12px;border-radius:10px;text-decoration:none;white-space:nowrap}
-  .admin-grid{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start}
-  .admin-wheel{width:140px;height:140px;animation:slowspin 15s linear infinite;filter:drop-shadow(0 8px 20px rgba(0,0,0,.5));display:none}
-  @keyframes slowspin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
-  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-  .token-name{color:#d4af37;font-weight:800}
+  /* right panel */
+  .right-top{display:grid;grid-template-columns:auto 1fr;gap:12px;padding:12px 16px;border-bottom:1px solid var(--bd)}
+  .wheelThumb{width:82px;height:82px;object-fit:contain;animation:spin 15s linear infinite}
+  @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+  .balanceLine{display:flex;flex-direction:column;gap:4px;font-size:14px;color:var(--txt)}
+  .tokenName{color:var(--gold);font-weight:700}
   .usd{font-weight:700}
-  .usd-high{color:#22c55e}.usd-mid{color:#f59e0b}.usd-low{color:#ef4444}
-  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:13px}
-  .copy-icon{margin-left:8px;display:inline-flex;vertical-align:middle;cursor:pointer}
-  .copy-icon svg{width:16px;height:16px}
-  .copy-copied rect{stroke:#22c55e!important}
-  .section{border-top:1px solid #1c1c1e;padding:12px 0}
-  .section:first-child{border-top:none}
-  .hint{margin:10px 0 0 0;font-size:12px;color:#bbb}
-  #token-list{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto}
-  .token-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#0f0f10;border:1px solid #1f1f20;border-radius:10px}
-  .token-item .meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;min-width:0}
-  .badge{font-size:11px;padding:2px 8px;border-radius:999px;opacity:.95;white-space:nowrap}
-  .badge.enabled{color:#22c55e;border:1px solid #22c55e;background:rgba(34,197,94,.08)}
-  .badge.disabled{color:#ef4444;border:1px solid #ef4444;background:rgba(239,68,68,.08)}
-  .token-item .mono{opacity:.8;overflow:hidden;text-overflow:ellipsis;max-width:36ch}
-  .token-item button,#add-token-btn{padding:6px 10px;font-size:12px;border-radius:10px;border:1px solid #2a2a2c;background:#1a1a1c;color:#fff;cursor:pointer;white-space:nowrap}
-  .token-add{display:flex;gap:8px;margin-top:10px}
-  .token-add input{flex:1;min-width:0;background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:8px 10px;font-size:12px}
-  .lb-head{display:flex;justify-content:space-between;align-items:center}
-  .lb-controls select{background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:6px 10px}
-  .lb-table{max-height:420px;overflow:auto;border:1px solid #1f1f20;border-radius:10px}
-  table{width:100%;border-collapse:collapse}
-  th,td{padding:8px 10px;border-bottom:1px solid #151517;font-size:12px;text-align:left}
-  th{position:sticky;top:0;background:#121214;z-index:1}
-  tr:last-child td{border-bottom:none}
-  .lb-table::-webkit-scrollbar{width:10px}
-  .lb-table::-webkit-scrollbar-track{background:#0f0f10}
-  .lb-table::-webkit-scrollbar-thumb{background:#2a2a2c;border-radius:10px}
-  .lb-table::-webkit-scrollbar-thumb:hover{background:#3a3a3d}
+  .usd.green{color:var(--green)} .usd.gold{color:var(--gold)} .usd.red{color:var(--red)}
+  .row{padding:10px 16px;border-bottom:1px solid var(--bd)}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .copy{margin-left:6px;cursor:pointer}
+  /* manage tokens */
+  .tok{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--bd);border-radius:12px;margin:8px 0}
+  .tag{padding:4px 10px;border-radius:999px;font-size:12px;border:2px solid #334;border-color:#334;color:#9bd;display:inline-block;margin-right:10px}
+  .tag.on{border-color:#2d7f3a;color:#bdf0c7}
+  .tag.off{border-color:#7a2323;color:#ffb4b4}
+  .tokLeft{display:flex;flex-direction:column;gap:6px;overflow:hidden}
+  .tokName{font-size:20px;font-weight:800;color:var(--gold)}
+  .tokAddr{font-size:13px;color:var(--muted);word-break:break-all}
+  .tokBtns button{background:#111;border:1px solid #444;color:#fff;border-radius:12px;padding:8px 12px;cursor:pointer}
+  .tokBtns button:hover{border-color:#666}
+  .addRow{display:flex;gap:10px;margin-top:8px}
+  .addRow input{flex:1;background:#111;border:1px solid #333;border-radius:12px;color:#fff;padding:10px}
+  .addRow button{background:#111;border:1px solid #444;color:#fff;border-radius:12px;padding:10px 14px;cursor:pointer}
+  /* leaderboard */
+  .lbWrap{flex:1;min-height:0;display:flex;flex-direction:column}
+  .lbHeader{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-top:1px solid var(--bd)}
+  .table{flex:1;min-height:0;overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:8px 10px;border-bottom:1px solid #1c1c1e;text-align:left}
+  th{position:sticky;top:0;background:#101014}
+  .error{color:#fb7185;padding:8px 16px}
+  @media (max-width: 1100px){ .wrap{grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
-  <div class="page">
-    <section class="panel">
-      <div class="panel-header">
-        <div class="panel-title" id="chart-title">Token Performance</div>
-        <div class="toolbar">
-          <label for="rangeSelect">Range</label>
-          <select id="rangeSelect">
-            <option value="past30">Past 30 days</option>
-            <option value="all">All time</option>
+<div class="wrap">
+  <!-- Left: Chart -->
+  <section class="panel">
+    <div class="ph"><div class="pt" id="chartTitle">Token Performance</div>
+      <div>
+        <select id="rangeSelect" style="background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:6px 10px">
+          <option value="past30">Past 30 days</option>
+          <option value="all">All time</option>
+        </select>
+      </div>
+    </div>
+    <div class="pc" id="chartBox"><canvas id="chartCanvas"></canvas></div>
+  </section>
+
+  <!-- Right: Admin panel -->
+  <aside class="panel">
+    <div class="ph"><div class="pt">Admin Panel</div></div>
+
+    <!-- top: wheel + balances -->
+    <div class="right-top">
+      <img id="wheelThumb" class="wheelThumb" alt="Wheel"/>
+      <div class="balanceLine">
+        <div><span class="tokenName" id="spinName">—</span> : <span id="spinQty">—</span> / <span id="spinUsd" class="usd">—</span></div>
+        <div><span class="tokenName" id="gasName">—</span> : <span id="gasQty">—</span> / <span id="gasUsd" class="usd">—</span></div>
+      </div>
+    </div>
+
+    <div class="row"><span class="mono">Wallet:</span> <span class="mono" id="poolAddr">—</span>
+      <span class="copy" id="copyAddr" title="Copy">📋</span>
+    </div>
+
+    <div class="row">
+      <div class="pt" style="margin-bottom:8px">Manage Token Types</div>
+      <div id="tokenList"></div>
+      <div class="addRow">
+        <input id="newToken" placeholder="New token mint address (contract_address)"/>
+        <button id="addBtn">Add Token</button>
+      </div>
+      <div id="tokHint" style="color:#fbbf24;margin-top:6px;font-size:12px;display:none"></div>
+    </div>
+
+    <div class="lbWrap">
+      <div class="lbHeader">
+        <div class="pt" style="font-size:16px">Leaderboards (Top 200)</div>
+        <div>
+          <label style="font-size:12px;margin-right:6px">Sort by</label>
+          <select id="lbSort" style="background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:6px 10px">
+            <option value="spins">Spins</option>
+            <option value="payout">Payout</option>
           </select>
-          <a class="back" id="backLink">Back to Wheel</a>
         </div>
       </div>
-      <div class="panel-body">
-        <canvas id="chartCanvas"></canvas>
-      </div>
-    </section>
-
-    <aside class="panel" id="admin-panel">
-      <div class="panel-header"><div class="panel-title">Admin Panel</div></div>
-      <div class="panel-body">
-        <div class="admin-grid">
-          <div>
-            <div class="row"><span class="token-name" id="spin-name">—</span>: <span id="spin-qty">—</span> / <span class="usd" id="spin-usd">$—</span></div>
-            <div class="row" style="margin-top:6px"><span class="token-name" id="gas-name">—</span>: <span id="gas-qty">—</span> / <span class="usd" id="gas-usd">$—</span></div>
-            <div class="row" style="margin-top:10px;align-items:center">
-              <span class="mono" id="pool-addr">Wallet: —</span>
-              <span class="copy-icon" id="copy-icon" title="Copy address">
-                <svg viewBox="0 0 24 24" fill="none"><rect x="7" y="7" width="12" height="12" rx="2" stroke="#bbb"/><rect x="4" y="4" width="12" height="12" rx="2" stroke="#bbb"/></svg>
-              </span>
-            </div>
-          </div>
-          <img class="admin-wheel" id="admin-wheel" alt="Wheel">
-        </div>
-
-        <div class="section" id="superadmin-controls" style="display:none;">
-          <h4 style="margin:10px 0 8px 0">Manage Token Types</h4>
-          <div id="supports-hint" class="hint" style="display:none">
-            Toggling requires an <code>enabled boolean</code> column on <code>server_tokens</code>.<br/>
-            Run once: <code>ALTER TABLE server_tokens ADD COLUMN enabled boolean DEFAULT true;</code>
-          </div>
-          <div id="token-list"></div>
-          <div class="token-add">
-            <input type="text" id="new-token-contract" placeholder="New token mint address (contract_address)">
-            <button id="add-token-btn">Add Token</button>
-          </div>
-        </div>
-
-        <div class="section">
-          <div class="lb-head">
-            <h4 style="margin:0">Leaderboards (Top 200)</h4>
-            <div class="lb-controls">
-              <label for="lbMode">Sort by</label>
-              <select id="lbMode"><option value="spins">Spins</option><option value="payout">Payout</option></select>
-            </div>
-          </div>
-          <div class="lb-table">
-            <table>
-              <thead><tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr></thead>
-              <tbody id="lb-body"><tr><td colspan="4" class="mono" style="opacity:.8">Loading…</td></tr></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </aside>
-  </div>
+      <div id="lbError" class="error" style="display:none"></div>
+      <div class="table"><table id="lbTable">
+        <thead><tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+  </aside>
+</div>
 
 <script>
-(function(){
-  const qs = new URLSearchParams(location.search);
-  const token = qs.get('token');
-  const server_id = qs.get('server_id');
-  if (!token || !server_id) { alert('Missing token or server_id'); return; }
+const $ = (id)=>document.getElementById(id);
+const urlq = new URLSearchParams(location.search);
+const token = urlq.get('token'); const server_id = urlq.get('server_id');
+let contract_address = null, token_name = null, image_url = null;
+let chartInstance = null;
 
-  document.getElementById('backLink').href =
-    `index.html?token=${encodeURIComponent(token)}&server_id=${encodeURIComponent(server_id)}`;
+function usdClass(v){
+  const n = Number(v?.toString().replace(/[^0-9.]/g,'')); if (isNaN(n)) return '';
+  if (n >= 50) return 'green'; if (n >= 20) return 'gold'; return 'red';
+}
 
-  // Admin refs
-  const spinNameEl = document.getElementById('spin-name');
-  const spinQtyEl  = document.getElementById('spin-qty');
-  const spinUsdEl  = document.getElementById('spin-usd');
-  const gasNameEl  = document.getElementById('gas-name');
-  const gasQtyEl   = document.getElementById('gas-qty');
-  const gasUsdEl   = document.getElementById('gas-usd');
-  const poolAddrEl = document.getElementById('pool-addr');
-  const copyIcon   = document.getElementById('copy-icon');
+// Safe JSON parse for fetch
+async function readJsonSafe(res){
+  const text = await res.text();
+  try { return { ok:true, json: JSON.parse(text) }; }
+  catch { return { ok:false, text }; }
+}
 
-  const superControls = document.getElementById('superadmin-controls');
-  const supportsHint  = document.getElementById('supports-hint');
-  const tokenListEl   = document.getElementById('token-list');
-  const addTokenBtn   = document.getElementById('add-token-btn');
-  const newTokenInput = document.getElementById('new-token-contract');
+async function fetchSpinConfig(){
+  const res = await fetch('/api/spin', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ token, server_id })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'config error');
+  const info = data.adminInfo || {};
+  token_name = data.tokenConfig?.token_name || 'Token';
+  image_url = data.tokenConfig?.image_url || '';
+  contract_address = data.contract_address;
 
-  // Leaderboards
-  const lbMode  = document.getElementById('lbMode');
-  const lbBody  = document.getElementById('lb-body');
+  $('spinName').textContent = token_name;
+  $('gasName').textContent = (info.gasSymbol || 'SOL');
+  $('spinQty').textContent = (typeof info.tokenAmt === 'number') ? info.tokenAmt.toLocaleString(undefined,{maximumFractionDigits:6}) : (info.tokenAmt ?? 'N/A');
+  $('gasQty').textContent = (typeof info.gasAmt === 'number') ? info.gasAmt.toFixed(4) : (info.gasAmt ?? 'N/A');
+  $('spinUsd').textContent = info.tokenUsdValue ? `$${info.tokenUsdValue}` : '—';
+  $('gasUsd').textContent  = info.gasUsdValue  ? `$${info.gasUsdValue}`  : '—';
+  $('spinUsd').className = 'usd ' + usdClass(info.tokenUsdValue);
+  $('gasUsd').className  = 'usd ' + usdClass(info.gasUsdValue);
 
-  // Chart
-  const chartCanvas = document.getElementById('chartCanvas');
-  const chartTitle  = document.getElementById('chart-title');
-  const rangeSelect = document.getElementById('rangeSelect');
-  let chartInstance = null, contract_address = null, token_name = null, image_url = null;
-  const adminWheel = document.getElementById('admin-wheel');
+  $('poolAddr').textContent = info.poolAddr || '—';
+  $('copyAddr').onclick = ()=>{ if(info.poolAddr){ navigator.clipboard.writeText(info.poolAddr); } };
 
-  function usdClass(val){
-    const n = typeof val === 'string' ? Number(val.replace(/[^0-9.]/g,'')) : Number(val);
-    if (!Number.isFinite(n)) return '';
-    if (n >= 50) return 'usd-high';
-    if (n >= 20) return 'usd-mid';
-    return 'usd-low';
-  }
+  if (image_url) { $('wheelThumb').src = image_url; $('wheelThumb').style.display = 'block'; }
+  else { $('wheelThumb').style.display = 'none'; }
+}
 
-  async function init(){
-    // config from /api/spin (no spin)
-    const res = await fetch('/api/spin', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ token, server_id })
-    });
-    const data = await res.json();
-    if (!res.ok) { alert(data.error || 'Access denied'); return; }
+async function loadChart(range='past30'){
+  const res = await fetch('/api/chart', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ token, server_id, contract_address, range })
+  });
+  const payload = await res.json();
+  if (!res.ok) { alert(payload.error || 'chart error'); return; }
+  const ctx = $('chartCanvas').getContext('2d');
+  if (chartInstance) chartInstance.destroy();
+  chartInstance = new Chart(ctx, {
+    type:'line',
+    data: payload.chartData,
+    options: Object.assign({
+      responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      plugins:{ legend:{ labels:{ color:'#ddd' } } },
+      scales:{
+        x:{ ticks:{ color:'#bbb' }, grid:{ color:'rgba(255,255,255,.05)' } },
+        y:{ ticks:{ color:'#bbb' },  grid:{ color:'rgba(255,255,255,.05)' }, title:{ display:true, text:'# Spins', color:'#bbb' } },
+        y1:{ position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'Avg Payout', color:'#bbb' } }
+      }
+    }, payload.options || {})
+  });
+}
 
-    const role = data.role || null;
-    if (role !== 'admin' && role !== 'superadmin') {
-      alert('Admins only.');
-      location.href = `index.html?token=${encodeURIComponent(token)}&server_id=${encodeURIComponent(server_id)}`;
-      return;
-    }
+function tokenRow(item){
+  const name = item.token_name || (item.contract_address ? (item.contract_address.slice(0,4)+'…'+item.contract_address.slice(-4)) : 'Token');
+  const addr = item.contract_address || '—';
+  const tag = item.enabled ? `<span class="tag on">ENABLED</span>` : `<span class="tag off">DISABLED</span>`;
+  const btnLabel = item.enabled ? 'Disable' : 'Re-enable';
+  return `
+    <div class="tok" data-addr="${addr}">
+      <div class="tokLeft">
+        <div>${tag} <span class="tokName">${name}</span></div>
+        <div class="tokAddr mono">${addr}</div>
+      </div>
+      <div class="tokBtns">
+        <button class="toggleBtn">${btnLabel}</button>
+      </div>
+    </div>`;
+}
 
-    const info = data.adminInfo || {};
-    token_name = data?.tokenConfig?.token_name || 'Token';
-    contract_address = data.contract_address || null;
-    image_url = data?.tokenConfig?.image_url || null;
+async function loadTokens(){
+  const res = await fetch('/api/admin/tokens', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ token, server_id, action:'list' })
+  });
+  const data = await res.json();
+  const list = $('tokenList'); list.innerHTML='';
+  if (!res.ok){ list.innerHTML = `<div class="error">${data.error || 'Error'}</div>`; return; }
 
-    spinNameEl.textContent = info.tokenSymbol || token_name || '—';
-    spinQtyEl.textContent  = (typeof info.tokenAmt === 'number') ? info.tokenAmt.toLocaleString(undefined,{ maximumFractionDigits: 6 }) : String(info.tokenAmt ?? 'N/A');
-    const tokUsd = (typeof info.tokenUsdValue === 'number') ? info.tokenUsdValue.toFixed(2) : String(info.tokenUsdValue ?? 'N/A');
-    spinUsdEl.textContent = `$${tokUsd}`; spinUsdEl.className = `usd ${usdClass(tokUsd)}`;
-    gasNameEl.textContent = info.gasSymbol || 'SOL';
-    gasQtyEl.textContent  = (typeof info.gasAmt === 'number') ? info.gasAmt.toFixed(4) : String(info.gasAmt ?? 'N/A');
-    const gasUsd = (typeof info.gasUsdValue === 'number') ? info.gasUsdValue.toFixed(2) : String(info.gasUsdValue ?? 'N/A');
-    gasUsdEl.textContent = `$${gasUsd}`; gasUsdEl.className = `usd ${usdClass(gasUsd)}`;
-    poolAddrEl.textContent = `Wallet: ${info.poolAddr || '—'}`;
-    copyIcon.onclick = () => {
-      if (!info.poolAddr) return;
-      navigator.clipboard.writeText(info.poolAddr);
-      copyIcon.classList.add('copy-copied');
-      setTimeout(() => copyIcon.classList.remove('copy-copied'), 1000);
+  const needs = (data.items||[]).some(it=>it.missingEnabled);
+  $('tokHint').style.display = needs ? 'block' : 'none';
+  $('tokHint').textContent = needs ? "Toggling requires an enabled boolean column on server_tokens. Run once: ALTER TABLE server_tokens ADD COLUMN enabled boolean DEFAULT true;" : '';
+
+  (data.items || []).forEach(it => { list.insertAdjacentHTML('beforeend', tokenRow(it)); });
+  // handlers
+  list.querySelectorAll('.toggleBtn').forEach(btn => {
+    btn.onclick = async (e) => {
+      const row = e.target.closest('.tok');
+      const addr = row.getAttribute('data-addr');
+      const r = await fetch('/api/admin/tokens', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ token, server_id, action:'toggle', contract_address: addr })
+      });
+      const j = await r.json();
+      if (!r.ok){
+        if (j.error === 'missing-enabled') alert(j.hint || 'Add enabled column first.');
+        else alert(j.error || 'Toggle failed');
+        return;
+      }
+      await loadTokens();
     };
-
-    if (role === 'superadmin') {
-      superControls.style.display = 'block';
-      await loadServerTokens();
-      addTokenBtn.onclick = async () => {
-        const mint = newTokenInput.value.trim();
-        if (!mint) return;
-        addTokenBtn.disabled = true;
-        const r = await fetch('/api/admin/tokens', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ token, server_id, action:'add', contract_address: mint })
-        });
-        addTokenBtn.disabled = false;
-        if (r.ok) { newTokenInput.value=''; loadServerTokens(); }
-        else {
-          const p = await r.json().catch(()=>({}));
-          alert('Failed to add token' + (p?.error ? `: ${p.error}` : ''));
-        }
-      };
-    }
-
-    chartTitle.textContent = `${token_name} • Performance`;
-    await loadChart('past30');
-    rangeSelect.addEventListener('change', e => loadChart(e.target.value));
-
-    if (image_url) {
-      const img = new Image();
-      img.onload = () => { adminWheel.src = image_url; adminWheel.style.display = 'block'; };
-      img.onerror = () => { adminWheel.style.display = 'none'; };
-      img.src = image_url;
-    }
-
-    await loadLeaderboards();
-    lbMode.addEventListener('change', renderLeaderboard);
-  }
-
-  async function loadChart(range){
-    const res = await fetch('/api/chart', {
+  });
+  $('addBtn').onclick = async ()=>{
+    const addr = ($('newToken').value || '').trim();
+    if (!addr) return;
+    const r = await fetch('/api/admin/tokens', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ token, server_id, contract_address, range, tzOffsetMin: -360 })
+      body: JSON.stringify({ token, server_id, action:'add', contract_address: addr })
     });
-    const payload = await res.json();
-    if (!res.ok) { alert(payload.error || 'Failed to load chart'); return; }
-    if (chartInstance) chartInstance.destroy();
-    const ctx = chartCanvas.getContext('2d');
-    chartInstance = new Chart(ctx, {
-      type:'line',
-      data: payload.chartData,
-      options: Object.assign({
-        responsive:true, maintainAspectRatio:false,
-        interaction:{ mode:'index', intersect:false },
-        plugins:{ legend:{ labels:{ color:'#ddd' } }, tooltip:{ enabled:true } },
-        scales:{
-          x:{ ticks:{ color:'#bbb' }, grid:{ color:'rgba(255,255,255,0.05)' } },
-          y:{ ticks:{ color:'#bbb' }, grid:{ color:'rgba(255,255,255,0.05)' }, title:{ display:true, text:'# Spins', color:'#bbb' } },
-          y1:{ position:'right', ticks:{ color:'#bbb' }, grid:{ drawOnChartArea:false }, title:{ display:true, text:'Avg Payout', color:'#bbb' } }
-        }
-      }, payload.options || {})
-    });
-  }
+    const j = await r.json();
+    if (!r.ok){ alert(j.error || 'Add failed'); return; }
+    $('newToken').value = '';
+    await loadTokens();
+  };
+}
 
-  async function loadServerTokens(){
-    tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">Loading tokens…</div>';
-    try{
-      const res = await fetch('/api/admin/tokens', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ token, server_id, action:'list' })
-      });
-      const payload = await res.json();
-      if (!res.ok) { tokenListEl.innerHTML = `<div class="mono" style="color:#f66">Error: ${payload.error || 'failed to load'}</div>`; return; }
-      const rows = payload.tokens || [];
-      const supportsEnabled = !!payload.supportsEnabled;
-      supportsHint.style.display = supportsEnabled ? 'none' : 'block';
+async function loadLeaderboards(sortBy='spins'){
+  const res = await fetch('/api/adminleaderboards', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ token, server_id })
+  });
+  const parsed = await readJsonSafe(res);
+  const tb = $('lbTable').querySelector('tbody');
+  tb.innerHTML = '';
+  $('lbError').style.display = 'none';
 
-      if (!rows.length) { tokenListEl.innerHTML = '<div class="mono" style="opacity:.7">No tokens added yet.</div>'; return; }
-      tokenListEl.innerHTML = '';
-      rows.forEach(row => {
-        const isEnabled = row.enabled !== false; // default true if column missing
-        const el = document.createElement('div');
-        el.className = 'token-item';
-        el.innerHTML = `
-          <div class="meta">
-            <span class="badge ${isEnabled ? 'enabled' : 'disabled'}">${isEnabled ? 'ENABLED' : 'DISABLED'}</span>
-            <span class="token-name">${row.token_name || 'Token'}</span>
-            <span class="mono">${row.contract_address}</span>
-          </div>
-          <div>
-            ${supportsEnabled
-              ? `<button data-contract="${row.contract_address}">${isEnabled ? 'Disable' : 'Re-enable'}</button>`
-              : `<button disabled title="Add 'enabled' column to toggle">Disable / Re-enable</button>`
-            }
-          </div>
-        `;
-        const btn = el.querySelector('button');
-        if (supportsEnabled && btn) {
-          btn.onclick = async () => {
-            btn.disabled = true;
-            const r = await fetch('/api/admin/tokens', {
-              method:'POST', headers:{'Content-Type':'application/json'},
-              body: JSON.stringify({ token, server_id, action:'setEnabled', contract_address: row.contract_address, enabled: !isEnabled })
-            });
-            btn.disabled = false;
-            if (r.ok) loadServerTokens();
-            else {
-              const p = await r.json().catch(()=>({}));
-              alert(p?.migration || p?.error || 'Failed to update token');
-            }
-          };
-        }
-        tokenListEl.appendChild(el);
-      });
-    }catch(e){
-      tokenListEl.innerHTML = `<div class="mono" style="color:#f66">Error: ${e.message}</div>`;
-    }
+  if (!parsed.ok) {
+    $('lbError').textContent = `API error: ${parsed.text.slice(0,120)}`;
+    $('lbError').style.display = 'block';
+    return;
   }
+  const data = parsed.json;
+  const rows = (sortBy==='payout' ? data.byPayout : data.bySpins) || [];
+  rows.forEach((r) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.rank}</td><td>${r.user}</td><td>${r.spins}</td><td>${r.payout}</td>`;
+    tb.appendChild(tr);
+  });
+}
 
-  async function loadLeaderboards(){
-    lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="opacity:.8">Loading…</td></tr>`;
-    try{
-      const res = await fetch('/api/adminleaderboards', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ token, server_id })
-      });
-      const payload = await res.json();
-      if (!res.ok) { lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="color:#f66">Error: ${payload.error || 'failed to load'}</td></tr>`; return; }
-      window._LB = payload;
-      renderLeaderboard();
-    }catch(e){
-      lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="color:#f66">Error: ${e.message}</td></tr>`;
-    }
-  }
-  function renderLeaderboard(){
-    const mode = lbMode.value;
-    const rows = (window._LB && (mode === 'spins' ? window._LB.bySpins : window._LB.byPayout)) || [];
-    if (!rows.length) { lbBody.innerHTML = `<tr><td colspan="4" class="mono" style="opacity:.8">No data yet.</td></tr>`; return; }
-    lbBody.innerHTML = rows.map(r => `<tr><td>${r.rank}</td><td>${r.user}</td><td>${r.spins}</td><td>${r.payout}</td></tr>`).join('');
-  }
+(async function init(){
+  if (!token || !server_id){ alert('Missing token/server_id'); return; }
 
-  init().catch(e => alert(e.message));
+  await fetchSpinConfig();
+  $('chartTitle').textContent = `${token_name} • Performance`;
+  $('rangeSelect').onchange = (e)=> loadChart(e.target.value);
+  await loadChart('past30');
+  await loadTokens();
+  await loadLeaderboards('spins');
+  $('lbSort').onchange = (e)=> loadLeaderboards(e.target.value);
 })();
 </script>
 </body>
