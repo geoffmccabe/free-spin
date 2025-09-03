@@ -4,19 +4,25 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Simple Base58-ish plausibility (Solana mints are Base58, length typically 32+)
+const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{20,}$/;
+const validMint = (s) => !!s && BASE58_RE.test(s.trim());
+
 async function fetchServerTokens(server_id) {
-  // Try to include enabled; if column missing, treat as enabled
+  // Try with enabled column; if missing, assume enabled=true
   try {
     const { data, error } = await supabase
       .from('server_tokens')
       .select('contract_address, enabled')
       .eq('server_id', server_id);
     if (error) throw error;
-    return (data || []).map(r => ({
-      contract_address: String(r.contract_address || '').trim(),
-      enabled: r.enabled === null ? true : !!r.enabled,
-      missingEnabled: false
-    })).filter(r => r.contract_address.length > 0);
+    return (data || [])
+      .map(r => ({
+        contract_address: String(r.contract_address || '').trim(),
+        enabled: r.enabled === null ? true : !!r.enabled,
+        missingEnabled: false
+      }))
+      .filter(r => validMint(r.contract_address)); // drop blanks/garbage
   } catch (e) {
     const msg = ((e?.message || '') + ' ' + (e?.details || '')).toLowerCase();
     if (msg.includes('enabled')) {
@@ -25,11 +31,9 @@ async function fetchServerTokens(server_id) {
         .select('contract_address')
         .eq('server_id', server_id);
       if (fb.error) throw fb.error;
-      return (fb.data || []).map(r => ({
-        contract_address: String(r.contract_address || '').trim(),
-        enabled: true,
-        missingEnabled: true
-      })).filter(r => r.contract_address.length > 0);
+      return (fb.data || [])
+        .map(r => ({ contract_address: String(r.contract_address || '').trim(), enabled: true, missingEnabled: true }))
+        .filter(r => validMint(r.contract_address));
     }
     throw e;
   }
@@ -46,10 +50,7 @@ async function fetchTokenMeta(contractAddresses) {
   for (const r of (data || [])) {
     const ca = String(r.contract_address || '').trim();
     if (!ca) continue;
-    map[ca] = {
-      token_name: r.token_name || null,
-      image_url: r.image_url || null,
-    };
+    map[ca] = { token_name: r.token_name || null, image_url: r.image_url || null };
   }
   return map;
 }
@@ -57,6 +58,7 @@ async function fetchTokenMeta(contractAddresses) {
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
     const { token, server_id, action, contract_address: addrRaw } = req.body || {};
     if (!token || !server_id) return res.status(400).json({ error: 'token and server_id required' });
 
@@ -86,7 +88,7 @@ export default async function handler(req, res) {
 
     if (action === 'toggle') {
       const addr = String(addrRaw || '').trim();
-      if (!addr) return res.status(400).json({ error: 'contract_address required' });
+      if (!validMint(addr)) return res.status(400).json({ error: 'Valid contract_address required' });
 
       // ensure enabled column exists
       const probe = await supabase.from('server_tokens').select('enabled').limit(1);
@@ -120,11 +122,13 @@ export default async function handler(req, res) {
 
     if (action === 'add') {
       const addr = String(addrRaw || '').trim();
-      if (!addr) return res.status(400).json({ error: 'contract_address required' });
+      if (!validMint(addr)) return res.status(400).json({ error: 'Valid contract_address required' });
+
       const { error: insErr } = await supabase
         .from('server_tokens')
         .upsert({ server_id, contract_address: addr, enabled: true }, { onConflict: 'server_id,contract_address' });
       if (insErr) return res.status(400).json({ error: insErr.message });
+
       return res.status(200).json({ ok: true });
     }
 
