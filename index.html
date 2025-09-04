@@ -4,35 +4,72 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Spin the Wheel</title>
+  <meta name="referrer" content="no-referrer" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.4/TweenMax.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
-
   <style>
-    html, body { background:#000; color:#fff; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; text-align:center; margin:0; padding:0; overflow:hidden; height:100vh; }
-    .main { height:100vh; display:grid; grid-template-columns: 1fr; align-items:center; justify-items:center; padding:16px; box-sizing:border-box; }
+    html, body { background:#000; color:#fff; font-family: Inter, system-ui, sans-serif; margin:0; padding:0; height:100vh; overflow:hidden; }
+    .main {
+      height:100vh;
+      display:grid;
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr auto;
+      justify-items:center;
+      align-items:center;
+      padding:16px;
+      box-sizing:border-box;
+      position:relative;
+    }
 
-    #wheel-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; }
+    /* Wheel block */
+    #wheel-wrap {
+      display:flex;
+      flex-direction:column;
+      align-items:center; /* this centers the SPIN button under the wheel */
+      justify-content:center;
+      min-height:0;
+    }
     #wheel-container { position:relative; width:min(80vmin, 640px); height:min(80vmin, 640px); }
-    #pointer { position:absolute; top:-20px; left:50%; transform:translateX(-50%); width:0; height:0;
-      border-left:15px solid transparent; border-right:15px solid transparent; border-top:20px solid red; z-index:10; }
+    #pointer { position:absolute; top:-20px; left:50%; transform:translateX(-50%); width:0; height:0; border-left:15px solid transparent; border-right:15px solid transparent; border-top:20px solid red; z-index:10; }
+    #canvas-mechanics { position:absolute; top:0; left:0; z-index:1; width:100%; height:100%; }
+    #wheel-overlay { position:absolute; top:0; left:0; width:100%; height:100%; z-index:2; pointer-events:none; display:none; }
+    #canvas-text { position:absolute; top:0; left:0; z-index:3; pointer-events:none; width:100%; height:100%; }
 
-    /* canvases render instantly */
-    #canvas-mechanics, #canvas-text { position:absolute; top:0; left:0; width:100%; height:100%; }
-    #canvas-mechanics { z-index:1; opacity:0; } /* kept invisible, used only for Winwheel physics */
-    #canvas-text      { z-index:3; pointer-events:none; }
-
-    /* overlay image starts hidden, fades in AFTER it finishes loading */
-    #wheel-overlay { position:absolute; top:0; left:0; width:100%; height:100%; z-index:2; pointer-events:none;
-      display:none; opacity:0; transition:opacity .18s ease; }
-    #wheel-overlay.show { display:block; opacity:1; }
-
-    #spin-button { position:fixed; right:18px; bottom:18px; padding:12px 18px; font-size:14px; background:#ff4500;
-      color:#fff; border:none; border-radius:12px; cursor:pointer; box-shadow:0 8px 28px rgba(255,69,0,.25); }
+    /* Buttons */
+    #spin-button {
+      display:block;
+      margin:14px auto 0;           /* sits directly under wheel */
+      padding:12px 22px;
+      font-size:16px;
+      background:#ff4500;
+      color:#fff;
+      border:none;
+      border-radius:12px;
+      cursor:pointer;
+    }
     #spin-button:disabled, #spin-button.hidden { display:none; }
 
-    #admin-button { position:fixed; right:18px; bottom:70px; padding:10px 14px; font-size:12px; background:#111;
-      color:#fff; border:1px solid #333; border-radius:10px; cursor:pointer; }
-    #message { margin-top:6px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; }
+    /* Admin button in bottom-right (unchanged) */
+    #admin-btn {
+      position:fixed;
+      right:18px;
+      bottom:18px;
+      background:#0ea5e9;
+      color:#fff;
+      border:1px solid #146c94;
+      padding:10px 14px;
+      border-radius:12px;
+      cursor:pointer;
+      z-index:40;
+    }
+
+    #message { margin-top:10px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; text-align:center; }
+
+    @media (max-width: 900px) {
+      .main { grid-template-rows: 1fr auto; overflow:hidden; }
+      #wheel-container { width:min(90vmin, 600px); height:min(90vmin, 600px); }
+      #spin-button { font-size:15px; padding:10px 18px; }
+    }
   </style>
 </head>
 <body>
@@ -44,12 +81,12 @@
         <img id="wheel-overlay" alt="Wheel Overlay"/>
         <canvas id="canvas-text"></canvas>
       </div>
+      <button id="spin-button" disabled>SPIN</button>
       <div id="message"></div>
     </div>
   </div>
 
-  <button id="admin-button">Admin</button>
-  <button id="spin-button" disabled>SPIN</button>
+  <button id="admin-btn">Admin</button>
 
   <script>
     window.onload = function () {
@@ -60,22 +97,20 @@
       let announcedPrize = null;
       let finalSpinsLeft = null;
       let role = null;
-      let contract_address = null;
       let token_name = null;
       let image_url = null;
 
-      const qs = new URLSearchParams(location.search);
-      const token = qs.get("token");
-      const server_id = qs.get("server_id");
-
-      const spinButton  = document.getElementById("spin-button");
-      const adminButton = document.getElementById("admin-button");
-      const messageDiv  = document.getElementById("message");
-      const overlayImg  = document.getElementById("wheel-overlay");
+      const token = new URLSearchParams(window.location.search).get("token");
+      const server_id = new URLSearchParams(window.location.search).get("server_id");
+      const spinButton = document.getElementById("spin-button");
+      const messageDiv = document.getElementById("message");
+      const overlayImg = document.getElementById("wheel-overlay");
+      const adminBtn = document.getElementById('admin-btn');
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
-        spinButton.disabled = true; spinButton.classList.add("hidden");
+        spinButton.disabled = true;
+        spinButton.classList.add("hidden");
         return;
       }
 
@@ -83,10 +118,74 @@
         const container = document.getElementById('wheel-container');
         const size = Math.min(container.offsetWidth, container.offsetHeight);
         const canvases = [document.getElementById('canvas-mechanics'), document.getElementById('canvas-text')];
-        canvases.forEach(c => { c.width = Math.max(size, 1); c.height = Math.max(size, 1); });
-        drawTextWheel();
+        canvases.forEach(canvas => { canvas.width = Math.max(size, 1); canvas.height = Math.max(size, 1); });
       }
-      window.addEventListener('resize', resizeCanvas);
+      window.addEventListener('resize', () => { resizeCanvas(); drawTextWheel(); });
+      resizeCanvas();
+
+      async function initializeWheel() {
+        try {
+          const res = await fetch("/api/spin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token, server_id })
+          });
+          const data = await res.json();
+          if (!res.ok || !data.tokenConfig) throw new Error(data.error || "Failed to load spin configuration");
+
+          ({ token_name, payout_amounts: window_payout_amounts, image_url } = data.tokenConfig);
+          role = data.role || null;
+
+          // Build segments
+          const payout_amounts = Array.isArray(window_payout_amounts) ? window_payout_amounts : [];
+          segments = payout_amounts.map((amount) => ({
+            text: `${amount}`,
+            text2: `${token_name}`,
+            textFillStyle: 'white',
+            textFontFamily: 'Arial'
+          }));
+          if (segments.length === 0) throw new Error("No payout amounts configured.");
+
+          // Preload overlay image (no broken-image flash)
+          if (image_url) {
+            const img = new Image();
+            img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
+            img.onerror = () => { overlayImg.style.display = 'none'; };
+            img.src = image_url;
+          } else {
+            overlayImg.style.display = 'none';
+          }
+
+          const container = document.getElementById('wheel-container');
+          const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
+
+          mechanicsWheel = new Winwheel({
+            canvasId: 'canvas-mechanics',
+            numSegments: segments.length,
+            segments: segments.map(() => ({ fillStyle: 'transparent', strokeStyle: 'none' })),
+            outerRadius: radius,
+            pointerAngle: 90,
+            animation: {
+              type: 'spinToStop', duration: 5, spins: 8,
+              callbackFinished: () => {
+                const spinsLeftText = typeof finalSpinsLeft === 'number' ? `Spins Left Today: ${finalSpinsLeft}` : 'Unlimited spins';
+                messageDiv.textContent = announcedPrize ? `You won: ${announcedPrize}\n${spinsLeftText}` : `Spin completed.\n${spinsLeftText}`;
+                isSpinning = false;
+                spinButton.disabled = true;
+                spinButton.classList.add("hidden");
+              }
+            }
+          });
+
+          drawTextWheel();
+          spinButton.disabled = false;
+          spinButton.classList.remove("hidden");
+        } catch (err) {
+          messageDiv.textContent = err.message || 'Error loading wheel';
+          spinButton.disabled = true;
+          spinButton.classList.add("hidden");
+        }
+      }
 
       function drawTextWheel(rotation = -60) {
         const canvas = document.getElementById("canvas-text");
@@ -98,12 +197,10 @@
         const numSegments = segments.length; if (!numSegments) return;
         const radius = Math.min(canvas.width, canvas.height) / 2;
 
-        // adaptive fonts desktop/mobile
         const numberFontPx = Math.max(10, Math.min(48, Math.round(radius * 0.12)));
         const tokenFontPx  = Math.max(8,  Math.min(36, Math.round(radius * 0.09)));
-
-        const quantityRadius = radius * 0.80;
-        const tokenRadius    = radius * 0.68;
+        const quantityRadius = radius * 0.8;
+        const tokenRadius    = quantityRadius * 0.85;
         const segmentAngle = (2 * Math.PI) / numSegments;
 
         for (let i = 1; i <= numSegments; i++) {
@@ -127,83 +224,11 @@
         }
       }
 
-      async function initializeWheel() {
-        try {
-          // fast: render canvases immediately
-          resizeCanvas();
-
-          const res = await fetch("/api/spin", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token, server_id })
-          });
-          const data = await res.json();
-          if (!res.ok || !data.tokenConfig) throw new Error(data.error || "Failed to load spin configuration");
-
-          ({ token_name, payout_amounts: window_payout_amounts, image_url } = data.tokenConfig);
-          role = data.role || null;
-          contract_address = data.contract_address || null;
-
-          // Build segments for labels
-          const payout_amounts = Array.isArray(window_payout_amounts) ? window_payout_amounts : [];
-          segments = payout_amounts.map((amount) => ({
-            text: `${amount}`,
-            text2: `${token_name}`,
-            textFillStyle: 'white',
-            textFontFamily: 'Arial'
-          }));
-          if (segments.length === 0) throw new Error("No payout amounts configured.");
-
-          // Preload overlay image SAFELY (no broken-image flash)
-          if (image_url) {
-            overlayImg.style.display = 'none';
-            overlayImg.classList.remove('show');
-            const preload = new Image();
-            preload.onload  = () => {
-              overlayImg.src = image_url;
-              overlayImg.style.display = 'block';
-              requestAnimationFrame(() => overlayImg.classList.add('show'));
-            };
-            preload.onerror = () => { overlayImg.style.display = 'none'; };
-            preload.src = image_url;
-          } else {
-            overlayImg.style.display = 'none';
-          }
-
-          const container = document.getElementById('wheel-container');
-          const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
-
-          mechanicsWheel = new Winwheel({
-            canvasId: 'canvas-mechanics',
-            numSegments: segments.length,
-            segments: segments.map(() => ({ fillStyle: 'transparent', strokeStyle: 'none' })),
-            outerRadius: radius,
-            pointerAngle: 90,
-            animation: {
-              type: 'spinToStop', duration: 5, spins: 8,
-              callbackFinished: () => {
-                const spinsLeftText = typeof finalSpinsLeft === 'number' ? `Spins Left Today: ${finalSpinsLeft}` : 'Unlimited spins';
-                messageDiv.textContent = announcedPrize ? `You won: ${announcedPrize}\n${spinsLeftText}` : `Spin completed.\n${spinsLeftText}`;
-                isSpinning = false;
-                spinButton.disabled = true; spinButton.classList.add("hidden");
-              }
-            }
-          });
-
-          drawTextWheel();
-          spinButton.disabled = false; spinButton.classList.remove("hidden");
-        } catch (err) {
-          messageDiv.textContent = (err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached')
-            ? 'You have used all your free spins today'
-            : err.message;
-          spinButton.disabled = true; spinButton.classList.add("hidden");
-        }
-      }
-
-      const spinHandler = async () => {
+      async function spinHandler() {
         if (hasSpun || isSpinning || !mechanicsWheel) return;
         hasSpun = true; isSpinning = true;
-        spinButton.disabled = true; spinButton.classList.add("hidden");
+        spinButton.disabled = true;
+        spinButton.classList.add("hidden");
         messageDiv.textContent = "Preparing your spin...";
 
         try {
@@ -217,7 +242,7 @@
 
           const segmentIndex = data.segmentIndex;
           const seg = mechanicsWheel.segments[segmentIndex + 1];
-          if (!seg) throw new Error("Invalid segment returned from server");
+          if (!seg) throw new Error("Invalid segment from server");
 
           const center = (seg.startAngle + seg.endAngle) / 2;
           const randomOffset = (Math.random() * (seg.endAngle - seg.startAngle) * 0.8) - ((seg.endAngle - seg.startAngle) * 0.4);
@@ -237,21 +262,23 @@
           mechanicsWheel.draw();
           drawTextWheel(-60);
           mechanicsWheel.startAnimation();
-
         } catch (err) {
           messageDiv.textContent = `Spin failed: ${err.message}`;
-          isSpinning = false; hasSpun = false;
-          spinButton.disabled = true; spinButton.classList.add("hidden");
+          isSpinning = false;
+          hasSpun = false;
+          spinButton.disabled = false;
+          spinButton.classList.remove("hidden");
         }
+      }
+
+      adminBtn.onclick = () => {
+        const url = new URL(location.origin + '/adminpanel.html');
+        url.searchParams.set('token', token);
+        url.searchParams.set('server_id', server_id);
+        location.href = url.toString();
       };
 
-      // Admin panel button
-      adminButton.addEventListener('click', () => {
-        const base = location.href.split('?')[0].replace(/index\.html$/,'') + 'adminpanel.html';
-        location.href = `${base}?token=${encodeURIComponent(token)}&server_id=${encodeURIComponent(server_id)}`;
-      });
-
-      spinButton.addEventListener("click", spinHandler);
+      document.getElementById('spin-button').addEventListener('click', spinHandler);
       initializeWheel();
     };
   </script>
