@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     const { token, server_id, range = 'past30', contract_address } = req.body || {};
     if (!token || !server_id) return res.status(400).json({ error: 'token and server_id required' });
 
-    // token exists?
+    // 1) Verify the spin link exists and learn its default mint
     const { data: tok, error: tokErr } = await supabase
       .from('spin_tokens')
       .select('contract_address')
@@ -24,29 +24,38 @@ export default async function handler(req, res) {
       .single();
     if (tokErr || !tok) return res.status(400).json({ error: 'Invalid token' });
 
+    // If caller sends a mint, use it; otherwise use the mint tied to the link
     const effectiveMint = (contract_address && String(contract_address).trim()) || (tok.contract_address || '').trim();
     const perToken = !!effectiveMint;
 
-    // window
+    // 2) Date window (UTC)
     const now = new Date();
     const today = dayUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
     let startDay = addDays(today, -29);
     let endDay = today;
-    if (range === 'all') {
-      // extend later after we fetch rows; default keeps UI fast
-    }
 
-    // build queries
+    // 3) Pull data
     let rows = [];
+
     if (perToken) {
-      // IMPORTANT: do NOT filter by server_id here (historic rows may lack it, and mint is unique per token)
-      const q1 = await supabase
+      // (A) Mint-tagged rows for this token (all time; we'll bucket to range)
+      const qMint = await supabase
         .from('daily_spins')
         .select('created_at,reward')
         .eq('contract_address', effectiveMint);
-      if (!q1.error && q1.data) rows = rows.concat(q1.data);
+      if (!qMint.error && qMint.data) rows = rows.concat(qMint.data);
+
+      // (B) Legacy rows on THIS server where contract_address is NULL
+      //     (Older days before we populated that column; you said it's fine to attribute these to Harold)
+      const qLegacy = await supabase
+        .from('daily_spins')
+        .select('created_at,reward,server_id,contract_address')
+        .eq('server_id', server_id)
+        .is('contract_address', null);
+      if (!qLegacy.error && qLegacy.data) rows = rows.concat(qLegacy.data);
+
     } else {
-      // all tokens chart = this server only (plus legacy rows tied to this server's mints)
+      // Server-wide view (all tokens): include stamped rows + legacy rows for this server's mints
       const { data: st, error: stErr } = await supabase
         .from('server_tokens')
         .select('contract_address')
@@ -54,12 +63,14 @@ export default async function handler(req, res) {
       if (stErr) return res.status(400).json({ error: stErr.message });
       const serverMints = (st || []).map(r => String(r.contract_address||'').trim()).filter(Boolean);
 
+      // New rows (server_id present)
       const a = await supabase
         .from('daily_spins')
         .select('created_at,reward')
         .eq('server_id', server_id);
       if (!a.error && a.data) rows = rows.concat(a.data);
 
+      // Legacy rows: no server_id, but contract matches one of this server's mints
       if (serverMints.length) {
         const b = await supabase
           .from('daily_spins')
@@ -70,13 +81,14 @@ export default async function handler(req, res) {
       }
     }
 
+    // If range = all, extend startDay back to first record
     if (rows.length && range === 'all') {
       const minTs = rows.reduce((m, r) => Math.min(m, +new Date(r.created_at)), +today);
       const md = new Date(minTs);
       startDay = dayUTC(md.getUTCFullYear(), md.getUTCMonth(), md.getUTCDate());
     }
 
-    // bucket by UTC day in [startDay, endDay]
+    // 4) Bucket by UTC day within [startDay, endDay]
     const startKey = ymdUTC(startDay), endKey = ymdUTC(endDay);
     const buckets = {};
     for (let d = startDay; ymdUTC(d) <= endKey; d = addDays(d, 1)) {
@@ -98,6 +110,7 @@ export default async function handler(req, res) {
       { label: 'Spins', yAxisID: 'y', data: spins, borderWidth: 2, pointRadius: 0, tension: 0.2 }
     ];
 
+    // Only show Avg Payout when the chart is scoped to a single token (so we never mix Harold & Fatcoin)
     if (perToken) {
       const avg = labels.map(k => buckets[k].count ? +(buckets[k].sum / buckets[k].count).toFixed(2) : 0);
       datasets.push({ label: 'Avg Payout', yAxisID: 'y1', data: avg, borderWidth: 2, pointRadius: 0, tension: 0.2 });
