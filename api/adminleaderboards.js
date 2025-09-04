@@ -1,165 +1,122 @@
 import { createClient } from '@supabase/supabase-js';
+import { createHmac } from 'crypto';
 
-const SUPABASE_URL  = process.env.SUPABASE_URL;
-const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN; // must be set; no fallback
-
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const toId = (v) => (v == null ? '' : String(v));
-const bestName = (o) =>
-  o?.display_name || o?.global_name || o?.nick || o?.nickname ||
-  o?.username || o?.name || o?.handle || o?.discord_tag || null;
-
-async function safeFetch(table, cols, build) {
-  try {
-    const q = supabase.from(table).select(cols);
-    const { data, error } = build ? await build(q) : await q;
-    if (error) return [];
-    return data || [];
-  } catch {
-    return [];
-  }
-}
-
-async function resolveNamesFromDB(ids, server_id) {
-  const nameMap = new Map();
-  const sources = [
-    ['server_members','discord_id,server_id,username,display_name,global_name,nick,nickname,name,handle,discord_tag',(q)=>q.eq('server_id',server_id).in('discord_id',ids)],
-    ['discord_users', 'discord_id,username,display_name,global_name,nick,nickname,name,handle,discord_tag',         (q)=>q.in('discord_id',ids)],
-    ['users',         'discord_id,username,display_name,global_name,nick,nickname,name,handle,discord_tag',         (q)=>q.in('discord_id',ids)],
-    ['spin_tokens',   'discord_id,username,display_name,global_name,nick,nickname,name,handle,discord_tag',         (q)=>q.in('discord_id',ids)],
-  ];
-  for (const [tbl, cols, build] of sources) {
-    const rows = await safeFetch(tbl, cols, build);
-    for (const r of rows) {
-      const id = toId(r.discord_id);
-      if (!id || nameMap.has(id)) continue;
-      const nm = bestName(r);
-      if (nm) nameMap.set(id, nm);
-    }
-    if (nameMap.size === ids.length) break;
-  }
-  return nameMap;
-}
-
-// ---- Discord lookup (never throws) ----
-const authHeader = DISCORD_TOKEN
-  ? (DISCORD_TOKEN.startsWith('Bot ') || DISCORD_TOKEN.startsWith('Bearer ')
-      ? DISCORD_TOKEN
-      : `Bot ${DISCORD_TOKEN}`)
-  : null;
-
-async function fetchMemberNameFromDiscord(server_id, user_id) {
-  if (!authHeader) return null;
-  const headers = { Authorization: authHeader };
-  try {
-    // guild member (needs Server Members Intent for nick)
-    const r1 = await fetch(`https://discord.com/api/v10/guilds/${server_id}/members/${user_id}`, { headers });
-    if (r1.ok) {
-      const j = await r1.json().catch(()=>null);
-      if (j) return j.nick || j.user?.global_name || j.user?.username || null;
-    }
-  } catch {}
-  try {
-    // global user
-    const r2 = await fetch(`https://discord.com/api/v10/users/${user_id}`, { headers });
-    if (r2.ok) {
-      const j = await r2.json().catch(()=>null);
-      if (j) return j.global_name || j.username || null;
-    }
-  } catch {}
-  return null;
-}
-
-async function upsertNamesCache(pairs) {
-  if (!pairs?.length) return;
-  const rows = pairs.map(p => ({
-    discord_id: String(p.discord_id),
-    username: p.name,
-    display_name: p.name,
-    global_name: p.name,
-  }));
-  try {
-    await supabase.from('discord_users').upsert(rows, { onConflict: 'discord_id' });
-  } catch {}
-}
+function deny(res, code, msg) { return res.status(code).json({ error: msg }); }
+function isDigits(x) { return typeof x === 'string' && /^[0-9]+$/.test(x); }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') return deny(res, 405, 'Method not allowed');
 
   try {
-    const { token, server_id } = req.body || {};
-    if (!token || !server_id) return res.status(400).json({ error: 'token and server_id required' });
+    const { token: signedToken, server_id, sortBy = 'spins' } = req.body || {};
+    if (!signedToken) return deny(res, 400, 'Token required');
+    if (!server_id || !isDigits(server_id)) return deny(res, 400, 'Server ID required');
 
-    // validate token
+    const TOKEN_SECRET = process.env.SPIN_KEY;
+    if (!TOKEN_SECRET) return deny(res, 500, 'Server configuration error');
+
+    // Verify "<token>.<hmac>"
+    const [tokenPart, signature] = String(signedToken).split('.');
+    if (!tokenPart || !signature) return deny(res, 400, 'Invalid token format');
+    const expected = createHmac('sha256', TOKEN_SECRET).update(tokenPart).digest('hex');
+    if (signature !== expected) return deny(res, 403, 'Invalid or forged token');
+
+    // Identify caller
     const { data: tok, error: tokErr } = await supabase
-      .from('spin_tokens').select('discord_id').eq('token', token).single();
-    if (tokErr || !tok) return res.status(400).json({ error: 'Invalid token' });
+      .from('spin_tokens')
+      .select('discord_id')
+      .eq('token', signedToken)
+      .single();
+    if (tokErr || !tok) return deny(res, 400, 'Invalid token');
 
-    // server mints (enabled+disabled)
-    const st = await safeFetch('server_tokens', 'contract_address', q => q.eq('server_id', server_id));
-    const mints = (st || []).map(r => r.contract_address).filter(Boolean);
-    if (!mints.length) return res.status(200).json({ bySpins: [], byPayout: [] });
-
-    // collect spins from current + legacy
-    const cur  = await safeFetch('daily_spins', 'discord_id,reward,contract_address', q => q.in('contract_address', mints));
-    const leg1 = await safeFetch('spins',       'discord_id,reward,contract_address', q => q.in('contract_address', mints));
-    const leg2 = await safeFetch('wheel_spins', 'discord_id,reward,contract_address', q => q.in('contract_address', mints));
-    const spins = cur.concat(leg1, leg2);
-
-    // aggregate
-    const agg = new Map();
-    for (const r of spins) {
-      const id = toId(r.discord_id);
-      if (!id) continue;
-      const v = agg.get(id) || { spins: 0, payout: 0 };
-      v.spins += 1;
-      v.payout += Number(r.reward || 0);
-      agg.set(id, v);
+    // Must be admin/superadmin on this server
+    const { data: admin, error: adminErr } = await supabase
+      .from('server_admins')
+      .select('role')
+      .eq('discord_id', tok.discord_id)
+      .eq('server_id', server_id)
+      .single();
+    if (adminErr || !admin || !['admin', 'superadmin'].includes(admin.role)) {
+      return deny(res, 403, 'Admin only');
     }
-    const all = Array.from(agg.entries()).map(([id, v]) => ({ id, ...v }));
-    const bySpins  = all.slice().sort((a,b)=> b.spins  - a.spins  || b.payout - a.payout).slice(0,200);
-    const byPayout = all.slice().sort((a,b)=> b.payout - a.payout || b.spins  - a.spins ).slice(0,200);
 
-    // names from DB cache first
-    const ids = all.map(r => r.id);
-    const nameMap = await resolveNamesFromDB(ids, server_id);
+    // Get all mints for this server (enabled or not) for legacy rows
+    const { data: st, error: stErr } = await supabase
+      .from('server_tokens')
+      .select('contract_address')
+      .eq('server_id', server_id);
 
-    // fill gaps via Discord (NEVER fail the request)
-    const missing = ids.filter(id => !nameMap.has(id));
-    if (missing.length && authHeader) {
-      const limit = 4; // polite to Discord
-      const queue = [...missing];
-      const results = [];
-      const runners = Array.from({ length: Math.min(limit, queue.length) }, async function run() {
-        while (queue.length) {
-          const id = queue.shift();
-          const nm = await fetchMemberNameFromDiscord(server_id, id);
-          if (nm) results.push({ discord_id: id, name: nm });
+    if (stErr) return deny(res, 400, stErr.message);
+    const mints = (st || []).map(r => String(r.contract_address || '').trim()).filter(Boolean);
+
+    // Fetch new rows (server_id stamped)
+    let rows = [];
+    const a = await supabase
+      .from('daily_spins')
+      .select('discord_id,reward')
+      .eq('server_id', server_id);
+    if (!a.error && a.data) rows = rows.concat(a.data);
+
+    // Fetch legacy rows (no server_id) only for this server's mints
+    if (mints.length) {
+      const b = await supabase
+        .from('daily_spins')
+        .select('discord_id,reward,contract_address')
+        .is('server_id', null)
+        .in('contract_address', mints);
+      if (!b.error && b.data) rows = rows.concat(b.data);
+    }
+
+    // Aggregate by discord_id
+    const agg = new Map(); // id -> { spins, payout }
+    for (const r of rows) {
+      const id = r.discord_id;
+      if (!id) continue;
+      if (!agg.has(id)) agg.set(id, { spins: 0, payout: 0 });
+      const cur = agg.get(id);
+      cur.spins += 1;
+      cur.payout += Number(r.reward || 0);
+    }
+
+    // Enrich with usernames
+    const ids = Array.from(agg.keys());
+    let nameMap = new Map();
+    if (ids.length) {
+      const u = await supabase
+        .from('discord_users')
+        .select('discord_id, username, display_name, global_name, nick, nickname, name, handle, discord_tag')
+        .in('discord_id', ids);
+      if (!u.error && u.data) {
+        for (const r of u.data) {
+          const name =
+            r.display_name || r.global_name || r.username || r.nick || r.nickname || r.name || r.handle || r.discord_tag || r.discord_id;
+          nameMap.set(r.discord_id, name);
         }
-      });
-      await Promise.all(runners);
-      if (results.length) {
-        for (const r of results) nameMap.set(r.discord_id, r.name);
-        await upsertNamesCache(results);
       }
     }
 
-    const shape = (arr) => arr.map((r,i)=> ({
-      rank: i+1,
-      user: nameMap.get(r.id) || r.id,
-      spins: r.spins,
-      payout: r.payout
+    let out = ids.map(id => ({
+      discord_id: id,
+      username: nameMap.get(id) || id,
+      spins: agg.get(id).spins,
+      payout: agg.get(id).payout
     }));
 
-    return res.status(200).json({
-      bySpins:  shape(bySpins),
-      byPayout: shape(byPayout)
-    });
+    if (sortBy === 'payout') {
+      out.sort((a, b) => b.payout - a.payout);
+    } else {
+      out.sort((a, b) => b.spins - a.spins);
+    }
+
+    out = out.slice(0, 200);
+
+    return res.status(200).json({ rows: out });
   } catch (e) {
     console.error('adminleaderboards fatal:', e);
-    // ALWAYS return JSON so the front-end never chokes on text/HTML
-    return res.status(200).json({ bySpins: [], byPayout: [], error: 'leaderboard_error' });
+    return deny(res, 500, 'Internal error');
   }
 }
