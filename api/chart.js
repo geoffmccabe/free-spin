@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     const { token, server_id, range = 'past30', contract_address } = req.body || {};
     if (!token || !server_id) return res.status(400).json({ error: 'token and server_id required' });
 
-    // verify token exists & find mint from the link
+    // token exists?
     const { data: tok, error: tokErr } = await supabase
       .from('spin_tokens')
       .select('contract_address')
@@ -26,47 +26,38 @@ export default async function handler(req, res) {
 
     const effectiveMint = (contract_address && String(contract_address).trim()) || (tok.contract_address || '').trim();
     const perToken = !!effectiveMint;
-    const chartAllTokens = !perToken;
 
     // window
     const now = new Date();
     const today = dayUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
     let startDay = addDays(today, -29);
     let endDay = today;
-    const fetchStart = addDays(today, -90);
+    if (range === 'all') {
+      // extend later after we fetch rows; default keeps UI fast
+    }
 
-    // all server mints
-    const { data: st, error: stErr } = await supabase
-      .from('server_tokens')
-      .select('contract_address')
-      .eq('server_id', server_id);
-    if (stErr) return res.status(400).json({ error: stErr.message });
-    const serverMints = (st || []).map(r => String(r.contract_address||'').trim()).filter(Boolean);
-
-    // fetch
+    // build queries
     let rows = [];
     if (perToken) {
-      const a = await supabase
+      // IMPORTANT: do NOT filter by server_id here (historic rows may lack it, and mint is unique per token)
+      const q1 = await supabase
         .from('daily_spins')
         .select('created_at,reward')
-        .eq('server_id', server_id)
-        .eq('contract_address', effectiveMint)
-        .gte('created_at', fetchStart.toISOString());
-      if (!a.error && a.data) rows = rows.concat(a.data);
-
-      const b = await supabase
-        .from('daily_spins')
-        .select('created_at,reward')
-        .is('server_id', null)
-        .eq('contract_address', effectiveMint)
-        .gte('created_at', fetchStart.toISOString());
-      if (!b.error && b.data) rows = rows.concat(b.data);
+        .eq('contract_address', effectiveMint);
+      if (!q1.error && q1.data) rows = rows.concat(q1.data);
     } else {
+      // all tokens chart = this server only (plus legacy rows tied to this server's mints)
+      const { data: st, error: stErr } = await supabase
+        .from('server_tokens')
+        .select('contract_address')
+        .eq('server_id', server_id);
+      if (stErr) return res.status(400).json({ error: stErr.message });
+      const serverMints = (st || []).map(r => String(r.contract_address||'').trim()).filter(Boolean);
+
       const a = await supabase
         .from('daily_spins')
         .select('created_at,reward')
-        .eq('server_id', server_id)
-        .gte('created_at', fetchStart.toISOString());
+        .eq('server_id', server_id);
       if (!a.error && a.data) rows = rows.concat(a.data);
 
       if (serverMints.length) {
@@ -74,26 +65,26 @@ export default async function handler(req, res) {
           .from('daily_spins')
           .select('created_at,reward,contract_address')
           .is('server_id', null)
-          .gte('created_at', fetchStart.toISOString())
           .in('contract_address', serverMints);
         if (!b.error && b.data) rows = rows.concat(b.data);
       }
     }
 
-    if (range === 'all') {
-      const minTs = rows.length ? rows.reduce((m, r) => Math.min(m, +new Date(r.created_at)), +today) : +today;
+    if (rows.length && range === 'all') {
+      const minTs = rows.reduce((m, r) => Math.min(m, +new Date(r.created_at)), +today);
       const md = new Date(minTs);
       startDay = dayUTC(md.getUTCFullYear(), md.getUTCMonth(), md.getUTCDate());
     }
 
-    // bucket by UTC day
+    // bucket by UTC day in [startDay, endDay]
+    const startKey = ymdUTC(startDay), endKey = ymdUTC(endDay);
     const buckets = {};
-    for (let d = startDay; ymdUTC(d) <= ymdUTC(endDay); d = addDays(d, 1)) {
+    for (let d = startDay; ymdUTC(d) <= endKey; d = addDays(d, 1)) {
       buckets[ymdUTC(d)] = { count: 0, sum: 0 };
     }
     for (const r of rows) {
       const key = ymdUTC(new Date(r.created_at));
-      if (key >= ymdUTC(startDay) && key <= ymdUTC(endDay)) {
+      if (key >= startKey && key <= endKey) {
         (buckets[key] ||= { count: 0, sum: 0 });
         buckets[key].count += 1;
         buckets[key].sum += Number(r.reward || 0);
