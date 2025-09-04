@@ -4,15 +4,14 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// ---- UTC helpers ----
+/* ---------- UTC helpers ---------- */
 function ymdUTC(d){ return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`; }
 function dayUTC(y,m,d){ return new Date(Date.UTC(y,m,d)); }
 function addDays(d,n){ const x = new Date(d.getTime()); x.setUTCDate(x.getUTCDate()+n); return x; }
 function isoUTC(d){ return d.toISOString(); }
 
-// build a stable de-dup key even if table lacks an id column
+/* make a dedup key even if table lacks a numeric id */
 function rowKey(r){
-  // prefer explicit id if it exists on the row; otherwise synthesize from fields
   if (r.id !== undefined && r.id !== null) return `id:${r.id}`;
   return [
     r.discord_id ?? '',
@@ -30,7 +29,7 @@ export default async function handler(req, res) {
     const { token, server_id, range = 'past30', contract_address } = req.body || {};
     if (!token || !server_id) return res.status(400).json({ error: 'token and server_id required' });
 
-    // Learn the mint tied to this link
+    // Resolve link + default mint
     const { data: tok, error: tokErr } = await supabase
       .from('spin_tokens')
       .select('contract_address')
@@ -41,16 +40,20 @@ export default async function handler(req, res) {
     const effectiveMint = (contract_address && String(contract_address).trim()) || (tok.contract_address || '').trim();
     const perToken = !!effectiveMint;
 
-    // ----- window (UTC) -----
+    // ----- Window (UTC) -----
     const now = new Date();
     const today = dayUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
     let startDay = addDays(today, -29);
     let endDay   = today;
 
-    const gteISO = isoUTC(startDay);
-    const ltISO  = isoUTC(addDays(endDay, 1));
+    // To be robust for “today” and legacy timezone quirks, fetch a slightly wider window,
+    // then bucket strictly into [startDay .. endDay].
+    const fetchStart = addDays(startDay, -2);
+    const fetchEnd   = addDays(endDay,   1); // exclusive
+    const gteISO = isoUTC(fetchStart);
+    const ltISO  = isoUTC(fetchEnd);
 
-    // ----- collect rows -----
+    // ----- Collect rows -----
     let rows = [];
     const add = (batch)=>{ if (batch && Array.isArray(batch)) rows = rows.concat(batch); };
 
@@ -65,7 +68,7 @@ export default async function handler(req, res) {
           .lt('created_at', ltISO);
         if (!q.error) add(q.data);
       }
-      // (2) Legacy rows on THIS server where mint is NULL (pre-mint-stamping on your server)
+      // (2) Legacy on THIS server where mint is NULL (your early Harold days)
       {
         const q = await supabase
           .from('daily_spins')
@@ -87,8 +90,7 @@ export default async function handler(req, res) {
           .lt('created_at', ltISO);
         if (!q.error) add(q.data);
       }
-      // (4) **Unattributed legacy**: BOTH server_id and mint are NULL (this is what was missing Aug 14–29)
-      //     You confirmed it’s acceptable to treat these as Harold-era legacy rows.
+      // (4) Unattributed legacy: BOTH NULL (you asked to treat these as Harold-era legacy)
       {
         const q = await supabase
           .from('daily_spins')
@@ -100,8 +102,8 @@ export default async function handler(req, res) {
         if (!q.error) add(q.data);
       }
     } else {
-      // ---- All tokens for this server (no payout mixing on chart — we draw Spins only in this view) ----
-      // New rows stamped with server_id
+      // ---- Server-wide view (no payout line here; spins only) ----
+      // Stamped with server_id
       {
         const q = await supabase
           .from('daily_spins')
@@ -111,7 +113,7 @@ export default async function handler(req, res) {
           .lt('created_at', ltISO);
         if (!q.error) add(q.data);
       }
-      // Legacy rows (server_id NULL) for this server's mints
+      // Legacy (server_id NULL) for this server's mints
       {
         const { data: st, error: stErr } = await supabase
           .from('server_tokens')
@@ -130,11 +132,10 @@ export default async function handler(req, res) {
           if (!q.error) add(q.data);
         }
       }
-      // NOTE: we intentionally do NOT include rows where both fields are NULL in the all-server view
-      // because they cannot be safely attributed to this server.
+      // We still do NOT include both-NULL rows here (can’t safely attribute to this server).
     }
 
-    // ----- de-duplicate (rows may overlap across the 4 legacy queries) -----
+    // ----- De-duplicate across legacy overlaps -----
     const seen = new Set();
     rows = rows.filter(r => {
       const k = rowKey(r);
@@ -143,14 +144,14 @@ export default async function handler(req, res) {
       return true;
     });
 
-    // ----- extend to "all time" if requested -----
+    // ----- If "all time" chosen, extend start to earliest fetched record -----
     if (rows.length && range === 'all') {
       const minTs = rows.reduce((m, r) => Math.min(m, +new Date(r.created_at)), +today);
       const md = new Date(minTs);
       startDay = dayUTC(md.getUTCFullYear(), md.getUTCMonth(), md.getUTCDate());
     }
 
-    // ----- bucket by UTC day -----
+    // ----- Bucket strictly by UTC day inside [startDay..endDay] -----
     const startKey = ymdUTC(startDay), endKey = ymdUTC(endDay);
     const buckets = {};
     for (let d = startDay; ymdUTC(d) <= endKey; d = addDays(d, 1)) {
@@ -172,10 +173,10 @@ export default async function handler(req, res) {
       { label: 'Spins', yAxisID: 'y', data: spins, borderWidth: 2, pointRadius: 0, tension: 0.25 }
     ];
 
-    // Avg Payout only for per-token view (prevents Harold/Fatcoin mixing)
+    // *** Show TOTAL Payout for single-token view (never mix coins) ***
     if (perToken) {
-      const avg = labels.map(k => buckets[k].count ? +(buckets[k].sum / buckets[k].count).toFixed(2) : 0);
-      datasets.push({ label: 'Avg Payout', yAxisID: 'y1', data: avg, borderWidth: 2, pointRadius: 0, tension: 0.25 });
+      const totals = labels.map(k => +(buckets[k].sum).toFixed(2));
+      datasets.push({ label: 'Total Payout', yAxisID: 'y1', data: totals, borderWidth: 2, pointRadius: 0, tension: 0.25 });
     }
 
     return res.status(200).json({ chartData: { labels, datasets }, options: {} });
