@@ -1,49 +1,56 @@
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL  = process.env.SUPABASE_URL;
-const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
-// default 5 decimals unless you add a `decimals` column somewhere later
-const DEFAULT_DECIMALS = 5;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Helper: Eastern day key "YYYY-MM-DD"
-function easternDayKey(iso) {
-  // robust even on serverless: use Intl with tz
-  const d = new Date(iso);
-  const fmt = new Intl.DateTimeFormat('en-CA', { // en-CA yields YYYY-MM-DD
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  });
-  return fmt.format(d); // e.g., "2025-09-04"
+// Harold (and your current SPL prizes) use 5 decimals.
+// If you later add per-mint decimals, swap this to a lookup.
+const DEFAULT_DECIMALS = 5;
+const EASTERN_TZ = 'America/New_York';
+
+function getRangeBounds(range) {
+  const nowUtc = new Date(); // UTC now
+  if (range === 'all') {
+    // return a safe wide window (2 years)
+    const startUtc = new Date(nowUtc.getTime() - 730 * 24 * 3600 * 1000);
+    return { startUtc, endUtc: nowUtc, days: 730 };
+  }
+  const days = range === 'past7' ? 7 : 30;
+  const startUtc = new Date(nowUtc.getTime() - days * 24 * 3600 * 1000);
+  return { startUtc, endUtc: nowUtc, days };
 }
 
-// Build continuous list of day keys from start..end (Eastern)
-function enumerateEasternDays(startUtc, endUtc) {
-  const out = [];
-  let cur = new Date(startUtc);
-  // normalize to 00:00 Eastern for the current date
-  // by converting the day key back into a Date at midnight Eastern
-  function easternMidnight(isoDate) {
-    // Construct midnight Eastern by parsing yyyy-mm-dd as local then shifting using tz
-    const [y, m, d] = isoDate.split('-').map(Number);
-    // Create a Date at midnight UTC and then shift by the offset between UTC and Eastern midnight
-    // Simpler: just keep incrementing by 1 day via the label list instead of Date math here.
-    return `${isoDate}`; // we only need labels, not real Date objects
-  }
+// Format a Date into YYYY-MM-DD in US/Eastern (EDT/EST aware) without time.
+function easternDayKey(d) {
+  // Use en-CA to get ISO-like yyyy-mm-dd
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: EASTERN_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
 
-  const startKey = easternDayKey(startUtc);
-  const endKey   = easternDayKey(endUtc);
-
-  // iterate by 1 day using UTC date add; labels will be recomputed by easternDayKey
-  const end = new Date(endUtc);
-  while (cur <= end) {
-    out.push(easternDayKey(cur.toISOString()));
-    cur.setUTCDate(cur.getUTCDate() + 1);
+// Build a continuous list of day keys between start and end (in US/Eastern days).
+function buildDaySeries(startUtc, endUtc) {
+  // Walk by UTC day but label by Eastern; that still covers all rows and we’ll map by key.
+  const labels = [];
+  const cursor = new Date(startUtc);
+  // Snap cursor to 00:00 Eastern of its day, then move forward by 1 day each loop.
+  // Simpler: just push unique easternDayKey until we pass endUtc.
+  const seen = new Set();
+  while (cursor <= endUtc) {
+    const key = easternDayKey(cursor);
+    if (!seen.has(key)) {
+      labels.push(key);
+      seen.add(key);
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
-  // Ensure at least start/end present
-  if (out.length === 0) out.push(startKey);
-  return out;
+  // Ensure end day is present
+  const endKey = easternDayKey(endUtc);
+  if (!seen.has(endKey)) labels.push(endKey);
+  return labels;
 }
 
 export default async function handler(req, res) {
@@ -53,46 +60,21 @@ export default async function handler(req, res) {
 
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-    // Expected JSON body (all callers you have today send these)
-    // - server_id (required)
-    // - contract_address (optional; if present we’re in “this token” mode)
-    // - range: 'past30' | 'past7' | 'all' (optional, defaults to past30)
-    // - scope: 'this_token' | 'server' (optional; inferred from contract_address if missing)
     const {
       server_id,
-      contract_address,
+      contract_address, // present => token view; absent => server view
       range = 'past30',
-      scope   // optional
     } = req.body || {};
 
     if (!server_id) {
       return res.status(400).json({ error: 'server_id required' });
     }
 
-    const useTokenMode = !!contract_address || scope === 'this_token';
+    const { startUtc, endUtc } = getRangeBounds(range);
+    const labels = buildDaySeries(startUtc, endUtc);
 
-    // time window (UTC) — we’ll bucket to US/Eastern in memory
-    const now = new Date();
-    let startUtc;
-    if (range === 'all') {
-      // earliest spin for this server (cheap: try last 365 days; extend if you truly need all-time)
-      // If you really want true all-time without limits, remove .gte below and trust PostgREST.
-      const { data: minRows, error: minErr } = await supabase
-        .from('daily_spins')
-        .select('created_at_utc')
-        .eq('server_id', server_id)
-        .order('created_at_utc', { ascending: true })
-        .limit(1);
-      if (minErr) throw minErr;
-      startUtc = minRows && minRows.length ? new Date(minRows[0].created_at_utc) : new Date(now.getTime() - 30*24*3600*1000);
-    } else {
-      const days = range === 'past7' ? 7 : 30;
-      startUtc = new Date(now.getTime() - days*24*3600*1000);
-    }
-    const endUtc = now;
-
-    // fetch only what we need; normalized columns only
+    // Fetch normalized rows for the window.
+    // We aggregate in JS for predictable behavior and to guarantee day filling.
     let query = supabase
       .from('daily_spins')
       .select('created_at_utc, amount_base, contract_address')
@@ -100,76 +82,104 @@ export default async function handler(req, res) {
       .gte('created_at_utc', startUtc.toISOString())
       .lte('created_at_utc', endUtc.toISOString());
 
-    if (useTokenMode) {
+    if (contract_address) {
       query = query.eq('contract_address', contract_address);
     }
 
     const { data: rows, error } = await query;
     if (error) throw error;
 
-    // Aggregate in memory per Eastern day
-    const daySpins = new Map();        // key: 'YYYY-MM-DD' => count
-    const dayPayoutBase = new Map();   // same key => sum base units (only token mode shows payouts)
+    // Prepare per-day accumulators
+    const dayCount = Object.create(null);
+    const daySumBase = Object.create(null); // only used in token view
 
-    // zero-fill labels for the whole window
-    const labels = enumerateEasternDays(startUtc.toISOString(), endUtc.toISOString());
-    for (const k of labels) { daySpins.set(k, 0); dayPayoutBase.set(k, 0); }
+    // Initialize all labels to 0s so Chart.js never sees sparse points
+    for (const k of labels) {
+      dayCount[k] = 0;
+      daySumBase[k] = 0;
+    }
 
+    // Aggregate
     for (const r of rows || []) {
-      if (!r.created_at_utc) continue; // defensive, but normalized table should have it
-      const key = easternDayKey(r.created_at_utc);
-      daySpins.set(key, (daySpins.get(key) || 0) + 1);
-      if (useTokenMode) {
+      if (!r.created_at_utc) continue;
+      const key = easternDayKey(new Date(r.created_at_utc));
+      if (!(key in dayCount)) continue; // outside computed label range (very unlikely)
+      dayCount[key] += 1;
+      if (contract_address) {
         const base = Number(r.amount_base || 0);
-        if (!Number.isNaN(base)) {
-          dayPayoutBase.set(key, (dayPayoutBase.get(key) || 0) + base);
-        }
+        if (!Number.isNaN(base)) daySumBase[key] += base;
       }
     }
 
-    // Convert base → display using DEFAULT_DECIMALS (you can swap to a mint-specific lookup later)
-    const denom = Math.pow(10, DEFAULT_DECIMALS);
-    const spinsSeries  = labels.map(k => daySpins.get(k) || 0);
-    const payoutSeries = labels.map(k => useTokenMode ? (dayPayoutBase.get(k) || 0) / denom : 0);
+    // Build aligned data arrays
+    const spinsData = labels.map((k) => dayCount[k] || 0);
 
-    // Build Chart.js payload
+    let payoutData = null;
+    if (contract_address) {
+      const denom = Math.pow(10, DEFAULT_DECIMALS);
+      payoutData = labels.map((k) => (daySumBase[k] || 0) / denom);
+    }
+
+    // Compose Chart.js payload
+    const datasets = [
+      {
+        label: 'Spins',
+        data: spinsData,
+        yAxisID: 'y',
+        borderWidth: 2,
+        tension: 0.25,
+        pointRadius: 0,
+      },
+    ];
+
+    if (payoutData) {
+      datasets.push({
+        label: 'Total Payout',
+        data: payoutData,
+        yAxisID: 'y1',
+        borderWidth: 2,
+        tension: 0.25,
+        pointRadius: 0,
+      });
+    }
+
     const chartData = {
       labels,
-      datasets: [
-        {
-          label: 'Spins',
-          data: spinsSeries,
-          yAxisID: 'y',
-          tension: 0.25
-        },
-        {
-          label: useTokenMode ? 'Total Payout' : 'Total Payout (hidden on server view)',
-          data: payoutSeries,
-          yAxisID: 'y1',
-          hidden: !useTokenMode,
-          tension: 0.25
-        }
-      ]
+      datasets,
     };
 
     const options = {
-      parsing: false,
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { labels: { color: '#ddd' } },
-        tooltip: { enabled: true }
+        tooltip: { enabled: true },
       },
       scales: {
-        x:  { ticks: { color: '#bbb', autoSkip: true, maxRotation: 0 }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y:  { position: 'left',  ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' }, title: { display: true, text: '# Spins', color: '#bbb' } },
-        y1: { position: 'right', ticks: { color: '#bbb' }, grid: { drawOnChartArea: false }, title: { display: useTokenMode, text: 'Total Payout', color: '#bbb' } }
-      }
+        x: { ticks: { color: '#bbb', maxRotation: 70, minRotation: 45 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: {
+          position: 'left',
+          beginAtZero: true,
+          ticks: { color: '#bbb' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          title: { display: true, text: '# Spins', color: '#bbb' },
+        },
+        ...(contract_address
+          ? {
+              y1: {
+                position: 'right',
+                beginAtZero: true,
+                ticks: { color: '#bbb' },
+                grid: { drawOnChartArea: false },
+                title: { display: true, text: 'Total Payout', color: '#bbb' },
+              },
+            }
+          : {}),
+      },
     };
 
     return res.status(200).json({ chartData, options });
-
   } catch (e) {
     console.error('chart api error:', e);
     return res.status(500).json({ error: 'Chart API failed' });
