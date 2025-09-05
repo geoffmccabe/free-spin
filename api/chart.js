@@ -7,7 +7,7 @@ const TOKEN_SECRET = process.env.SPIN_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// ----- Eastern (US) day bucketing -----
+// ---------- Eastern (US) day bucketing ----------
 const NY_TZ = 'America/New_York';
 
 function nyDateKey(d) {
@@ -59,8 +59,8 @@ export default async function handler(req, res) {
 
     const nowUTC = new Date();
 
-    // Fetch window (UTC); we fetch wider than needed and bucket by NY day.
-    const fetchBackDays = range === 'all' ? 3660 : 120; // ~10y vs ~4 months
+    // Fetch a wide enough UTC window; we’ll bucket by NY day after.
+    const fetchBackDays = range === 'all' ? 3660 : 120;
     const startISO = addDaysUTC(nowUTC, -fetchBackDays).toISOString();
     const endISO   = nowUTC.toISOString();
 
@@ -89,47 +89,68 @@ export default async function handler(req, res) {
 
     const all = [...r1, ...r2];
 
-    // Build labels
-    let labels;
-    if (range === 'all') {
-      if (all.length === 0) {
-        labels = buildNYDayKeys(30, nowUTC);
-      } else {
-        let earliest = all[0];
-        for (const r of all) {
-          const a = r.created_at_utc || r.created_at;
-          const b = earliest.created_at_utc || earliest.created_at;
-          if (a && b && new Date(a) < new Date(b)) earliest = r;
-        }
-        const firstKey = nyDateKey(new Date(earliest.created_at_utc || earliest.created_at));
-        const huge = buildNYDayKeys(3660, nowUTC);
-        const startIdx = Math.max(0, huge.indexOf(firstKey));
-        labels = huge.slice(startIdx);
+    // Find the earliest timestamp where ANY row has a non-null contract_address for this server.
+    // Any rows *before* this point with NULL contract_address are treated as the single legacy token.
+    let earliestNonNullMintTime = null;
+    for (const r of all) {
+      if (r.contract_address) {
+        const t = new Date(r.created_at_utc || r.created_at);
+        if (!earliestNonNullMintTime || t < earliestNonNullMintTime) earliestNonNullMintTime = t;
       }
-    } else {
-      labels = buildNYDayKeys(30, nowUTC); // past 30 NY days
     }
+
+    // Build NY labels
+    const labels = (range === 'all')
+      ? (() => {
+          if (all.length === 0) return buildNYDayKeys(30, nowUTC);
+          let earliest = all[0];
+          for (const r of all) {
+            const a = r.created_at_utc || r.created_at;
+            const b = earliest.created_at_utc || earliest.created_at;
+            if (a && b && new Date(a) < new Date(b)) earliest = r;
+          }
+          const firstKey = nyDateKey(new Date(earliest.created_at_utc || earliest.created_at));
+          const huge = buildNYDayKeys(3660, nowUTC);
+          const startIdx = Math.max(0, huge.indexOf(firstKey));
+          return huge.slice(startIdx);
+        })()
+      : buildNYDayKeys(30, nowUTC);
 
     const idx = new Map(labels.map((k, i) => [k, i]));
     const spins = new Array(labels.length).fill(0);
     const payout = new Array(labels.length).fill(0);
 
-    // Aggregate into NY buckets (never mix tokens for payout)
     for (const r of all) {
-      const when = r.created_at_utc || r.created_at;
-      if (!when) continue;
-      const key = nyDateKey(new Date(when));
+      const whenRaw = r.created_at_utc || r.created_at;
+      if (!whenRaw) continue;
+      const when = new Date(whenRaw);
+      const key = nyDateKey(when);
       const i = idx.get(key);
       if (i === undefined) continue;
 
-      // Always count spins for server_id
-      if (!contract_address || r.contract_address === contract_address) {
+      // Should this row count for the selected token?
+      const tokenSelected = Boolean(contract_address);
+      let isThisToken = true;
+
+      if (tokenSelected) {
+        isThisToken =
+          (r.contract_address === contract_address) ||
+          (
+            !r.contract_address &&
+            earliestNonNullMintTime && when < earliestNonNullMintTime
+          ); // legacy Harold-only days: treat NULL mint as the selected token
+      }
+
+      // Spins: server-wide if no token chosen; otherwise token-scoped
+      if (!tokenSelected) {
+        spins[i] += 1;
+      } else if (isThisToken) {
         spins[i] += 1;
       }
 
-      // Only sum payouts when focusing a single token
-      if (contract_address && r.contract_address === contract_address) {
-        const val = Number(r.reward || 0); // reward is in display units in your table
+      // Payout: only for a token view, never mix tokens
+      if (tokenSelected && isThisToken) {
+        const val = Number(r.reward || 0); // reward is stored in display units in your table
         if (!Number.isNaN(val)) payout[i] += val;
       }
     }
