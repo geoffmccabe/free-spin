@@ -1,132 +1,191 @@
 import { createClient } from '@supabase/supabase-js';
+import { createHmac } from 'crypto';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const TOKEN_SECRET = process.env.SPIN_KEY;
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-/* UTC date helpers */
-function dayUTC(y,m,d){ return new Date(Date.UTC(y,m,d)); }
-function addDays(d,n){ const x = new Date(d.getTime()); x.setUTCDate(x.getUTCDate()+n); return x; }
-function ymdUTC(d){ return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`; }
+/** Lightweight HMAC check so admin/chart calls don't get blocked by "used" state */
+function verifySignedToken(signedToken) {
+  try {
+    if (!TOKEN_SECRET) return false;
+    if (!signedToken || typeof signedToken !== 'string') return false;
+    const [token, signature] = signedToken.split('.');
+    if (!token || !signature) return false;
+    const expected = createHmac('sha256', TOKEN_SECRET).update(token).digest('hex');
+    return signature === expected;
+  } catch {
+    return false;
+  }
+}
+
+function toISODateUTC(d) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function addDaysUTC(d, n) {
+  const d2 = new Date(d.getTime());
+  d2.setUTCDate(d2.getUTCDate() + n);
+  return d2;
+}
+
+async function getTokenDecimals(contract_address) {
+  if (!contract_address) return 0; // server-wide spins view
+  const { data, error } = await supabase
+    .from('token_metadata')
+    .select('decimals')
+    .eq('contract_address', contract_address)
+    .single();
+  if (error || !data) return 5; // fallback to your current default
+  return Number(data.decimals || 5);
+}
+
+async function fetchAllSpins({ server_id, contract_address, startISO, endISO }) {
+  // build base query
+  let query = supabase.from('daily_spins')
+    .select('created_at_utc, amount_base, contract_address', { count: 'exact' })
+    .gte('created_at_utc', startISO)
+    .lte('created_at_utc', endISO);
+
+  if (server_id) query = query.eq('server_id', server_id);
+  if (contract_address) query = query.eq('contract_address', contract_address);
+
+  // page through results (1k per page)
+  const pageSize = 1000;
+  let from = 0;
+  let all = [];
+  // we need a stable order so pagination is deterministic
+  while (true) {
+    const { data, error } = await query
+      .order('created_at_utc', { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw new Error(`DB error: ${error.message}`);
+    if (!data || data.length === 0) break;
+
+    all = all.concat(data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   try {
-    const { token, server_id, range = 'past30', contract_address } = req.body || {};
-    if (!token || !server_id) return res.status(400).json({ error: 'token and server_id required' });
+    const { token: signedToken, server_id, contract_address, range } = req.body || {};
 
-    // Resolve default mint from the link if caller didn’t pass one
-    const { data: tok, error: tokErr } = await supabase
-      .from('spin_tokens')
-      .select('contract_address')
-      .eq('token', token)
-      .single();
-    if (tokErr || !tok) return res.status(400).json({ error: 'Invalid token' });
-
-    const mint = (contract_address && String(contract_address).trim()) || (tok.contract_address || '').trim();
-    const perToken = !!mint;
-
-    // Build UTC window
-    const now = new Date();
-    const today = dayUTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    let startDay = addDays(today, -29);
-    let endDay   = today;
-
-    // If "all time", we’ll extend start after we know earliest data (server view only).
-    // For token view the RPC handles the window we pass.
-
-    if (perToken) {
-      // ---- Per-token: DB-side daily grouping (UTC), minted rows only; includes TODAY; total payout line ----
-      const rpc = await supabase.rpc('chart_token_stats_v1', {
-        p_mint: mint,
-        p_start: ymdUTC(startDay),
-        p_end:   ymdUTC(endDay)
-      });
-      if (rpc.error) return res.status(400).json({ error: rpc.error.message });
-
-      const labels = rpc.data.map(r => r.day_utc);
-      const spins  = rpc.data.map(r => Number(r.spins || 0));
-      const totals = rpc.data.map(r => Number(r.total_payout || 0));
-
-      return res.status(200).json({
-        chartData: {
-          labels,
-          datasets: [
-            { label: 'Spins',        yAxisID: 'y',  data: spins,  borderWidth: 2, pointRadius: 0, tension: 0.25 },
-            { label: 'Total Payout', yAxisID: 'y1', data: totals, borderWidth: 2, pointRadius: 0, tension: 0.25 }
-          ]
-        },
-        options: {}
-      });
+    if (!verifySignedToken(signedToken)) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    if (!server_id) {
+      return res.status(400).json({ error: 'server_id required' });
     }
 
-    // ---- Server-wide view (spins only; no payouts; combine stamped + server legacy mints) ----
-    // Window as above
-    const startISO = ymdUTC(startDay) + 'T00:00:00Z';
-    const endISO   = ymdUTC(addDays(endDay,1)) + 'T00:00:00Z';
+    // Time window
+    const now = new Date(); // UTC
+    const endISO = now.toISOString();
+    let startDate;
+    if (range === 'all') {
+      // fetch everything; we will not set startDate limit (set to a very early date)
+      startDate = new Date('2000-01-01T00:00:00Z');
+    } else {
+      // default: last 30 days (inclusive)
+      const d = addDaysUTC(now, -29);
+      startDate = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0));
+    }
+    const startISO = startDate.toISOString();
 
-    let rows = [];
+    // Data fetch
+    const rows = await fetchAllSpins({ server_id, contract_address, startISO, endISO });
 
-    // stamped rows for this server
-    {
-      const a = await supabase
-        .from('daily_spins')
-        .select('created_at')
-        .eq('server_id', server_id)
-        .gte('created_at', startISO)
-        .lt('created_at', endISO);
-      if (a.error) return res.status(400).json({ error: a.error.message });
-      rows = rows.concat(a.data || []);
+    // Build day buckets from start to end (UTC days)
+    const labels = [];
+    const dayIndex = new Map();
+    for (let d = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate())); d <= now; d = addDaysUTC(d, 1)) {
+      const label = toISODateUTC(d);
+      dayIndex.set(label, labels.length);
+      labels.push(label);
     }
 
-    // plus legacy (server_id NULL) for mints owned by this server
-    {
-      const { data: st, error: stErr } = await supabase
-        .from('server_tokens')
-        .select('contract_address')
-        .eq('server_id', server_id);
-      if (stErr) return res.status(400).json({ error: stErr.message });
-      const mints = (st || []).map(r => String(r.contract_address||'').trim()).filter(Boolean);
+    // Aggregation
+    const spins = new Array(labels.length).fill(0);
+    const payoutsBase = new Array(labels.length).fill(0n);
 
-      if (mints.length) {
-        const b = await supabase
-          .from('daily_spins')
-          .select('created_at,contract_address')
-          .is('server_id', null)
-          .in('contract_address', mints)
-          .gte('created_at', startISO)
-          .lt('created_at', endISO);
-        if (b.error) return res.status(400).json({ error: b.error.message });
-        rows = rows.concat(b.data || []);
+    for (const r of rows) {
+      if (!r.created_at_utc) continue;
+      const day = toISODateUTC(new Date(r.created_at_utc));
+      const idx = dayIndex.get(day);
+      if (idx === undefined) continue;
+      spins[idx] += 1;
+      if (contract_address) {
+        // per-token view: sum payouts
+        const base = BigInt(r.amount_base ?? 0);
+        payoutsBase[idx] += base;
       }
     }
 
-    // Bucket by UTC day
-    const buckets = {};
-    for (let d = startDay; ymdUTC(d) <= ymdUTC(endDay); d = addDays(d, 1)) {
-      buckets[ymdUTC(d)] = 0;
-    }
-    for (const r of rows) {
-      const k = ymdUTC(new Date(r.created_at));
-      if (k in buckets) buckets[k] += 1;
+    // Convert base → display if token view
+    let datasets;
+    if (contract_address) {
+      const decimals = await getTokenDecimals(contract_address);
+      const denom = BigInt(10) ** BigInt(decimals);
+      const payoutsDisplay = payoutsBase.map(b => Number(b) / Number(denom));
+
+      datasets = [
+        {
+          label: 'Spins',
+          data: spins,
+          yAxisID: 'y',
+          tension: 0.25,
+        },
+        {
+          label: 'Total Payout',
+          data: payoutsDisplay,
+          yAxisID: 'y1',
+          tension: 0.25,
+        }
+      ];
+    } else {
+      datasets = [
+        {
+          label: 'Spins',
+          data: spins,
+          yAxisID: 'y',
+          tension: 0.25,
+        }
+      ];
     }
 
-    const labels = Object.keys(buckets).sort();
-    const spins  = labels.map(k => buckets[k]);
-
-    return res.status(200).json({
-      chartData: {
-        labels,
-        datasets: [
-          { label: 'Spins', yAxisID: 'y', data: spins, borderWidth: 2, pointRadius: 0, tension: 0.25 }
-        ]
+    const options = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#ddd' } },
+        tooltip: { enabled: true }
       },
-      options: {}
-    });
+      scales: {
+        x: { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        y: { beginAtZero: true, ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.06)' }, title: { display: true, text: '# Spins', color: '#bbb' } },
+        ...(contract_address ? {
+          y1: { position: 'right', beginAtZero: true, ticks: { color: '#bbb' }, grid: { drawOnChartArea: false }, title: { display: true, text: 'Total Payout', color: '#bbb' } }
+        } : {})
+      }
+    };
 
-  } catch (e) {
-    console.error('chart fatal:', e);
-    return res.status(500).json({ error: 'Internal error' });
+    const chartData = { labels, datasets };
+    return res.status(200).json({ chartData, options });
+  } catch (err) {
+    console.error('chart api error:', err);
+    return res.status(500).json({ error: 'Chart API error' });
   }
 }
