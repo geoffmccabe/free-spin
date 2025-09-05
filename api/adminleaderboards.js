@@ -19,7 +19,6 @@ function verifySignedToken(signedToken) {
   }
 }
 
-// Utility to build a map of discord_id -> best available display name
 function pickName(row) {
   return (
     row.display_name ||
@@ -42,33 +41,38 @@ export default async function handler(req, res) {
     if (!verifySignedToken(signedToken)) return res.status(403).json({ error: 'Unauthorized' });
     if (!server_id) return res.status(400).json({ error: 'server_id required' });
 
-    // Pull spins for this server; optionally restrict to one token
+    // If caller didn't pass a token, but the server only has ONE enabled token, use it.
+    let tokenToUse = contract_address || null;
+    if (!tokenToUse) {
+      const { data: enabled, error: enErr } = await supabase
+        .from('server_tokens')
+        .select('contract_address, enabled')
+        .eq('server_id', server_id)
+        .eq('enabled', true);
+      if (enErr) throw new Error(enErr.message);
+      if ((enabled || []).length === 1) tokenToUse = enabled[0].contract_address;
+    }
+
+    // Pull spins for this server (optionally token-scoped)
     const cols = 'discord_id, reward, contract_address';
-    let q = supabase
-      .from('daily_spins')
-      .select(cols)
-      .eq('server_id', server_id);
-
-    if (contract_address) q = q.eq('contract_address', contract_address);
-
-    const { data: spins, error } = await q.limit(100000); // safeguard
+    let q = supabase.from('daily_spins').select(cols).eq('server_id', server_id);
+    if (tokenToUse) q = q.eq('contract_address', tokenToUse);
+    const { data: spins, error } = await q.limit(100000);
     if (error) throw new Error(error.message);
 
-    // Aggregate
     const byUser = new Map(); // discord_id -> {spins, payout}
     for (const r of (spins || [])) {
       const id = r.discord_id || 'unknown';
       if (!byUser.has(id)) byUser.set(id, { spins: 0, payout: 0 });
       const cur = byUser.get(id);
       cur.spins += 1;
-      // Only sum payouts when looking at a single token; otherwise leave 0 to avoid mixing tokens
-      if (contract_address) {
+      if (tokenToUse) {
         const v = Number(r.reward || 0);
         if (!Number.isNaN(v)) cur.payout += v;
       }
     }
 
-    // Get names
+    // Resolve names
     const ids = Array.from(byUser.keys()).filter(x => x && x !== 'unknown');
     let nameRows = [];
     if (ids.length) {
@@ -81,20 +85,22 @@ export default async function handler(req, res) {
     }
     const nameMap = new Map(nameRows.map(r => [r.discord_id, pickName(r)]));
 
-    // Assemble, sort, top 200
     let rows = Array.from(byUser.entries()).map(([discord_id, agg]) => ({
       discord_id,
       user: nameMap.get(discord_id) || discord_id,
       spins: agg.spins,
-      payout: Math.round(agg.payout) // display units; rounding just in case of floats
+      payout: Math.round(agg.payout)
     }));
 
-    const sortKey = (String(sort_by || 'spins').toLowerCase() === 'payout' && contract_address) ? 'payout' : 'spins';
-    rows.sort((a, b) => b[sortKey] - a[sortKey]);
+    const sortKey =
+      (String(sort_by || 'spins').toLowerCase() === 'payout' && tokenToUse)
+        ? 'payout'
+        : 'spins';
 
+    rows.sort((a, b) => b[sortKey] - a[sortKey]);
     rows = rows.slice(0, 200);
 
-    return res.status(200).json({ rows, sortKey, tokenScoped: Boolean(contract_address) });
+    return res.status(200).json({ rows, sortKey, tokenScoped: Boolean(tokenToUse) });
   } catch (err) {
     console.error('adminleaderboards error:', err);
     return res.status(500).json({ error: 'Admin leaderboards API error' });
