@@ -1,18 +1,53 @@
 import { createClient } from '@supabase/supabase-js';
 import { createHmac } from 'crypto';
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const TOKEN_SECRET = process.env.SPIN_KEY;
+const SUPABASE_URL  = process.env.SUPABASE_URL;
+const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const TOKEN_SECRET  = process.env.SPIN_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-/** Lightweight HMAC check so admin/chart calls don't get blocked by "used" state */
+// ---------- TZ helpers (America/New_York) ----------
+const NY_TZ = 'America/New_York';
+
+// Return "YYYY-MM-DD" in America/New_York for a given Date (UTC-based)
+function nyDateKey(d) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: NY_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(d);
+  let y = '', m = '', day = '';
+  for (const p of parts) {
+    if (p.type === 'year') y = p.value;
+    else if (p.type === 'month') m = p.value;
+    else if (p.type === 'day') day = p.value;
+  }
+  return `${y}-${m}-${day}`; // e.g. 2025-09-05
+}
+
+// Add N days in UTC (we only use this to sample a wide window, then bucket in NY)
+function addDaysUTC(d, n) {
+  const x = new Date(d.getTime());
+  x.setUTCDate(x.getUTCDate() + n);
+  return x;
+}
+
+// Build an ordered, de-duplicated list of NY day keys from (now - backDays) .. now
+function buildNYDayKeys(backDays, nowUTC) {
+  const seen = new Set();
+  const keys = [];
+  for (let i = backDays; i >= 0; i--) {
+    const k = nyDateKey(addDaysUTC(nowUTC, -i));
+    if (!seen.has(k)) { seen.add(k); keys.push(k); }
+  }
+  return keys;
+}
+
+// ---------- auth helper ----------
 function verifySignedToken(signedToken) {
   try {
     if (!TOKEN_SECRET) return false;
-    if (!signedToken || typeof signedToken !== 'string') return false;
-    const [token, signature] = signedToken.split('.');
+    const [token, signature] = String(signedToken || '').split('.');
     if (!token || !signature) return false;
     const expected = createHmac('sha256', TOKEN_SECRET).update(token).digest('hex');
     return signature === expected;
@@ -21,171 +56,124 @@ function verifySignedToken(signedToken) {
   }
 }
 
-function toISODateUTC(d) {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function addDaysUTC(d, n) {
-  const d2 = new Date(d.getTime());
-  d2.setUTCDate(d2.getUTCDate() + n);
-  return d2;
-}
-
-async function getTokenDecimals(contract_address) {
-  if (!contract_address) return 0; // server-wide spins view
-  const { data, error } = await supabase
-    .from('token_metadata')
-    .select('decimals')
-    .eq('contract_address', contract_address)
-    .single();
-  if (error || !data) return 5; // fallback to your current default
-  return Number(data.decimals || 5);
-}
-
-async function fetchAllSpins({ server_id, contract_address, startISO, endISO }) {
-  // build base query
-  let query = supabase.from('daily_spins')
-    .select('created_at_utc, amount_base, contract_address', { count: 'exact' })
-    .gte('created_at_utc', startISO)
-    .lte('created_at_utc', endISO);
-
-  if (server_id) query = query.eq('server_id', server_id);
-  if (contract_address) query = query.eq('contract_address', contract_address);
-
-  // page through results (1k per page)
-  const pageSize = 1000;
-  let from = 0;
-  let all = [];
-  // we need a stable order so pagination is deterministic
-  while (true) {
-    const { data, error } = await query
-      .order('created_at_utc', { ascending: true })
-      .range(from, from + pageSize - 1);
-
-    if (error) throw new Error(`DB error: ${error.message}`);
-    if (!data || data.length === 0) break;
-
-    all = all.concat(data);
-    if (data.length < pageSize) break;
-    from += pageSize;
-  }
-  return all;
-}
-
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
     const { token: signedToken, server_id, contract_address, range } = req.body || {};
+    if (!verifySignedToken(signedToken)) return res.status(403).json({ error: 'Unauthorized' });
+    if (!server_id) return res.status(400).json({ error: 'server_id required' });
 
-    if (!verifySignedToken(signedToken)) {
-      return res.status(403).json({ error: 'Unauthorized' });
-    }
-    if (!server_id) {
-      return res.status(400).json({ error: 'server_id required' });
+    // -------- time window to fetch (UTC), then bucket by NY day ----------
+    const nowUTC = new Date();
+
+    // We fetch a little wider window than we need to avoid edge clipping across timezones.
+    // For "past30": fetch last 45 UTC days; for "all": fetch from a safe early anchor.
+    const fetchBackDays = range === 'all' ? 3660 /* ~10y safety */ : 45;
+
+    const startUTC = addDaysUTC(nowUTC, -fetchBackDays);
+    const startISO = startUTC.toISOString();
+    const endISO   = nowUTC.toISOString();
+
+    // Preferred rows with created_at_utc inside the window
+    let { data: rows1, error: e1 } = await supabase
+      .from('daily_spins')
+      .select('created_at_utc, created_at, server_id, contract_address, reward')
+      .eq('server_id', server_id)
+      .gte('created_at_utc', startISO)
+      .lte('created_at_utc', endISO)
+      .order('created_at_utc', { ascending: true });
+    if (e1) throw new Error(e1.message);
+    rows1 = rows1 || [];
+
+    // Legacy rows missing created_at_utc — fall back to created_at
+    let rows2 = [];
+    {
+      const { data: r2, error: e2 } = await supabase
+        .from('daily_spins')
+        .select('created_at_utc, created_at, server_id, contract_address, reward')
+        .eq('server_id', server_id)
+        .is('created_at_utc', null)
+        .gte('created_at', startISO)
+        .lte('created_at', endISO)
+        .order('created_at', { ascending: true });
+      if (e2) throw new Error(e2.message);
+      rows2 = r2 || [];
     }
 
-    // Time window
-    const now = new Date(); // UTC
-    const endISO = now.toISOString();
-    let startDate;
+    const all = [...rows1, ...rows2];
+
+    // -------- build NY-day labels ----------
+    // For "all": derive earliest NY day key from data; otherwise use last 30 NY days.
+    let labels;
     if (range === 'all') {
-      // fetch everything; we will not set startDate limit (set to a very early date)
-      startDate = new Date('2000-01-01T00:00:00Z');
+      if (all.length === 0) {
+        labels = buildNYDayKeys(30, nowUTC); // empty fallback
+      } else {
+        // find the earliest record, compute its NY key, then walk day-by-day until today
+        let earliest = all[0];
+        for (const r of all) {
+          const a = r.created_at_utc || r.created_at;
+          const b = earliest.created_at_utc || earliest.created_at;
+          if (a && b && new Date(a) < new Date(b)) earliest = r;
+        }
+        const firstKey = nyDateKey(new Date(earliest.created_at_utc || earliest.created_at));
+        // Generate keys from earliest..today by sampling UTC days and de-duplicating
+        // (safe across DST because we always resolve to NY keys)
+        const maxBack = 3660; // ~10y cap
+        const tmp = buildNYDayKeys(maxBack, nowUTC);
+        const startIdx = Math.max(0, tmp.indexOf(firstKey));
+        labels = tmp.slice(startIdx);
+      }
     } else {
-      // default: last 30 days (inclusive)
-      const d = addDaysUTC(now, -29);
-      startDate = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0));
-    }
-    const startISO = startDate.toISOString();
-
-    // Data fetch
-    const rows = await fetchAllSpins({ server_id, contract_address, startISO, endISO });
-
-    // Build day buckets from start to end (UTC days)
-    const labels = [];
-    const dayIndex = new Map();
-    for (let d = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate())); d <= now; d = addDaysUTC(d, 1)) {
-      const label = toISODateUTC(d);
-      dayIndex.set(label, labels.length);
-      labels.push(label);
+      labels = buildNYDayKeys(30, nowUTC); // past 30 days by NY
     }
 
-    // Aggregation
-    const spins = new Array(labels.length).fill(0);
-    const payoutsBase = new Array(labels.length).fill(0n);
+    const index = new Map(labels.map((k, i) => [k, i]));
+    const spins  = new Array(labels.length).fill(0);
+    const payout = new Array(labels.length).fill(0);
 
-    for (const r of rows) {
-      if (!r.created_at_utc) continue;
-      const day = toISODateUTC(new Date(r.created_at_utc));
-      const idx = dayIndex.get(day);
-      if (idx === undefined) continue;
-      spins[idx] += 1;
+    // -------- aggregate into NY day buckets ----------
+    for (const r of all) {
+      if (contract_address && r.contract_address !== contract_address) continue;
+
+      const when = r.created_at_utc || r.created_at;
+      if (!when) continue;
+      const key = nyDateKey(new Date(when));
+      const i = index.get(key);
+      if (i === undefined) continue;
+
+      spins[i] += 1;
       if (contract_address) {
-        // per-token view: sum payouts
-        const base = BigInt(r.amount_base ?? 0);
-        payoutsBase[idx] += base;
+        const val = Number(r.reward || 0);
+        if (!Number.isNaN(val)) payout[i] += val; // reward is display units per your current table
       }
     }
 
-    // Convert base → display if token view
-    let datasets;
+    const datasets = [
+      { label: 'Spins', data: spins, yAxisID: 'y', tension: 0.25 }
+    ];
     if (contract_address) {
-      const decimals = await getTokenDecimals(contract_address);
-      const denom = BigInt(10) ** BigInt(decimals);
-      const payoutsDisplay = payoutsBase.map(b => Number(b) / Number(denom));
-
-      datasets = [
-        {
-          label: 'Spins',
-          data: spins,
-          yAxisID: 'y',
-          tension: 0.25,
-        },
-        {
-          label: 'Total Payout',
-          data: payoutsDisplay,
-          yAxisID: 'y1',
-          tension: 0.25,
-        }
-      ];
-    } else {
-      datasets = [
-        {
-          label: 'Spins',
-          data: spins,
-          yAxisID: 'y',
-          tension: 0.25,
-        }
-      ];
+      datasets.push({ label: 'Total Payout', data: payout, yAxisID: 'y1', tension: 0.25 });
     }
 
     const options = {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { labels: { color: '#ddd' } },
-        tooltip: { enabled: true }
-      },
+      plugins: { legend: { labels: { color: '#ddd' } }, tooltip: { enabled: true } },
       scales: {
-        x: { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.06)' } },
-        y: { beginAtZero: true, ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.06)' }, title: { display: true, text: '# Spins', color: '#bbb' } },
+        x:  { ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        y:  { beginAtZero: true, ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.06)' }, title: { display: true, text: '# Spins', color: '#bbb' } },
         ...(contract_address ? {
           y1: { position: 'right', beginAtZero: true, ticks: { color: '#bbb' }, grid: { drawOnChartArea: false }, title: { display: true, text: 'Total Payout', color: '#bbb' } }
         } : {})
       }
     };
 
-    const chartData = { labels, datasets };
-    return res.status(200).json({ chartData, options });
+    return res.status(200).json({ chartData: { labels, datasets }, options, timezone: NY_TZ });
   } catch (err) {
-    console.error('chart api error:', err);
+    console.error('chart error:', err);
     return res.status(500).json({ error: 'Chart API error' });
   }
 }
