@@ -1,157 +1,76 @@
-// /api/chart.js
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-// Both HAROLD & FATCOIN use 5 decimals currently.
-// If a new token has different decimals, you can extend this later with a lookup.
-const DECIMALS = 5;
-
-// Bucket days by US/Eastern (your business day)
-const TZ = 'America/New_York';
-
-function rangeBounds(range) {
-  const now = new Date();
-  if (range === 'all') {
-    const start = new Date(now.getTime() - 730 * 24 * 3600 * 1000); // 2 years
-    return { start, end: now };
-  }
-  const days = range === 'past7' ? 7 : 30;
-  const start = new Date(now.getTime() - days * 24 * 3600 * 1000);
-  return { start, end: now };
-}
-
-// Format a Date into YYYY-MM-DD in US/Eastern
-function dayKeyEDT(d) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).format(d);
-}
-
-// Build array of EDT day keys from start..end (inclusive)
-function dayKeys(start, end) {
-  const keys = [];
-  const seen = new Set();
-  const cur = new Date(start);
-  while (cur <= end) {
-    const k = dayKeyEDT(cur);
-    if (!seen.has(k)) {
-      keys.push(k);
-      seen.add(k);
-    }
-    cur.setUTCDate(cur.getUTCDate() + 1);
-  }
-  return keys;
+// Zero-fill helper
+function datesBetween(start, end) {
+  const s = new Date(start), e = new Date(end), out = [];
+  s.setUTCHours(0,0,0,0); e.setUTCHours(0,0,0,0);
+  while (s <= e) { out.push(s.toISOString().slice(0,10)); s.setUTCDate(s.getUTCDate()+1); }
+  return out;
 }
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
   try {
-    const { server_id, contract_address, range = 'past30' } = req.body || {};
+    const { server_id, contract_address, view='token', range='30d' } = req.body || {};
     if (!server_id) return res.status(400).json({ error: 'server_id required' });
+    if (view === 'token' && !contract_address) return res.status(400).json({ error: 'contract_address required' });
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-    const { start, end } = rangeBounds(range);
-    const denom = Math.pow(10, DECIMALS);
+    // date window
+    const end = new Date();
+    const start = range === 'all' ? new Date('2024-01-01T00:00:00Z') : new Date(Date.now() - 29 * 24 * 3600 * 1000);
+    const labels = datesBetween(start, end);
 
-    // Filter by created_at_utc for the time window, but SELECT created_at_ms so we never parse strings.
-    let query = supabase
-      .from('daily_spins')
-      .select('created_at_ms, amount_base')
+    // Pull rows once; aggregate in memory (fast enough for our scale)
+    let sel = supabase.from('daily_spins')
+      .select('created_at_utc, amount_base, contract_address')
       .eq('server_id', server_id)
       .gte('created_at_utc', start.toISOString())
       .lte('created_at_utc', end.toISOString());
 
-    const isTokenView = !!contract_address;
-    if (isTokenView) query = query.eq('contract_address', contract_address);
+    if (view === 'token') sel = sel.eq('contract_address', contract_address);
+    const { data: rows, error } = await sel;
+    if (error) return res.status(500).json({ error: error.message });
 
-    const { data: rows, error } = await query;
-    if (error) throw error;
+    // Decimals (default 5)
+    let decimals = 5;
+    if (view === 'token') {
+      const { data: cfg } = await supabase.from('wheel_configurations')
+        .select('decimals')
+        .eq('contract_address', contract_address)
+        .maybeSingle();
+      if (cfg && typeof cfg.decimals === 'number') decimals = cfg.decimals;
+    }
 
-    // Prepare buckets
-    const labels = dayKeys(start, end);
-    const spinsByDay = Object.fromEntries(labels.map(k => [k, 0]));
-    const payoutBaseByDay = Object.fromEntries(labels.map(k => [k, 0]));
-
-    // Fill buckets using numeric epoch -> Date (no string parsing issues)
+    const byDay = new Map(labels.map(d => [d, { spins:0, payoutBase:0n }]));
     for (const r of rows || []) {
-      const ms = Number(r.created_at_ms);
-      if (!Number.isFinite(ms)) continue;
-      const key = dayKeyEDT(new Date(ms));
-      if (!(key in spinsByDay)) continue; // outside range (defensive)
-      spinsByDay[key] += 1;
-      if (isTokenView) {
-        const base = Number(r.amount_base || 0);
-        if (Number.isFinite(base)) payoutBaseByDay[key] += base;
-      }
+      const d = new Date(r.created_at_utc);
+      const key = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0,10);
+      const bucket = byDay.get(key);
+      if (!bucket) continue; // outside window safety
+      bucket.spins += 1;
+      if (typeof r.amount_base === 'number') bucket.payoutBase += BigInt(r.amount_base);
     }
 
-    // Build datasets for Chart.js
-    const spins = labels.map(k => spinsByDay[k]);
-    const datasets = [
-      {
-        label: 'Spins',
-        data: spins,
-        yAxisID: 'y',
-        borderWidth: 2,
-        tension: 0.25,
-        pointRadius: 0
-      }
-    ];
-
-    if (isTokenView) {
-      const payoutsDisplay = labels.map(k => payoutBaseByDay[k] / denom);
-      datasets.push({
-        label: 'Total Payout',
-        data: payoutsDisplay,
-        yAxisID: 'y1',
-        borderWidth: 2,
-        tension: 0.25,
-        pointRadius: 0
-      });
+    const spins = [], totalPayout = [];
+    let maxL = 0, maxR = 0;
+    for (const d of labels) {
+      const b = byDay.get(d) || { spins:0, payoutBase:0n };
+      const payout = Number(b.payoutBase) / 10 ** decimals;
+      spins.push(b.spins);
+      totalPayout.push(payout);
+      if (b.spins > maxL) maxL = b.spins;
+      if (payout > maxR) maxR = payout;
     }
 
-    // Return Chart.js config
     return res.status(200).json({
-      chartData: { labels, datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: { legend: { labels: { color: '#ddd' } }, tooltip: { enabled: true } },
-        scales: {
-          x: {
-            ticks: { color: '#bbb', maxRotation: 70, minRotation: 45 },
-            grid: { color: 'rgba(255,255,255,0.05)' }
-          },
-          y: {
-            position: 'left',
-            beginAtZero: true,
-            ticks: { color: '#bbb' },
-            grid: { color: 'rgba(255,255,255,0.05)' },
-            title: { display: true, text: '# Spins', color: '#bbb' }
-          },
-          ...(isTokenView
-            ? {
-                y1: {
-                  position: 'right',
-                  beginAtZero: true,
-                  ticks: { color: '#bbb' },
-                  grid: { drawOnChartArea: false },
-                  title: { display: true, text: 'Total Payout', color: '#bbb' }
-                }
-              }
-            : {})
-        }
-      }
+      labels, spins, totalPayout,
+      yMaxLeft: Math.ceil(maxL * 1.15),
+      yMaxRight: Math.ceil(maxR * 1.15)
     });
   } catch (e) {
     console.error('chart error', e);
-    return res.status(500).json({ error: 'Chart failed' });
+    return res.status(500).json({ error: 'Internal error' });
   }
 }
