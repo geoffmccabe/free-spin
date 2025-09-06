@@ -1,69 +1,72 @@
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const DECIMALS = 5;
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
   try {
-    const { server_id, contract_address, sort_by = 'spins' } = req.body || {};
-    if (!server_id || !contract_address) {
-      return res.status(400).json({ error: 'server_id and contract_address required' });
-    }
+    const { server_id, contract_address, view='token', range='30d', sort='spins' } = req.body || {};
+    if (!server_id) return res.status(400).json({ error: 'server_id required' });
+    if (view === 'token' && !contract_address) return res.status(400).json({ error: 'contract_address required' });
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+    const end = new Date();
+    const start = range === 'all' ? new Date('2024-01-01T00:00:00Z') : new Date(Date.now() - 29 * 24 * 3600 * 1000);
 
-    // Pull normalized rows for this token only (no mixing)
-    const { data: rows, error } = await supabase
-      .from('daily_spins')
-      .select('discord_id, amount_base')
+    let sel = supabase.from('daily_spins')
+      .select('discord_id, amount_base, contract_address, created_at_utc')
       .eq('server_id', server_id)
-      .eq('contract_address', contract_address);
+      .gte('created_at_utc', start.toISOString())
+      .lte('created_at_utc', end.toISOString());
 
-    if (error) throw error;
+    if (view === 'token') sel = sel.eq('contract_address', contract_address);
 
-    // Aggregate per user
-    const denom = Math.pow(10, DECIMALS);
-    const agg = new Map(); // discord_id -> { spins, base }
+    const { data: rows, error } = await sel;
+    if (error) return res.status(500).json({ error: error.message });
+
+    // token decimals if token-scoped (default 5)
+    let decimals = 5;
+    if (view === 'token') {
+      const { data: cfg } = await supabase.from('wheel_configurations')
+        .select('decimals').eq('contract_address', contract_address).maybeSingle();
+      if (cfg && typeof cfg.decimals === 'number') decimals = cfg.decimals;
+    }
+
+    // Aggregate by user
+    const map = new Map();
     for (const r of rows || []) {
-      const id = r.discord_id || 'unknown';
-      const cur = agg.get(id) || { spins: 0, base: 0 };
-      cur.spins += 1;
-      cur.base += Number(r.amount_base || 0);
-      agg.set(id, cur);
+      const key = r.discord_id || 'unknown';
+      const obj = map.get(key) || { discord_id: key, spins:0, payoutBase:0n };
+      obj.spins += 1;
+      if (typeof r.amount_base === 'number') obj.payoutBase += BigInt(r.amount_base);
+      map.set(key, obj);
     }
 
-    // Resolve human names from cache
-    const ids = Array.from(agg.keys()).slice(0, 500);
-    const label = new Map();
-    if (ids.length) {
-      const { data: who } = await supabase
-        .from('discord_users')
-        .select('discord_id, username, display_name, global_name, nick, nickname, name, handle, discord_tag')
-        .in('discord_id', ids);
-      for (const w of who || []) {
-        label.set(
-          w.discord_id,
-          w.display_name || w.global_name || w.username || w.nick || w.nickname || w.name || w.handle || w.discord_tag || w.discord_id
-        );
-      }
-    }
-
-    let items = Array.from(agg.entries()).map(([discord_id, v]) => ({
-      discord_id,
-      user: label.get(discord_id) || discord_id,
+    let list = Array.from(map.values()).map(v => ({
+      discord_id: v.discord_id,
       spins: v.spins,
-      payout: v.base / denom
+      payout: Number(v.payoutBase) / 10 ** decimals
     }));
 
-    if (sort_by === 'payout') items.sort((a, b) => b.payout - a.payout || b.spins - a.spins);
-    else items.sort((a, b) => b.spins - a.spins || b.payout - a.payout);
+    // Attach names from discord_users table if present
+    if (list.length) {
+      const ids = list.map(x => x.discord_id);
+      const { data: names } = await supabase.from('discord_users')
+        .select('discord_id, username, display_name, global_name, nick, nickname, name, handle, discord_tag')
+        .in('discord_id', ids);
+      const nameMap = new Map((names||[]).map(n => [n.discord_id, n]));
+      list = list.map(x => {
+        const n = nameMap.get(x.discord_id);
+        const best = n?.display_name || n?.global_name || n?.username || n?.discord_tag || n?.name || n?.handle || n?.nick || n?.nickname;
+        return { ...x, name: best || x.discord_id };
+      });
+    }
 
-    return res.status(200).json({ items: items.slice(0, 200) });
+    list.sort((a,b) => sort==='payout' ? (b.payout - a.payout) : (b.spins - a.spins));
+    list = list.slice(0, 200);
+
+    return res.status(200).json({ rows: list });
   } catch (e) {
     console.error('adminleaderboards error', e);
-    return res.status(500).json({ error: 'Admin leaderboards failed' });
+    return res.status(500).json({ error: 'Internal error' });
   }
 }
