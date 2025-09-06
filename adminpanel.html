@@ -4,14 +4,13 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Admin</title>
-  <link rel="preconnect" href="https://cdn.jsdelivr.net"/>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <style>
     :root{--bg:#0b0b0c;--panel:#121214;--panel2:#151517;--border:#1f1f20;--muted:#999;--txt:#eaeaea;--gold:#f0c44a;--green:#12c27a;--red:#e24d4d}
     html,body{height:100%;margin:0;background:#000;color:#fff;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
     .wrap{padding:12px}
     .row{display:grid;grid-template-columns:1fr 420px;gap:16px}
-    @media (max-width: 1100px){.row{grid-template-columns:1fr}}
+    @media (max-width:1100px){.row{grid-template-columns:1fr}}
     .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;overflow:hidden}
     .card h2{margin:0;padding:12px 14px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));font-size:16px}
     .card .body{padding:12px 14px}
@@ -25,11 +24,9 @@
     .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
     .stat{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:10px}
     .stat b{color:#fff}
-    .stat .usd{font-weight:700}
+    .usd{font-weight:700}
     .usd.green{color:var(--green)} .usd.gold{color:var(--gold)} .usd.red{color:var(--red)}
     .iconbtn{background:#202022;border:1px solid #353536;color:#ddd;border-radius:10px;padding:6px 10px;cursor:pointer}
-    .list{display:flex;flex-direction:column;gap:10px}
-    .tokenRow{display:flex;align-items:center;justify-content:space-between;background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:10px}
     .wheel-mini{width:56px;height:56px;border-radius:50%;object-fit:cover;animation:spin 15s linear infinite;filter:drop-shadow(0 6px 16px rgba(0,0,0,.5))}
     @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
     .toolbar{display:flex;gap:8px;align-items:center}
@@ -42,10 +39,13 @@
     .table th{color:#aaa;text-align:left}
     .scroll{max-height:62vh;overflow:auto}
     .hint{color:#bbb;font-size:12px;margin-top:8px}
+    .banner{background:#1b1b1c;border:1px solid #2a2a2d;color:#ddd;border-radius:12px;padding:10px;margin:0 0 12px}
+    .hide{display:none}
   </style>
 </head>
 <body>
 <div class="wrap">
+  <div id="warn" class="banner hide"></div>
   <div class="row">
     <!-- Left: Performance -->
     <div class="card">
@@ -59,8 +59,8 @@
           <div class="toolbar">
             <label class="sub">View</label>
             <select id="viewSelect">
-              <option value="token">This token</option>
               <option value="server">All tokens</option>
+              <option value="token">This token</option>
             </select>
             <label class="sub">Range</label>
             <select id="rangeSelect">
@@ -72,14 +72,15 @@
       </h2>
       <div class="body">
         <div class="grid2" style="align-items:flex-start;gap:12px;margin-bottom:12px">
-          <div class="stat">
+          <div class="stat" id="tokStat">
             <div class="flex" style="gap:12px">
-              <img id="miniWheel" class="wheel-mini" alt=""/>
+              <img id="miniWheel" class="wheel-mini" alt="" style="display:none"/>
               <div>
-                <div><b id="tokName">—</b> <span id="tokStatus" class="pill">loading…</span></div>
+                <div><b id="tokName">—</b> <span id="tokStatus" class="pill">no token supplied</span></div>
                 <div class="sub mono" style="word-break:break-all" id="mintAddr">—</div>
               </div>
             </div>
+            <div class="hint">Provide a token in the URL to see token balances.</div>
           </div>
           <div class="stat">
             <div style="display:grid;grid-template-columns:1fr auto;gap:6px">
@@ -91,16 +92,16 @@
               <div class="flex" style="justify-self:end"><span class="sub mono" id="poolAddr">Wallet: —</span>
                 <button class="iconbtn" id="copyAddr" title="Copy address">▦</button></div>
             </div>
-            <div class="hint">Balances are pool wallet estimates.</div>
+            <div class="hint">Balances show for token view only.</div>
           </div>
         </div>
         <div class="chart-wrap"><canvas id="chart"></canvas></div>
       </div>
     </div>
 
-    <!-- Right: Tokens + Leaderboard -->
+    <!-- Right: Leaderboard -->
     <div class="card">
-      <h2>Leaderboards (Top 200) <span class="sub" id="lbScope">(This token)</span></h2>
+      <h2>Leaderboards (Top 200) <span class="sub" id="lbScope">(All tokens)</span></h2>
       <div class="body">
         <div class="toolbar" style="margin-bottom:10px">
           <label class="sub">Sort by</label>
@@ -123,8 +124,24 @@
 <script>
 (() => {
   const qs = new URLSearchParams(location.search);
-  const signedToken = qs.get('token');
-  const server_id   = qs.get('server_id');
+  // Try URL → sessionStorage → localStorage → referrer
+  const fromRef = () => {
+    try { return new URL(document.referrer).searchParams } catch { return null }
+  };
+  let token = qs.get('token')
+    || sessionStorage.getItem('solspin_token')
+    || localStorage.getItem('solspin_token')
+    || (fromRef() && fromRef().get('token')) || null;
+
+  let server_id = qs.get('server_id')
+    || sessionStorage.getItem('solspin_server_id')
+    || localStorage.getItem('solspin_server_id')
+    || (fromRef() && fromRef().get('server_id')) || null;
+
+  if (token) sessionStorage.setItem('solspin_token', token);
+  if (server_id) sessionStorage.setItem('solspin_server_id', server_id);
+
+  const warn = document.getElementById('warn');
 
   const el = (id) => document.getElementById(id);
   const title=el('title'), miniWheel=el('miniWheel'), tokName=el('tokName'),
@@ -132,10 +149,9 @@
         balTokenName=el('balTokenName'), balTokenAmt=el('balTokenAmt'),
         balTokenUsd=el('balTokenUsd'), balSolAmt=el('balSolAmt'),
         balSolUsd=el('balSolUsd'), poolAddr=el('poolAddr'),
-        copyAddr=el('copyAddr'), lbScope=el('lbScope');
+        copyAddr=el('copyAddr'), lbScope=el('lbScope'), tokStat=el('tokStat');
 
-  const viewSelect=el('viewSelect'), rangeSelect=el('rangeSelect'),
-        sortSelect=el('sortSelect');
+  const viewSelect=el('viewSelect'), rangeSelect=el('rangeSelect'), sortSelect=el('sortSelect');
 
   let contract_address=null, token_sym=null, image_url=null;
   let chart=null;
@@ -147,60 +163,87 @@
     return 'usd red';
   }
 
-  async function loadConfig(){
-    const r = await fetch('/api/spin', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ token: signedToken, server_id })
-    });
-    const j = await r.json();
-    if(!r.ok) throw new Error(j.error||'config failed');
-
-    const tcfg = j.tokenConfig || {};
-    token_sym = tcfg.token_name || 'Token';
-    image_url = tcfg.image_url || '';
-    contract_address = j.contract_address || null;
-
-    title.textContent = `${token_sym} • Performance`;
-    tokName.textContent = token_sym;
-    balTokenName.textContent = token_sym;
-    mintAddr.textContent = contract_address || '—';
-    tokStatus.textContent = 'ENABLED';
-    tokStatus.className = 'pill ok';
-
-    // Mini wheel without broken-image flash
-    if (image_url){
-      const img=new Image();
-      img.onload=()=>{ miniWheel.src=image_url; miniWheel.style.display='block'; };
-      img.onerror=()=>{ miniWheel.style.display='none'; };
-      img.src=image_url;
-    } else {
-      miniWheel.style.display='none';
+  function needServer(){
+    if (!server_id){
+      warn.classList.remove('hide');
+      warn.textContent = 'Missing server_id. Open Admin from the wheel page so the link includes ?token=...&server_id=....';
+      return true;
     }
-
-    // Admin balances, if present
-    const info = j.adminInfo || {};
-    poolAddr.textContent = `Wallet: ${info.poolAddr || '—'}`;
-    copyAddr.onclick = () => {
-      if (info.poolAddr) navigator.clipboard.writeText(info.poolAddr);
-    };
-
-    // These may be strings; normalise
-    const tokAmt = Number(info.tokenAmt ?? NaN);
-    const tokUsd = Number(info.tokenUsdValue ?? NaN);
-    const solAmt = Number(info.gasAmt ?? NaN);
-    const solUsd = Number(info.gasUsdValue ?? NaN);
-
-    balTokenAmt.textContent = Number.isFinite(tokAmt) ? tokAmt.toLocaleString(undefined,{maximumFractionDigits:6}) : '—';
-    balTokenUsd.textContent = Number.isFinite(tokUsd) ? `$${tokUsd.toLocaleString()}` : '—';
-    balTokenUsd.className = usdClass(tokUsd)||'usd';
-
-    balSolAmt.textContent   = Number.isFinite(solAmt) ? solAmt.toLocaleString(undefined,{maximumFractionDigits:6}) : '—';
-    balSolUsd.textContent   = Number.isFinite(solUsd) ? `$${solUsd.toLocaleString()}` : '—';
-    balSolUsd.className     = usdClass(solUsd)||'usd';
+    warn.classList.add('hide');
+    return false;
   }
 
-  function labelsBetween(startISO, endISO){
+  async function loadConfigIfToken(){
+    if (!token) {
+      // No token → server view only
+      viewSelect.value = 'server';
+      tokStatus.textContent = 'no token supplied';
+      tokStatus.className = 'pill';
+      tokName.textContent = '—';
+      mintAddr.textContent = '—';
+      miniWheel.style.display='none';
+      return;
+    }
+
+    try{
+      const r = await fetch('/api/spin', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ token, server_id })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error||'config failed');
+
+      const tcfg = j.tokenConfig || {};
+      token_sym = tcfg.token_name || 'Token';
+      image_url = tcfg.image_url || '';
+      contract_address = j.contract_address || null;
+
+      title.textContent = `${token_sym} • Performance`;
+      tokName.textContent = token_sym;
+      balTokenName.textContent = token_sym;
+      mintAddr.textContent = contract_address || '—';
+      tokStatus.textContent = 'ENABLED';
+      tokStatus.className = 'pill ok';
+
+      if (image_url){
+        const img=new Image();
+        img.onload=()=>{ miniWheel.src=image_url; miniWheel.style.display='block'; };
+        img.onerror=()=>{ miniWheel.style.display='none'; };
+        img.src=image_url;
+      } else miniWheel.style.display='none';
+
+      const info = j.adminInfo || {};
+      poolAddr.textContent = `Wallet: ${info.poolAddr || '—'}`;
+      copyAddr.onclick = () => { if (info.poolAddr) navigator.clipboard.writeText(info.poolAddr); };
+
+      const tokAmt = Number(info.tokenAmt ?? NaN);
+      const tokUsd = Number(info.tokenUsdValue ?? NaN);
+      const solAmt = Number(info.gasAmt ?? NaN);
+      const solUsd = Number(info.gasUsdValue ?? NaN);
+
+      balTokenAmt.textContent = Number.isFinite(tokAmt) ? tokAmt.toLocaleString(undefined,{maximumFractionDigits:6}) : '—';
+      balTokenUsd.textContent = Number.isFinite(tokUsd) ? `$${tokUsd.toLocaleString()}` : '—';
+      balTokenUsd.className = usdClass(tokUsd)||'usd';
+
+      balSolAmt.textContent   = Number.isFinite(solAmt) ? solAmt.toLocaleString(undefined,{maximumFractionDigits:6}) : '—';
+      balSolUsd.textContent   = Number.isFinite(solUsd) ? `$${solUsd.toLocaleString()}` : '—';
+      balSolUsd.className     = usdClass(solUsd)||'usd';
+
+      // If we have a token, default to token view
+      viewSelect.value = 'token';
+      lbScope.textContent = '(This token)';
+      tokStat.querySelector('.hint').textContent = 'Token balances shown below.';
+    }catch(e){
+      // Fall back to server view if token rejected (used/expired)
+      viewSelect.value = 'server';
+      lbScope.textContent = '(All tokens)';
+      tokStatus.textContent = 'token invalid/used';
+      tokStatus.className = 'pill bad';
+      miniWheel.style.display='none';
+    }
+  }
+
+  function datesBetween(startISO, endISO){
     const s=new Date(startISO), e=new Date(endISO), out=[];
     s.setUTCHours(0,0,0,0); e.setUTCHours(0,0,0,0);
     while (s<=e){ out.push(s.toISOString().slice(0,10)); s.setUTCDate(s.getUTCDate()+1); }
@@ -208,21 +251,22 @@
   }
 
   async function loadChart(){
-    const view = viewSelect.value; // token | server
-    const range= rangeSelect.value; // 30d | all
+    if (needServer()) return;
+
+    const view = viewSelect.value;
+    const range= rangeSelect.value;
     lbScope.textContent = view==='token' ? '(This token)' : '(All tokens)';
 
     const body = { server_id, view, range };
-    if (view==='token') body.contract_address = contract_address;
+    if (view==='token' && contract_address) body.contract_address = contract_address;
 
     const r = await fetch('/api/chart', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
     });
     const j = await r.json();
-    if(!r.ok) throw new Error(j.error||'chart failed');
+    if(!r.ok){ warn.classList.remove('hide'); warn.textContent = j.error||'Chart failed'; return; }
 
     const { labels, spins, totalPayout, yMaxLeft, yMaxRight } = j;
-
     const ctx = document.getElementById('chart').getContext('2d');
     if (chart) chart.destroy();
     chart = new Chart(ctx, {
@@ -258,16 +302,18 @@
   }
 
   async function loadLB(){
+    if (needServer()) return;
+
     const view = viewSelect.value;
-    const sort = sortSelect.value; // spins|payout
+    const sort = sortSelect.value;
     const body = { server_id, sort, view, range: rangeSelect.value };
-    if (view==='token') body.contract_address = contract_address;
+    if (view==='token' && contract_address) body.contract_address = contract_address;
 
     const r = await fetch('/api/adminleaderboards', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
     });
     const j = await r.json();
-    if(!r.ok) throw new Error(j.error||'leaderboard failed');
+    if(!r.ok){ warn.classList.remove('hide'); warn.textContent = j.error||'Leaderboards failed'; return; }
     renderLB(j.rows||[]);
   }
 
@@ -277,14 +323,11 @@
   sortSelect.addEventListener('change',  () => { loadLB(); });
 
   (async () => {
-    if(!signedToken || !server_id){
-      alert('Missing token or server_id');
-      return;
-    }
-    await loadConfig();
+    if (needServer()) return;
+    await loadConfigIfToken();   // will pick token view if valid, else server view
     await loadChart();
     await loadLB();
-  })().catch(e=>alert(e.message));
+  })().catch(e=>{ warn.classList.remove('hide'); warn.textContent = e.message });
 })();
 </script>
 </body>
