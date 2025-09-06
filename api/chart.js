@@ -1,19 +1,20 @@
+// /api/chart.js
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Both HAROLD & FATCOIN use 5 decimals today. If a new token differs,
-// you can extend this later by looking it up per-mint.
+// Both HAROLD & FATCOIN use 5 decimals currently.
+// If a new token has different decimals, you can extend this later with a lookup.
 const DECIMALS = 5;
 
-// Bucket by US/Eastern so “days” match your business view.
+// Bucket days by US/Eastern (your business day)
 const TZ = 'America/New_York';
 
 function rangeBounds(range) {
   const now = new Date();
   if (range === 'all') {
-    const start = new Date(now.getTime() - 730 * 24 * 3600 * 1000); // 2y
+    const start = new Date(now.getTime() - 730 * 24 * 3600 * 1000); // 2 years
     return { start, end: now };
   }
   const days = range === 'past7' ? 7 : 30;
@@ -21,7 +22,7 @@ function rangeBounds(range) {
   return { start, end: now };
 }
 
-// Format a UTC Date into a YYYY-MM-DD key in US/Eastern
+// Format a Date into YYYY-MM-DD in US/Eastern
 function dayKeyEDT(d) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: TZ,
@@ -31,13 +32,11 @@ function dayKeyEDT(d) {
   }).format(d);
 }
 
-// Build an array of EDT day keys from start..end (inclusive)
+// Build array of EDT day keys from start..end (inclusive)
 function dayKeys(start, end) {
   const keys = [];
   const seen = new Set();
   const cur = new Date(start);
-
-  // step one UTC day at a time, but *label* each bucket in US/Eastern
   while (cur <= end) {
     const k = dayKeyEDT(cur);
     if (!seen.has(k)) {
@@ -60,10 +59,10 @@ export default async function handler(req, res) {
     const { start, end } = rangeBounds(range);
     const denom = Math.pow(10, DECIMALS);
 
-    // Fetch normalized rows in one shot
+    // Filter by created_at_utc for the time window, but SELECT created_at_ms so we never parse strings.
     let query = supabase
       .from('daily_spins')
-      .select('created_at_utc, amount_base')
+      .select('created_at_ms, amount_base')
       .eq('server_id', server_id)
       .gte('created_at_utc', start.toISOString())
       .lte('created_at_utc', end.toISOString());
@@ -74,24 +73,35 @@ export default async function handler(req, res) {
     const { data: rows, error } = await query;
     if (error) throw error;
 
-    // Build empty buckets
+    // Prepare buckets
     const labels = dayKeys(start, end);
     const spinsByDay = Object.fromEntries(labels.map(k => [k, 0]));
     const payoutBaseByDay = Object.fromEntries(labels.map(k => [k, 0]));
 
-    // Fill buckets (label each row into an EDT day)
+    // Fill buckets using numeric epoch -> Date (no string parsing issues)
     for (const r of rows || []) {
-      if (!r.created_at_utc) continue;
-      const k = dayKeyEDT(new Date(r.created_at_utc));
-      if (!(k in spinsByDay)) continue; // outside range (defensive)
-      spinsByDay[k] += 1;
-      if (isTokenView) payoutBaseByDay[k] += Number(r.amount_base || 0);
+      const ms = Number(r.created_at_ms);
+      if (!Number.isFinite(ms)) continue;
+      const key = dayKeyEDT(new Date(ms));
+      if (!(key in spinsByDay)) continue; // outside range (defensive)
+      spinsByDay[key] += 1;
+      if (isTokenView) {
+        const base = Number(r.amount_base || 0);
+        if (Number.isFinite(base)) payoutBaseByDay[key] += base;
+      }
     }
 
-    // Build datasets
+    // Build datasets for Chart.js
     const spins = labels.map(k => spinsByDay[k]);
     const datasets = [
-      { label: 'Spins', data: spins, yAxisID: 'y', borderWidth: 2, tension: 0.25, pointRadius: 0 }
+      {
+        label: 'Spins',
+        data: spins,
+        yAxisID: 'y',
+        borderWidth: 2,
+        tension: 0.25,
+        pointRadius: 0
+      }
     ];
 
     if (isTokenView) {
@@ -115,10 +125,27 @@ export default async function handler(req, res) {
         interaction: { mode: 'index', intersect: false },
         plugins: { legend: { labels: { color: '#ddd' } }, tooltip: { enabled: true } },
         scales: {
-          x: { ticks: { color: '#bbb', maxRotation: 70, minRotation: 45 }, grid: { color: 'rgba(255,255,255,0.05)' } },
-          y: { position: 'left', beginAtZero: true, ticks: { color: '#bbb' }, grid: { color: 'rgba(255,255,255,0.05)' }, title: { display: true, text: '# Spins', color: '#bbb' } },
+          x: {
+            ticks: { color: '#bbb', maxRotation: 70, minRotation: 45 },
+            grid: { color: 'rgba(255,255,255,0.05)' }
+          },
+          y: {
+            position: 'left',
+            beginAtZero: true,
+            ticks: { color: '#bbb' },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+            title: { display: true, text: '# Spins', color: '#bbb' }
+          },
           ...(isTokenView
-            ? { y1: { position: 'right', beginAtZero: true, ticks: { color: '#bbb' }, grid: { drawOnChartArea: false }, title: { display: true, text: 'Total Payout', color: '#bbb' } } }
+            ? {
+                y1: {
+                  position: 'right',
+                  beginAtZero: true,
+                  ticks: { color: '#bbb' },
+                  grid: { drawOnChartArea: false },
+                  title: { display: true, text: 'Total Payout', color: '#bbb' }
+                }
+              }
             : {})
         }
       }
