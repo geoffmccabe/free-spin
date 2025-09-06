@@ -3,182 +3,289 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Admin Panel</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <title>Admin</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <style>
-    html,body{background:#000;color:#fff;margin:0;font-family:Inter,system-ui,sans-serif;height:100vh;}
-    .shell{display:grid;grid-template-columns: 2fr 1fr;grid-template-rows:auto 1fr;grid-template-areas:'hdr hdr' 'chart side';gap:14px;height:100vh;padding:14px;box-sizing:border-box;}
-    .hdr{grid-area:hdr;display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#0b0b0c;border:1px solid #1f1f20;border-radius:14px;}
-    .title{font-weight:700}
-    .row{display:flex;align-items:center;gap:10px}
-    select,button{background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:6px 10px}
-    .panel{background:#0b0b0c;border:1px solid #1f1f20;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden}
-    .chart{grid-area:chart;display:flex;flex-direction:column}
-    .chart .body{position:relative;flex:1;min-height:360px;padding:10px 14px}
-    .side{grid-area:side;display:flex;flex-direction:column;gap:14px;min-width:0}
-    .minihead{padding:10px 14px;border-bottom:1px solid #1c1c1e;font-weight:600}
-    .leader{display:flex;flex-direction:column;max-height:calc(100vh - 220px);overflow:auto}
-    table{width:100%;border-collapse:collapse;font-size:14px}
-    th,td{padding:8px 10px;border-bottom:1px solid #1c1c1e;text-align:left}
-    th{position:sticky;top:0;background:#0b0b0c}
-    .muted{color:#aaa}
-    .thumbWrap{position:absolute;right:10px;top:10px;width:72px;height:72px;display:none}
-    .thumbWrap img{width:72px;height:72px;animation:spin 15s linear infinite}
+    :root{--bg:#0b0b0c;--panel:#121214;--panel2:#151517;--border:#1f1f20;--muted:#999;--txt:#eaeaea;--gold:#f0c44a;--green:#12c27a;--red:#e24d4d}
+    html,body{height:100%;margin:0;background:#000;color:#fff;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}
+    .wrap{padding:12px}
+    .row{display:grid;grid-template-columns:1fr 420px;gap:16px}
+    @media (max-width: 1100px){.row{grid-template-columns:1fr}}
+    .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;overflow:hidden}
+    .card h2{margin:0;padding:12px 14px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));font-size:16px}
+    .card .body{padding:12px 14px}
+    .flex{display:flex;align-items:center;gap:10px}
+    .right-head{display:flex;align-items:center;gap:10px;justify-content:flex-end;padding-right:10px}
+    .pill{display:inline-block;border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-size:12px;color:#ddd;background:#0f0f10}
+    .pill.ok{border-color:#164c2e;color:#9ff2c4;background:#0b1b13}
+    .pill.bad{border-color:#5a2222;color:#f2a7a7;background:#1b0c0c}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+    .sub{color:#bbb;font-size:12px}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .stat{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:10px}
+    .stat b{color:#fff}
+    .stat .usd{font-weight:700}
+    .usd.green{color:var(--green)} .usd.gold{color:var(--gold)} .usd.red{color:var(--red)}
+    .iconbtn{background:#202022;border:1px solid #353536;color:#ddd;border-radius:10px;padding:6px 10px;cursor:pointer}
+    .list{display:flex;flex-direction:column;gap:10px}
+    .tokenRow{display:flex;align-items:center;justify-content:space-between;background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:10px}
+    .wheel-mini{width:56px;height:56px;border-radius:50%;object-fit:cover;animation:spin 15s linear infinite;filter:drop-shadow(0 6px 16px rgba(0,0,0,.5))}
     @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
-    .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;background:#d33;color:#fff;padding:10px 14px;border-radius:10px;display:none}
-    @media (max-width: 900px){.shell{grid-template-columns:1fr;grid-template-rows:auto auto auto;grid-template-areas:'hdr' 'chart' 'side';height:auto}}
+    .toolbar{display:flex;gap:8px;align-items:center}
+    select{background:#151517;border:1px solid #333;color:#eee;border-radius:10px;padding:6px 10px}
+    .chart-wrap{position:relative;height:64vh;min-height:420px}
+    .leg{display:flex;align-items:center;gap:8px;margin-left:auto}
+    .legend-dot{width:10px;height:10px;border-radius:50%}
+    .table{width:100%;border-collapse:collapse;color:#ddd}
+    .table th,.table td{padding:8px;border-bottom:1px solid #1b1b1c;font-size:13px}
+    .table th{color:#aaa;text-align:left}
+    .scroll{max-height:62vh;overflow:auto}
+    .hint{color:#bbb;font-size:12px;margin-top:8px}
   </style>
 </head>
 <body>
-  <div class="shell">
-    <div class="hdr">
-      <div class="title">Admin</div>
-      <div class="row">
-        <label>View</label>
-        <select id="viewSelect">
-          <option value="token">This token</option>
-          <option value="server">Server (all tokens)</option>
-        </select>
-        <label>Range</label>
-        <select id="rangeSelect">
-          <option value="past30">Past 30 days</option>
-          <option value="past7">Past 7 days</option>
-          <option value="all">All time</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="panel chart">
-      <div class="minihead">Performance</div>
+<div class="wrap">
+  <div class="row">
+    <!-- Left: Performance -->
+    <div class="card">
+      <h2 class="flex">
+        <span id="title">Performance</span>
+        <div class="leg">
+          <div class="legend-dot" style="background:#4aa3ff"></div><span class="sub">Spins</span>
+          <div class="legend-dot" style="background:#ff5c87"></div><span class="sub">Total Payout</span>
+        </div>
+        <div class="right-head">
+          <div class="toolbar">
+            <label class="sub">View</label>
+            <select id="viewSelect">
+              <option value="token">This token</option>
+              <option value="server">All tokens</option>
+            </select>
+            <label class="sub">Range</label>
+            <select id="rangeSelect">
+              <option value="30d">Past 30 days</option>
+              <option value="all">All time</option>
+            </select>
+          </div>
+        </div>
+      </h2>
       <div class="body">
-        <canvas id="chartCanvas"></canvas>
-        <div class="thumbWrap" id="thumbWrap"><img id="wheelThumb" alt=""></div>
+        <div class="grid2" style="align-items:flex-start;gap:12px;margin-bottom:12px">
+          <div class="stat">
+            <div class="flex" style="gap:12px">
+              <img id="miniWheel" class="wheel-mini" alt=""/>
+              <div>
+                <div><b id="tokName">—</b> <span id="tokStatus" class="pill">loading…</span></div>
+                <div class="sub mono" style="word-break:break-all" id="mintAddr">—</div>
+              </div>
+            </div>
+          </div>
+          <div class="stat">
+            <div style="display:grid;grid-template-columns:1fr auto;gap:6px">
+              <div><b id="balTokenName">Token</b>: <span id="balTokenAmt">—</span> /
+                <span id="balTokenUsd" class="usd">—</span></div>
+              <div></div>
+              <div><b>SOL</b>: <span id="balSolAmt">—</span> /
+                <span id="balSolUsd" class="usd">—</span></div>
+              <div class="flex" style="justify-self:end"><span class="sub mono" id="poolAddr">Wallet: —</span>
+                <button class="iconbtn" id="copyAddr" title="Copy address">▦</button></div>
+            </div>
+            <div class="hint">Balances are pool wallet estimates.</div>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="chart"></canvas></div>
       </div>
     </div>
 
-    <div class="panel side">
-      <div class="minihead">
-        Leaderboards (Top 200)
-        <span class="muted" id="lbNote"></span>
-      </div>
-      <div class="row" style="padding:10px 14px;border-bottom:1px solid #1c1c1e">
-        <label>Sort by</label>
-        <select id="sortSelect">
-          <option value="spins">Spins</option>
-          <option value="payout">Payout</option>
-        </select>
-      </div>
-      <div class="leader" id="leaderWrap">
-        <table id="leaderTable">
-          <thead><tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr></thead>
-          <tbody></tbody>
-        </table>
+    <!-- Right: Tokens + Leaderboard -->
+    <div class="card">
+      <h2>Leaderboards (Top 200) <span class="sub" id="lbScope">(This token)</span></h2>
+      <div class="body">
+        <div class="toolbar" style="margin-bottom:10px">
+          <label class="sub">Sort by</label>
+          <select id="sortSelect">
+            <option value="spins">Spins</option>
+            <option value="payout">Payout</option>
+          </select>
+        </div>
+        <div class="scroll">
+          <table class="table" id="lbTable">
+            <thead><tr><th>#</th><th>User</th><th>Spins</th><th>Payout</th></tr></thead>
+            <tbody id="lbBody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
+</div>
 
-  <div class="toast" id="toast"></div>
+<script>
+(() => {
+  const qs = new URLSearchParams(location.search);
+  const signedToken = qs.get('token');
+  const server_id   = qs.get('server_id');
 
-  <script>
-    const qs = new URLSearchParams(location.search);
-    const server_id = qs.get('server_id') || '';
-    const contract_address = qs.get('contract_address') || '';
-    const image_url = qs.get('image_url') || '';
+  const el = (id) => document.getElementById(id);
+  const title=el('title'), miniWheel=el('miniWheel'), tokName=el('tokName'),
+        mintAddr=el('mintAddr'), tokStatus=el('tokStatus'),
+        balTokenName=el('balTokenName'), balTokenAmt=el('balTokenAmt'),
+        balTokenUsd=el('balTokenUsd'), balSolAmt=el('balSolAmt'),
+        balSolUsd=el('balSolUsd'), poolAddr=el('poolAddr'),
+        copyAddr=el('copyAddr'), lbScope=el('lbScope');
 
-    const toast = (msg) => {
-      const el = document.getElementById('toast');
-      el.textContent = msg;
-      el.style.display = 'block';
-      setTimeout(()=> el.style.display='none', 2500);
+  const viewSelect=el('viewSelect'), rangeSelect=el('rangeSelect'),
+        sortSelect=el('sortSelect');
+
+  let contract_address=null, token_sym=null, image_url=null;
+  let chart=null;
+
+  function usdClass(val){
+    if (typeof val !== 'number') return '';
+    if (val>=50) return 'usd green';
+    if (val>=20) return 'usd gold';
+    return 'usd red';
+  }
+
+  async function loadConfig(){
+    const r = await fetch('/api/spin', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ token: signedToken, server_id })
+    });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error||'config failed');
+
+    const tcfg = j.tokenConfig || {};
+    token_sym = tcfg.token_name || 'Token';
+    image_url = tcfg.image_url || '';
+    contract_address = j.contract_address || null;
+
+    title.textContent = `${token_sym} • Performance`;
+    tokName.textContent = token_sym;
+    balTokenName.textContent = token_sym;
+    mintAddr.textContent = contract_address || '—';
+    tokStatus.textContent = 'ENABLED';
+    tokStatus.className = 'pill ok';
+
+    // Mini wheel without broken-image flash
+    if (image_url){
+      const img=new Image();
+      img.onload=()=>{ miniWheel.src=image_url; miniWheel.style.display='block'; };
+      img.onerror=()=>{ miniWheel.style.display='none'; };
+      img.src=image_url;
+    } else {
+      miniWheel.style.display='none';
+    }
+
+    // Admin balances, if present
+    const info = j.adminInfo || {};
+    poolAddr.textContent = `Wallet: ${info.poolAddr || '—'}`;
+    copyAddr.onclick = () => {
+      if (info.poolAddr) navigator.clipboard.writeText(info.poolAddr);
     };
 
-    function ensureParams() {
-      if (!server_id) {
-        toast('server_id required');
-        return false;
-      }
-      return true;
-    }
+    // These may be strings; normalise
+    const tokAmt = Number(info.tokenAmt ?? NaN);
+    const tokUsd = Number(info.tokenUsdValue ?? NaN);
+    const solAmt = Number(info.gasAmt ?? NaN);
+    const solUsd = Number(info.gasUsdValue ?? NaN);
 
-    function showThumb() {
-      if (!image_url) return;
-      const w = document.getElementById('wheelThumb');
-      const wrap = document.getElementById('thumbWrap');
-      w.onload = () => { wrap.style.display = 'block'; };
-      w.onerror = () => { wrap.style.display = 'none'; };
-      w.src = image_url;
-    }
+    balTokenAmt.textContent = Number.isFinite(tokAmt) ? tokAmt.toLocaleString(undefined,{maximumFractionDigits:6}) : '—';
+    balTokenUsd.textContent = Number.isFinite(tokUsd) ? `$${tokUsd.toLocaleString()}` : '—';
+    balTokenUsd.className = usdClass(tokUsd)||'usd';
 
-    let chart;
-    function drawChart(chartData, options) {
-      const ctx = document.getElementById('chartCanvas').getContext('2d');
-      if (chart) chart.destroy();
-      chart = new Chart(ctx, { type:'line', data:chartData, options });
-    }
+    balSolAmt.textContent   = Number.isFinite(solAmt) ? solAmt.toLocaleString(undefined,{maximumFractionDigits:6}) : '—';
+    balSolUsd.textContent   = Number.isFinite(solUsd) ? `$${solUsd.toLocaleString()}` : '—';
+    balSolUsd.className     = usdClass(solUsd)||'usd';
+  }
 
-    async function loadChart() {
-      const view = document.getElementById('viewSelect').value;
-      const range = document.getElementById('rangeSelect').value;
+  function labelsBetween(startISO, endISO){
+    const s=new Date(startISO), e=new Date(endISO), out=[];
+    s.setUTCHours(0,0,0,0); e.setUTCHours(0,0,0,0);
+    while (s<=e){ out.push(s.toISOString().slice(0,10)); s.setUTCDate(s.getUTCDate()+1); }
+    return out;
+  }
 
-      const payload = { server_id, range };
-      if (view === 'token') {
-        if (!contract_address) {
-          toast('This token view requires contract_address');
-          return;
+  async function loadChart(){
+    const view = viewSelect.value; // token | server
+    const range= rangeSelect.value; // 30d | all
+    lbScope.textContent = view==='token' ? '(This token)' : '(All tokens)';
+
+    const body = { server_id, view, range };
+    if (view==='token') body.contract_address = contract_address;
+
+    const r = await fetch('/api/chart', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+    });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error||'chart failed');
+
+    const { labels, spins, totalPayout, yMaxLeft, yMaxRight } = j;
+
+    const ctx = document.getElementById('chart').getContext('2d');
+    if (chart) chart.destroy();
+    chart = new Chart(ctx, {
+      type:'line',
+      data:{
+        labels,
+        datasets:[
+          {label:'Spins', data:spins, yAxisID:'y', borderColor:'#4aa3ff', backgroundColor:'rgba(74,163,255,.15)', tension:.25, fill:true, pointRadius:0},
+          {label:'Total Payout', data:totalPayout, yAxisID:'y1', borderColor:'#ff5c87', backgroundColor:'rgba(255,92,135,.15)', tension:.25, fill:true, pointRadius:0}
+        ]
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        interaction:{mode:'index', intersect:false},
+        plugins:{legend:{labels:{color:'#ddd'}}, tooltip:{enabled:true}},
+        scales:{
+          x:{ticks:{color:'#aaa', maxRotation:60, minRotation:40}, grid:{color:'rgba(255,255,255,.05)'}},
+          y:{title:{display:true,text:'# Spins',color:'#bbb'}, ticks:{color:'#bbb'}, grid:{color:'rgba(255,255,255,.05)'}, suggestedMax:yMaxLeft||undefined},
+          y1:{position:'right', title:{display:true,text:'Total Payout',color:'#bbb'}, ticks:{color:'#bbb'}, grid:{drawOnChartArea:false}, suggestedMax:yMaxRight||undefined}
         }
-        payload.contract_address = contract_address;
       }
+    });
+  }
 
-      const res = await fetch('/api/chart', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      if (!res.ok) { toast(data.error || 'Chart load failed'); return; }
-      drawChart(data.chartData, data.options);
+  function renderLB(rows){
+    const tbody = document.getElementById('lbBody');
+    tbody.innerHTML = '';
+    rows.forEach((r,i)=>{
+      const tr=document.createElement('tr');
+      tr.innerHTML = `<td>${i+1}</td><td>${r.name||r.discord_id}</td><td>${r.spins}</td><td>${r.payout}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
 
-      const note = document.getElementById('lbNote');
-      note.textContent = (view === 'token') ? ' (This token)' : ' (Server spins only)';
+  async function loadLB(){
+    const view = viewSelect.value;
+    const sort = sortSelect.value; // spins|payout
+    const body = { server_id, sort, view, range: rangeSelect.value };
+    if (view==='token') body.contract_address = contract_address;
+
+    const r = await fetch('/api/adminleaderboards', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+    });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error||'leaderboard failed');
+    renderLB(j.rows||[]);
+  }
+
+  // Events
+  viewSelect.addEventListener('change', () => { loadChart(); loadLB(); });
+  rangeSelect.addEventListener('change', () => { loadChart(); loadLB(); });
+  sortSelect.addEventListener('change',  () => { loadLB(); });
+
+  (async () => {
+    if(!signedToken || !server_id){
+      alert('Missing token or server_id');
+      return;
     }
-
-    async function loadLeaderboards() {
-      const sort_by = document.getElementById('sortSelect').value;
-      // leaderboards are token-specific by design
-      if (!contract_address) {
-        document.querySelector('#leaderTable tbody').innerHTML = '';
-        toast('contract_address required for leaderboards');
-        return;
-      }
-      const res = await fetch('/api/adminleaderboards', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ server_id, contract_address, sort_by })
-      });
-      const data = await res.json();
-      if (!res.ok) { toast(data.error || 'Leaderboards load failed'); return; }
-
-      const tb = document.querySelector('#leaderTable tbody');
-      tb.innerHTML = '';
-      (data.items || []).forEach((row, idx) => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${idx+1}</td><td>${row.user || row.discord_id}</td><td>${row.spins}</td><td>${(row.payout ?? 0).toLocaleString(undefined,{maximumFractionDigits:2})}</td>`;
-        tb.appendChild(tr);
-      });
-    }
-
-    // events
-    document.getElementById('viewSelect').addEventListener('change', () => { loadChart(); });
-    document.getElementById('rangeSelect').addEventListener('change', () => { loadChart(); });
-    document.getElementById('sortSelect').addEventListener('change', () => { loadLeaderboards(); });
-
-    // init
-    (async function init(){
-      if (!ensureParams()) return;
-      showThumb();
-      await loadChart();
-      await loadLeaderboards();
-    })();
-  </script>
+    await loadConfig();
+    await loadChart();
+    await loadLB();
+  })().catch(e=>alert(e.message));
+})();
+</script>
 </body>
 </html>
