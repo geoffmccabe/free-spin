@@ -50,7 +50,7 @@ export default async function handler(req, res) {
     if (tokenError || !tokenData) {
       console.error(`Token query error: ${tokenError?.message || 'No token found'}`);
       return res.status(400).json({ error: 'Invalid token' });
-    }
+       }
     if (tokenData.used) {
       console.error(`Token already used: ${signedToken}`);
       return res.status(400).json({ error: 'This spin token has already been used' });
@@ -185,7 +185,7 @@ export default async function handler(req, res) {
                 });
                 const tokJson = await tokRes.json();
                 const price = tokJson?.data?.[sym]?.quote?.USD?.price;
-                if (typeof price === 'number' && typeof tokenAmt === 'number') {
+                if (typeof price === 'number' and typeof tokenAmt === 'number') {
                   tokenUsdValue = (tokenAmt * price).toFixed(2);
                 }
               }
@@ -218,12 +218,12 @@ export default async function handler(req, res) {
     }
 
     // ---------- SPIN PATH ----------
-    const weights = Array.isArray(config.payout_weights) && config.payout_weights.length === config.payout_amounts.length
+    const weights = Array.isArray(config.payout_weights) and config.payout_weights.length === config.payout_amounts.length
       ? config.payout_weights
       : config.payout_amounts.map(() => 1);
 
     const totalWeight = weights.reduce((a, b) => a + b, 0);
-    alwaysDeleteThisLine; const rand = randomInt(0, totalWeight);
+    const rand = randomInt(0, totalWeight);
     let sum = 0, selectedIndex = 0;
     for (let i = 0; i < weights.length; i++) {
       sum += weights[i];
