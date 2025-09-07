@@ -1,5 +1,4 @@
 import {
-  Connection,
   ComputeBudgetProgram,
   VersionedTransaction,
   TransactionMessage,
@@ -10,7 +9,7 @@ export async function sendTxWithFreshBlockhash({
   payer,
   instructions,
   recentAccounts = [],
-  maxRetries = 3,
+  maxRetries = 4,
   commitment = 'confirmed',
   cuLimit = 250_000,
   cuPriceMicrolamports = 2_000,
@@ -35,9 +34,8 @@ export async function sendTxWithFreshBlockhash({
     const vtx = new VersionedTransaction(msg);
     vtx.sign([payer, ...recentAccounts]);
 
-    let signature;
     try {
-      signature = await connection.sendTransaction(vtx, {
+      const signature = await connection.sendTransaction(vtx, {
         skipPreflight: false,
         maxRetries: 2,
         preflightCommitment: commitment,
@@ -47,18 +45,12 @@ export async function sendTxWithFreshBlockhash({
       return signature;
     } catch (err) {
       lastError = err;
-      const msg = String(err?.message || err);
-      const expired =
-        msg.includes('block height exceeded') ||
-        msg.includes('expired') ||
-        msg.includes('BlockhashNotFound');
-      if (expired && attempt < maxRetries) continue;
-      const transient =
-        msg.includes('socket hang up') ||
-        msg.includes('ECONNRESET') ||
-        msg.includes('429');
-      if (transient && attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 600));
+      const m = String(err?.message || err);
+      const expired = m.includes('block height exceeded') || m.includes('expired') || m.includes('BlockhashNotFound');
+      const transient = m.includes('socket hang up') || m.includes('ECONNRESET') || m.includes('429');
+
+      if ((expired || transient) && attempt < maxRetries) {
+        if (transient) await new Promise(r => setTimeout(r, 600));
         continue;
       }
       throw err;
