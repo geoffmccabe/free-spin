@@ -1,7 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
-import { Connection, PublicKey, Keypair, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { getOrCreateAssociatedTokenAccount, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
+import { sendTxWithFreshBlockhash } from '../lib/solanaSend.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -239,21 +240,21 @@ export default async function handler(req, res) {
     const fromTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, fundingWallet.publicKey);
     const toTokenAccount = await getOrCreateAssociatedTokenAccount(connection, fundingWallet, tokenMint, userWallet);
 
-    const transaction = new Transaction().add(
-      createTransferInstruction(
-        fromTokenAccount.address,
-        toTokenAccount.address,
-        fundingWallet.publicKey,
-        rewardAmount * (10 ** 5) // keep as-is for your current mint
-      )
+    const transferIx = createTransferInstruction(
+      fromTokenAccount.address,
+      toTokenAccount.address,
+      fundingWallet.publicKey,
+      rewardAmount * (10 ** 5)
     );
 
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('processed');
-    transaction.recentBlockhash = blockhash;
-    transaction.feePayer = fundingWallet.publicKey;
-    transaction.sign(fundingWallet);
-
-    const sig = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true, maxRetries: 3 });
+    const sig = await sendTxWithFreshBlockhash({
+      connection,
+      payer: fundingWallet,
+      instructions: [transferIx],
+      recentAccounts: [],
+      maxRetries: 4,
+      commitment: 'confirmed',
+    });
 
     // Record spin (write with created_at_utc so future checks see it)
     await supabase.from('daily_spins').insert({
@@ -268,11 +269,6 @@ export default async function handler(req, res) {
 
     // Burn the link
     await supabase.from('spin_tokens').update({ used: true, signature: sig }).eq('token', signedToken);
-
-    // Confirm in background (non-blocking UX)
-    connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'processed')
-      .then(() => console.log('Transfer processed:', sig))
-      .catch((e) => console.error('Confirm error:', e));
 
     return res.status(200).json({ segmentIndex: selectedIndex, prize: prizeText, spins_left });
 
