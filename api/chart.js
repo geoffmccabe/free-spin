@@ -1,76 +1,233 @@
-import { createClient } from '@supabase/supabase-js';
+// chart.js — admin panel daily chart (Spins + Payouts)
+// Assumes Chart.js is loaded in the page.
+// Works with endpoints that return either:
+//  A) { days: [{ day_et, spins, total_base, decimals }], decimals }
+//  B) [ { day_et, spins, total_base, decimals } ]
+//  C) { data: [ { day_et, spins, total_base, decimals } ] }
+// Decimals default to 5 if not provided.
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+(function () {
+  const qs = new URLSearchParams(location.search);
+  const SERVER_ID = qs.get('server_id') || '';
+  const CONTRACT = qs.get('contract_address') || qs.get('contract') || '';
+  const TZ = 'America/New_York';
 
-// Zero-fill helper
-function datesBetween(start, end) {
-  const s = new Date(start), e = new Date(end), out = [];
-  s.setUTCHours(0,0,0,0); e.setUTCHours(0,0,0,0);
-  while (s <= e) { out.push(s.toISOString().slice(0,10)); s.setUTCDate(s.getUTCDate()+1); }
-  return out;
-}
-
-export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-  try {
-    const { server_id, contract_address, view='token', range='30d' } = req.body || {};
-    if (!server_id) return res.status(400).json({ error: 'server_id required' });
-    if (view === 'token' && !contract_address) return res.status(400).json({ error: 'contract_address required' });
-
-    // date window
-    const end = new Date();
-    const start = range === 'all' ? new Date('2024-01-01T00:00:00Z') : new Date(Date.now() - 29 * 24 * 3600 * 1000);
-    const labels = datesBetween(start, end);
-
-    // Pull rows once; aggregate in memory (fast enough for our scale)
-    let sel = supabase.from('daily_spins')
-      .select('created_at_utc, amount_base, contract_address')
-      .eq('server_id', server_id)
-      .gte('created_at_utc', start.toISOString())
-      .lte('created_at_utc', end.toISOString());
-
-    if (view === 'token') sel = sel.eq('contract_address', contract_address);
-    const { data: rows, error } = await sel;
-    if (error) return res.status(500).json({ error: error.message });
-
-    // Decimals (default 5)
-    let decimals = 5;
-    if (view === 'token') {
-      const { data: cfg } = await supabase.from('wheel_configurations')
-        .select('decimals')
-        .eq('contract_address', contract_address)
-        .maybeSingle();
-      if (cfg && typeof cfg.decimals === 'number') decimals = cfg.decimals;
-    }
-
-    const byDay = new Map(labels.map(d => [d, { spins:0, payoutBase:0n }]));
-    for (const r of rows || []) {
-      const d = new Date(r.created_at_utc);
-      const key = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString().slice(0,10);
-      const bucket = byDay.get(key);
-      if (!bucket) continue; // outside window safety
-      bucket.spins += 1;
-      if (typeof r.amount_base === 'number') bucket.payoutBase += BigInt(r.amount_base);
-    }
-
-    const spins = [], totalPayout = [];
-    let maxL = 0, maxR = 0;
-    for (const d of labels) {
-      const b = byDay.get(d) || { spins:0, payoutBase:0n };
-      const payout = Number(b.payoutBase) / 10 ** decimals;
-      spins.push(b.spins);
-      totalPayout.push(payout);
-      if (b.spins > maxL) maxL = b.spins;
-      if (payout > maxR) maxR = payout;
-    }
-
-    return res.status(200).json({
-      labels, spins, totalPayout,
-      yMaxLeft: Math.ceil(maxL * 1.15),
-      yMaxRight: Math.ceil(maxR * 1.15)
-    });
-  } catch (e) {
-    console.error('chart error', e);
-    return res.status(500).json({ error: 'Internal error' });
+  // --- simple UI hooks (optional elements) ---
+  const rangeSel = document.getElementById('range-select');   // values: 7d|30d|90d|all
+  const canvas = document.getElementById('dailyChart');       // <canvas id="dailyChart">
+  if (!canvas) {
+    console.warn('chart.js: #dailyChart canvas not found - nothing to draw');
+    return;
   }
-}
+
+  // Hard-cap the chart height to avoid giant canvas bug
+  try {
+    canvas.style.maxHeight = '420px';
+    canvas.height = 420;
+  } catch (_) {}
+
+  // Fallback chain of endpoints (first that returns JSON wins)
+  const endpoints = [
+    `/api/adminchart?server_id=${encodeURIComponent(SERVER_ID)}&contract_address=${encodeURIComponent(CONTRACT)}&tz=${encodeURIComponent(TZ)}`,
+    `/api/admin_chart?server_id=${encodeURIComponent(SERVER_ID)}&contract_address=${encodeURIComponent(CONTRACT)}&tz=${encodeURIComponent(TZ)}`,
+    `/api/chart?server_id=${encodeURIComponent(SERVER_ID)}&contract_address=${encodeURIComponent(CONTRACT)}&tz=${encodeURIComponent(TZ)}`
+  ];
+
+  let chart;           // Chart.js instance
+  let fullDays = [];   // canonical dataset from server
+
+  function isValidDayRow(r) {
+    return r && typeof r.day_et === 'string';
+  }
+
+  function coerceNumber(n, fallback = 0) {
+    const v = Number(n);
+    return Number.isFinite(v) ? v : fallback;
+  }
+
+  function normalizeResponse(json) {
+    // Accept various shapes; return { days: [...], decimals }
+    if (!json) return { days: [], decimals: 5 };
+
+    if (Array.isArray(json)) {
+      return { days: json, decimals: json[0]?.decimals ?? 5 };
+    }
+    if (Array.isArray(json.days)) {
+      return { days: json.days, decimals: json.decimals ?? json.days[0]?.decimals ?? 5 };
+    }
+    if (Array.isArray(json.data)) {
+      return { days: json.data, decimals: json.decimals ?? json.data[0]?.decimals ?? 5 };
+    }
+    // Unknown shape
+    return { days: [], decimals: 5 };
+  }
+
+  async function fetchWithFallback() {
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, { credentials: 'include' });
+        if (!res.ok) continue;
+
+        // Some backends return errors as text; guard JSON parsing.
+        const text = await res.text();
+        try {
+          const json = JSON.parse(text);
+          return normalizeResponse(json);
+        } catch {
+          // Not JSON, try next endpoint
+          continue;
+        }
+      } catch {
+        // try next
+      }
+    }
+    throw new Error('No chart endpoint responded with valid JSON');
+  }
+
+  function filterByRange(days, range) {
+    if (!Array.isArray(days) || days.length === 0) return [];
+    if (range === 'all') return days;
+
+    const now = new Date();
+    let cutoff = new Date();
+    switch (range) {
+      case '7d':  cutoff.setDate(now.getDate() - 7); break;
+      case '30d': cutoff.setDate(now.getDate() - 30); break;
+      case '90d': cutoff.setDate(now.getDate() - 90); break;
+      default:    return days;
+    }
+    // day_et is YYYY-MM-DD; include rows >= cutoff (ET already)
+    const isoCut = cutoff.toISOString().slice(0, 10);
+    return days.filter(r => r.day_et >= isoCut);
+  }
+
+  function trimLeadingZeros(days) {
+    // For "All Time", start at first non-zero day (spins OR payouts)
+    const idx = days.findIndex(r => coerceNumber(r.spins) > 0 || coerceNumber(r.total_base) > 0);
+    return idx <= 0 ? days : days.slice(idx);
+  }
+
+  function buildDatasets(days, decimals) {
+    const labels = days.map(r => r.day_et);
+    const spins = days.map(r => coerceNumber(r.spins));
+    const payouts = days.map(r => {
+      const base = coerceNumber(r.total_base);
+      const dec = Number.isFinite(Number(decimals)) ? Number(decimals) : 5;
+      return base / Math.pow(10, dec);
+    });
+
+    return { labels, spins, payouts };
+  }
+
+  function makeChart({ labels, spins, payouts }) {
+    if (chart) chart.destroy();
+
+    const ctx = canvas.getContext('2d');
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Spins',
+            data: spins,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.25,
+            yAxisID: 'ySpins'
+          },
+          {
+            label: 'Payouts',
+            data: payouts,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.25,
+            yAxisID: 'yPayouts'
+          }
+        ]
+      },
+      options: {
+        maintainAspectRatio: false,
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: true },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const dsLabel = ctx.dataset.label || '';
+                const val = ctx.parsed.y;
+                if (dsLabel === 'Payouts') {
+                  // show up to 6 decimals but trim trailing zeros
+                  return `${dsLabel}: ${Number(val).toLocaleString(undefined, { maximumFractionDigits: 6 })}`;
+                }
+                return `${dsLabel}: ${val}`;
+              }
+            }
+          }
+        },
+        scales: {
+          ySpins: {
+            type: 'linear',
+            position: 'left',
+            beginAtZero: true,
+            ticks: { precision: 0 }
+          },
+          yPayouts: {
+            type: 'linear',
+            position: 'right',
+            beginAtZero: true,
+            grid: { drawOnChartArea: false }
+          },
+          x: {
+            ticks: { maxRotation: 0, autoSkip: true, autoSkipPadding: 12 }
+          }
+        }
+      }
+    });
+  }
+
+  function render(range = 'all') {
+    const chosen = range === 'all' ? trimLeadingZeros(fullDays) : filterByRange(fullDays, range);
+    const decimals = window.__wheel_decimals ?? 5;
+    const ds = buildDatasets(chosen, decimals);
+    makeChart(ds);
+  }
+
+  async function init() {
+    try {
+      if (!SERVER_ID || !CONTRACT) {
+        console.warn('chart.js: missing server_id or contract_address in URL');
+      }
+      const { days, decimals } = await fetchWithFallback();
+
+      // Validate / sanitize rows
+      fullDays = (days || []).filter(isValidDayRow).map(r => ({
+        day_et: r.day_et,
+        spins: coerceNumber(r.spins, 0),
+        total_base: coerceNumber(r.total_base, 0)
+      }));
+
+      // cache decimals globally for tooltip formatting
+      window.__wheel_decimals = Number.isFinite(Number(decimals)) ? Number(decimals) : 5;
+
+      // Default selection from any dropdown, else All
+      const initialRange = (rangeSel && rangeSel.value) ? rangeSel.value : 'all';
+      render(initialRange);
+
+      if (rangeSel) {
+        rangeSel.addEventListener('change', () => render(rangeSel.value));
+      }
+    } catch (err) {
+      console.error('chart.js init error:', err);
+      // draw a tiny empty chart to avoid broken UI
+      fullDays = [];
+      makeChart({ labels: [], spins: [], payouts: [] });
+    }
+  }
+
+  document.readyState === 'loading'
+    ? document.addEventListener('DOMContentLoaded', init)
+    : init();
+
+})();
