@@ -29,58 +29,70 @@ export default async function handler(req, res) {
   } = process.env;
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FUNDING_WALLET_PRIVATE_KEY || !SPIN_KEY) {
-    console.error('FATAL env missing');
-    return res.status(500).json({ error: 'Server configuration error. Missing env.' });
+    console.error('FATAL: missing env');
+    return res.status(500).json({ error: 'Server configuration error.' });
   }
 
   const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   try {
-    const body = req.body || {};
+    // Body may be object or string depending on hosting; normalize.
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const { token: signedToken, spin, server_id } = body;
+
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
 
-    // 1) Verify HMAC (matches how your bot signs page links)
+    // Verify HMAC format + signature
     const [tokenPart, tokenSig] = String(signedToken).split('.');
     if (!tokenPart || !tokenSig) return res.status(400).json({ error: 'Invalid token format' });
     const expected = createHmac('sha256', SPIN_KEY).update(tokenPart).digest('hex');
     if (tokenSig !== expected) return res.status(403).json({ error: 'Invalid or forged token' });
 
-    // 2) Fetch the spin token row — try FULL token first, then fall back to bare token
+    // Fetch spin token row — tolerate different storage styles
+    const candidates = [signedToken, tokenPart];
     let tokenRow = null;
+
+    // 1) token IN (...)
     {
       const { data, error } = await supabase
         .from('spin_tokens')
         .select('discord_id, wallet_address, contract_address, server_id, used')
-        .eq('token', signedToken)
-        .single();
-      if (!error && data) tokenRow = data;
+        .in('token', candidates)
+        .limit(1);
+
+      if (!error && data && data.length) tokenRow = data[0];
     }
+    // 2) signature IN (...) (some old rows were saved wrong)
     if (!tokenRow) {
       const { data, error } = await supabase
         .from('spin_tokens')
         .select('discord_id, wallet_address, contract_address, server_id, used')
-        .eq('token', tokenPart)
-        .single();
-      if (!error && data) tokenRow = data;
+        .in('signature', candidates)
+        .limit(1);
+
+      if (!error && data && data.length) tokenRow = data[0];
     }
 
-    if (!tokenRow) return res.status(400).json({ error: 'Invalid token' });
-    if (tokenRow.used) return res.status(400).json({ error: 'This spin token has already been used' });
+    if (!tokenRow) {
+      return res.status(400).json({ error: 'Invalid token' });
+    }
+    if (tokenRow.used) {
+      return res.status(400).json({ error: 'This spin token has already been used' });
+    }
 
-    // If token row has a server_id, enforce it; if null/empty, let server validation below decide
+    // If the token row has a server_id and it doesn’t match, reject.
     if (tokenRow.server_id && tokenRow.server_id !== server_id) {
       return res.status(400).json({ error: 'Invalid token for this server' });
     }
 
     const { discord_id, wallet_address, contract_address } = tokenRow;
 
-    // 3) Validate the server/mint and read user role/limit
+    // Validate server → allowed mints; read limit & role
     const [
-      { data: serverTokens, error: serverTokenError },
-      { data: userData, error: userError },
+      { data: serverTokens, error: serverErr },
+      { data: userData, error: userErr },
       { data: adminData },
     ] = await Promise.all([
       supabase.from('server_tokens').select('contract_address').eq('server_id', server_id),
@@ -88,39 +100,39 @@ export default async function handler(req, res) {
       supabase.from('server_admins').select('role').eq('discord_id', discord_id).eq('server_id', server_id).single(),
     ]);
 
-    if (serverTokenError || !serverTokens?.some(t => t.contract_address === contract_address)) {
+    if (serverErr || !serverTokens?.some(t => t.contract_address === contract_address)) {
       return res.status(400).json({ error: 'Invalid token for this server' });
     }
-    if (userError || !userData) return res.status(400).json({ error: 'User not found' });
+    if (userErr || !userData) return res.status(400).json({ error: 'User not found' });
 
     const role = adminData?.role || null;
     const isSuperadmin = role === 'superadmin';
 
-    // 4) Global 24h limit per user (superadmin bypasses)
+    // 24h limit per user (global)—superadmin bypasses
     let spins_left = userData.spin_limit;
     if (!isSuperadmin) {
       const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-      // Prefer created_at_utc if exists; fallback to created_at
-      let cntResp = await supabase
+      // Prefer created_at_utc; fall back to created_at
+      let cnt = await supabase
         .from('daily_spins')
         .select('id', { head: true, count: 'exact' })
         .eq('discord_id', discord_id)
         .gte('created_at_utc', sinceISO);
 
-      if (cntResp.error && /column .* does not exist/i.test(cntResp.error.message)) {
-        cntResp = await supabase
+      if (cnt.error && /column .* does not exist/i.test(cnt.error.message)) {
+        cnt = await supabase
           .from('daily_spins')
           .select('id', { head: true, count: 'exact' })
           .eq('discord_id', discord_id)
           .gte('created_at', sinceISO);
       }
-      if (cntResp.error) {
-        console.error('Spin count error:', cntResp.error.message);
+      if (cnt.error) {
+        console.error('Spin count error:', cnt.error.message);
         return res.status(500).json({ error: 'DB error checking spin history' });
       }
 
-      const used = cntResp.count ?? 0;
+      const used = cnt.count ?? 0;
       const limit = Number(userData.spin_limit ?? 0);
       if (used >= limit) return res.status(403).json({ error: 'Daily spin limit reached' });
       spins_left = Math.max(0, limit - used);
@@ -128,7 +140,7 @@ export default async function handler(req, res) {
       spins_left = 'Unlimited';
     }
 
-    // 5) Load wheel config
+    // Load wheel configuration
     const { data: cfg, error: cfgErr } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -140,7 +152,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No payout amounts configured.' });
     }
 
-    // 6) CONFIG path (initial page load)
+    // CONFIG path — initial page load
     if (!spin) {
       let adminInfo;
       if (role === 'admin' || role === 'superadmin') {
@@ -156,14 +168,14 @@ export default async function handler(req, res) {
             tokenAmt = bal.value.uiAmount;
           } catch {}
 
-          // SOL balance (gas)
+          // SOL balance
           let gasAmt = 'N/A';
           try {
             const lamports = await connection.getBalance(pool, 'processed');
             gasAmt = lamports / LAMPORTS_PER_SOL;
           } catch {}
 
-          // USD values (best-effort)
+          // USD (best-effort)
           let tokenUsdValue = 'N/A';
           let gasUsdValue = 'N/A';
           if (COINMARKETCAP_API_KEY) {
@@ -211,10 +223,11 @@ export default async function handler(req, res) {
       return res.status(200).json({ tokenConfig, spins_left, adminInfo, role, contract_address });
     }
 
-    // 7) SPIN path
+    // SPIN path
     const weights = Array.isArray(cfg.payout_weights) && cfg.payout_weights.length === cfg.payout_amounts.length
       ? cfg.payout_weights
       : cfg.payout_amounts.map(() => 1);
+
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const r = randomInt(0, totalWeight);
     let sum = 0, idx = 0;
@@ -227,7 +240,7 @@ export default async function handler(req, res) {
     const user = new PublicKey(wallet_address);
     const mint = new PublicKey(contract_address);
 
-    // default decimals=5 (HAROLD/FATCOIN); avoids RPC metadata call
+    // Use known decimals=5 for your tokens (HAROLD/FATCOIN)
     const decimals = 5;
     const amountBase = BigInt(rewardAmount) * BigInt(10 ** decimals);
 
@@ -247,7 +260,6 @@ export default async function handler(req, res) {
     if (!toInfo)   ixs.push(createAssociatedTokenAccountInstruction(funding.publicKey, toATA, user, mint));
     ixs.push(createTransferInstruction(fromATA, toATA, funding.publicKey, Number(amountBase)));
 
-    // Send with fresh blockhash + confirm + transient retry
     let signature = null;
     let lastErr = null;
     for (let attempt = 1; attempt <= 4; attempt++) {
@@ -272,14 +284,14 @@ export default async function handler(req, res) {
       } catch (e) {
         lastErr = e;
         const m = String(e?.message || e);
-        if (
+        const retryable =
           m.includes('block height exceeded') ||
           m.includes('expired') ||
           m.includes('BlockhashNotFound') ||
           m.includes('socket hang up') ||
           m.includes('ECONNRESET') ||
-          m.includes('429')
-        ) {
+          m.includes('429');
+        if (retryable && attempt < 4) {
           await new Promise(r => setTimeout(r, 600));
           continue;
         }
@@ -291,10 +303,10 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Failed to send transfer' });
     }
 
-    // 8) Record spin — try modern columns first; fallback to legacy names
+    // Record spin — modern columns first; fall back to legacy names
     const nowIso = new Date().toISOString();
-
     let insertError = null;
+
     {
       const { error } = await supabase.from('daily_spins').insert({
         discord_id,
@@ -309,7 +321,6 @@ export default async function handler(req, res) {
       insertError = error || null;
     }
     if (insertError && /column .* does not exist/i.test(insertError.message)) {
-      // legacy fallback
       const { error: legacyErr } = await supabase.from('daily_spins').insert({
         discord_id,
         server_id,
@@ -327,8 +338,11 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Failed to record spin' });
     }
 
-    // Burn token only after DB insert succeeds
-    await supabase.from('spin_tokens').update({ used: true, signature }).eq('token', signedToken).or(`token.eq.${tokenPart}`);
+    // Mark token used (accept either stored form)
+    await supabase
+      .from('spin_tokens')
+      .update({ used: true, signature })
+      .or(`token.eq.${signedToken},token.eq.${tokenPart},signature.eq.${signedToken},signature.eq.${tokenPart}`);
 
     return res.status(200).json({ segmentIndex: idx, prize: prizeText, spins_left });
   } catch (err) {
