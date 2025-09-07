@@ -19,10 +19,10 @@ async function handleSpinCommand(interaction, supabase, retryQuery) {
     { data: adminData, error: adminError },
     { data: userPref, error: prefError }
   ] = await Promise.all([
-    retryQuery(() => supabase.from('users').select('wallet_address, spin_limit').eq('discord_id', discord_id).single()),
+    retryQuery(() => supabase.from('users').select('wallet_address, spin_limit').eq('discord_id', discord_id).maybeSingle()),
     retryQuery(() => supabase.from('server_tokens').select('contract_address, default_token').eq('server_id', server_id)),
-    retryQuery(() => supabase.from('server_admins').select('role').eq('discord_id', discord_id).eq('server_id', server_id).single()),
-    retryQuery(() => supabase.from('user_preferences').select('last_token').eq('discord_id', discord_id).eq('server_id', server_id).single())
+    retryQuery(() => supabase.from('server_admins').select('role').eq('discord_id', discord_id).eq('server_id', server_id).maybeSingle()),
+    retryQuery(() => supabase.from('user_preferences').select('last_token').eq('discord_id', discord_id).eq('server_id', server_id).maybeSingle())
   ]);
 
   if (userError || !userData?.wallet_address) {
@@ -115,7 +115,7 @@ async function handleSpinCommand(interaction, supabase, retryQuery) {
       contract_address: coin.contract_address,
       token: signedToken,
       used: false
-    }).select('token').single()
+    }).select('token').maybeSingle()
   );
   if (tokenError) {
     console.error(`Token insert error: ${tokenError.message}`);
@@ -155,17 +155,17 @@ async function handleWalletCommand(interaction, supabase, retryQuery) {
     }
 
     const { data, error } = await retryQuery(() =>
-      supabase.from('users').upsert({ discord_id, wallet_address, spin_limit: 1 }).select('wallet_address').single()
+      supabase.from('users').upsert({ discord_id, wallet_address, spin_limit: 1 }).select('wallet_address').maybeSingle()
     );
     if (error) {
       console.error(`Wallet upsert error: ${error.message}`);
       return interaction.editReply({ content: `❌ Failed to save wallet address.`, flags: 64 });
     }
-    console.log(`Wallet saved: ${data.wallet_address}`);
-    return interaction.editReply({ content: `✅ Wallet address saved: \`${data.wallet_address}\``, flags: 64 });
+    console.log(`Wallet saved: ${data?.wallet_address}`);
+    return interaction.editReply({ content: `✅ Wallet address saved: \`${data?.wallet_address}\``, flags: 64 });
   } else {
     const { data, error } = await retryQuery(() =>
-      supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
+      supabase.from('users').select('wallet_address').eq('discord_id', discord_id).maybeSingle()
     );
     if (error || !data?.wallet_address) {
       console.error(`Wallet query error: ${error?.message || 'No wallet found'}`);
@@ -213,13 +213,13 @@ async function handleSetTokenCommand(interaction, supabase, retryQuery) {
   }
 
   const { data: adminData, error: adminError } = await retryQuery(() =>
-    supabase.from('server_admins').select('role').eq('server_id', server_id).eq('discord_id', discord_id).single()
+    supabase.from('server_admins').select('role').eq('server_id', server_id).eq('discord_id', discord_id).maybeSingle()
   );
   const isOwner = interaction.guild.ownerId === discord_id;
   if (adminError || adminData?.role !== 'superadmin') {
     const errorMsg = isOwner 
       ? `[${timestamp}] Server owner ${discord_id} attempted /settoken for ${contract_address} without superadmin role on server ${server_id}`
-      : `[${timestamp}] Unauthorized /settoken by ${discord_id} for ${contract_address} on server ${server_id}`;
+      : `[${timestamp}] Unauthorized /settoken by ${discord_id} for ${contract_address} on ${server_id}`;
     console.error(errorMsg);
     return interaction.editReply({ content: `❌ You must be a superadmin on this server to use this command.`, flags: 64 });
   }
@@ -230,7 +230,7 @@ async function handleSetTokenCommand(interaction, supabase, retryQuery) {
   }
 
   const { data: configData, error: configError } = await retryQuery(() =>
-    supabase.from('wheel_configurations').select('token_name').eq('contract_address', contract_address).single()
+    supabase.from('wheel_configurations').select('token_name').eq('contract_address', contract_address).maybeSingle()
   );
   if (configError || !configData) {
     console.error(`[${timestamp}] Config error: ${configError?.message || 'No config found'}`);
@@ -254,7 +254,7 @@ async function handleSetTokenCommand(interaction, supabase, retryQuery) {
         server_id, 
         contract_address, 
         default_token: set_default 
-      }).select('contract_address').single()
+      }).select('contract_address').maybeSingle()
     );
     if (error) {
       console.error(`[${timestamp}] Token insert error: ${error.message}`);
