@@ -54,7 +54,7 @@ export default async function handler(req, res) {
       .from('spin_tokens')
       .select('discord_id, wallet_address, contract_address, used')
       .eq('token', signedToken)
-      .single();
+      .maybeSingle(); // <-- changed from .single()
 
     if (tErr || !t) return res.status(400).json({ error: 'Invalid token' });
     if (t.used)     return res.status(400).json({ error: 'This spin token has already been used' });
@@ -80,7 +80,7 @@ export default async function handler(req, res) {
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
       .eq('contract_address', contract_address)
-      .single();
+      .maybeSingle(); // <-- changed from .single()
 
     if (cfgErr || !cfg) return res.status(400).json({ error: 'Invalid wheel configuration' });
 
