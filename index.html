@@ -15,14 +15,23 @@
     #canvas-mechanics { position:absolute; top:0; left:0; z-index:1; opacity:0; width:100%; height:100%; }
     #wheel-overlay { position:absolute; top:0; left:0; width:100%; height:100%; z-index:2; pointer-events:none; display:none; }
     #canvas-text { position:absolute; top:0; left:0; z-index:3; pointer-events:none; width:100%; height:100%; }
-    #spin-button { display:inline-block; margin-top:6px; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
-    #spin-button:disabled, #spin-button.hidden { display:none; }
+
+    #spin-button { display:inline-block; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
+    #spin-button:disabled { opacity:0.8; cursor:not-allowed; }
+
     #message { margin-top:6px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; min-height:1.4em; }
+
     #admin-link { position:fixed; right:16px; bottom:16px; display:none; padding:10px 14px; font-size:13px; background:#0ea5e9; color:#fff; border:none; border-radius:12px; cursor:pointer; box-shadow:0 8px 30px rgba(0,0,0,0.5); }
     #admin-link.hidden { display:none; }
+
+    /* Superadmin-only V2 switch (bottom-left) */
+    #try-v2 { position:fixed; left:16px; bottom:16px; display:none; padding:10px 14px; font-size:13px; background:#a855f7; color:#fff; border:none; border-radius:12px; cursor:pointer; box-shadow:0 8px 30px rgba(0,0,0,0.5); }
+    #try-v2.hidden { display:none; }
+
     @media (max-width: 900px) {
       .main { overflow:auto; }
       #admin-link { right:12px; bottom:12px; }
+      #try-v2 { left:12px; bottom:12px; }
     }
   </style>
 </head>
@@ -35,12 +44,15 @@
         <img id="wheel-overlay" alt="Wheel Overlay"/>
         <canvas id="canvas-text"></canvas>
       </div>
+
+      <!-- Original CTA layout kept to avoid changing existing behavior -->
       <button id="spin-button" disabled>SPIN</button>
       <div id="message"></div>
     </div>
   </div>
 
   <button id="admin-link">ADMIN</button>
+  <button id="try-v2">TRY V2</button>
 
   <script>
     window.onload = function () {
@@ -62,11 +74,13 @@
       const messageDiv = document.getElementById("message");
       const overlayImg = document.getElementById("wheel-overlay");
       const adminBtn = document.getElementById("admin-link");
+      const tryV2Btn = document.getElementById("try-v2");
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
         spinButton.disabled = true;
-        spinButton.classList.add("hidden");
+        adminBtn.style.display = 'none';
+        tryV2Btn.style.display = 'none';
         return;
       }
 
@@ -114,12 +128,20 @@
             overlayImg.style.display = 'none';
           }
 
+          // Superadmin-only controls
           if (role === 'superadmin') {
-            const href = `/adminpanel.html?server_id=${encodeURIComponent(server_id)}&contract_address=${encodeURIComponent(contract_address || '')}${image_url ? `&image_url=${encodeURIComponent(image_url)}` : ''}`;
-            adminBtn.onclick = () => { window.location.href = href; };
+            // Admin
+            const adminHref = `/adminpanel.html?server_id=${encodeURIComponent(server_id)}&contract_address=${encodeURIComponent(contract_address || '')}${image_url ? `&image_url=${encodeURIComponent(image_url)}` : ''}`;
+            adminBtn.onclick = () => { window.location.href = adminHref; };
             adminBtn.style.display = 'inline-block';
+
+            // Try V2
+            const v2Href = `/index-v2.html?server_id=${encodeURIComponent(server_id)}&token=${encodeURIComponent(token)}`;
+            tryV2Btn.onclick = () => { window.location.href = v2Href; };
+            tryV2Btn.style.display = 'inline-block';
           } else {
-            adminBtn.classList.add('hidden');
+            adminBtn.style.display = 'none';
+            tryV2Btn.style.display = 'none';
           }
 
           const container = document.getElementById('wheel-container');
@@ -138,20 +160,19 @@
                 messageDiv.textContent = announcedPrize ? `You won: ${announcedPrize}\n${spinsLeftText}` : `Spin completed.\n${spinsLeftText}`;
                 isSpinning = false;
                 spinButton.disabled = true;
-                spinButton.classList.add("hidden");
               }
             }
           });
 
           drawTextWheel();
           spinButton.disabled = false;
-          spinButton.classList.remove("hidden");
         } catch (err) {
           messageDiv.textContent = (err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached')
             ? 'You have used all your free spins today'
             : err.message;
           spinButton.disabled = true;
-          spinButton.classList.add("hidden");
+          adminBtn.style.display = 'none';
+          tryV2Btn.style.display = 'none';
         }
       }
 
@@ -200,7 +221,6 @@
         hasSpun = true;
         isSpinning = true;
         spinButton.disabled = true;
-        spinButton.classList.add("hidden");
         messageDiv.textContent = "Preparing your spin...";
 
         try {
@@ -240,7 +260,6 @@
           isSpinning = false;
           hasSpun = false;
           spinButton.disabled = true;
-          spinButton.classList.add("hidden");
         }
       }
 
