@@ -1,3 +1,7 @@
+// /api/spin.js
+// Secure spin + SPL transfer + DB write with robust weighted selection.
+// Fix: coerce payout_amounts/weights to numbers; validate lengths; reject zeros; uniform fallback.
+
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import {
@@ -8,9 +12,16 @@ import {
 import { createHmac, randomInt } from 'crypto';
 import { sendTxWithFreshBlockhash } from '../lib/solanaSend.js';
 
+function bad(res, code, msg, details) {
+  res.status(code).json({ error: msg, details });
+}
+
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json');
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  if (req.method !== 'POST') {
+    return bad(res, 405, 'Method not allowed');
+  }
 
   try {
     const {
@@ -23,228 +34,263 @@ export default async function handler(req, res) {
     } = process.env;
 
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FUNDING_WALLET_PRIVATE_KEY || !SPIN_KEY) {
-      console.error('FATAL: missing env (SUPABASE_URL / key / funding wallet / SPIN_KEY).');
-      return res.status(500).json({ error: 'Server configuration error. Contact admin.' });
+      console.error('FATAL envs missing for spin');
+      return bad(res, 500, 'Server not configured');
     }
 
-    const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
-    const { token: signedToken, spin, server_id } = req.body;
-    if (!signedToken) return res.status(400).json({ error: 'Token required' });
-    if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
+    // --------- Parse body & validate token ------------
+    const { token: signedToken, spin, server_id } = req.body || {};
+    if (!signedToken) return bad(res, 400, 'Token required');
+    if (!server_id)   return bad(res, 400, 'Server ID required');
 
-    // Verify link signature
-    const [tokenPart, sigPart] = String(signedToken).split('.');
-    if (!tokenPart || !sigPart) return res.status(400).json({ error: 'Invalid token format' });
-    const expectedSignature = createHmac('sha256', SPIN_KEY).update(tokenPart).digest('hex');
-    if (sigPart !== expectedSignature) return res.status(403).json({ error: 'Invalid or forged token' });
+    const [token, sigPart] = String(signedToken).split('.');
+    if (!token || !sigPart) return bad(res, 400, 'Invalid token format');
+    const expected = createHmac('sha256', SPIN_KEY).update(token).digest('hex');
+    if (sigPart !== expected) return bad(res, 403, 'Invalid or forged token');
 
-    // Fetch token row (DO NOT claim here)
-    const { data: tokenRow, error: tokenErr } = await supabase
+    // Stored token row
+    const { data: t, error: tErr } = await supabase
       .from('spin_tokens')
-      .select('used, discord_id, wallet_address, contract_address, created_at')
+      .select('discord_id, wallet_address, contract_address, server_id, used')
       .eq('token', signedToken)
       .single();
 
-    if (tokenErr || !tokenRow) return res.status(400).json({ error: 'Invalid token' });
+    if (tErr || !t) return bad(res, 400, 'Invalid token');
+    if (t.server_id !== server_id) return bad(res, 400, 'Invalid token for this server');
+    const { discord_id, wallet_address, contract_address } = t;
+    if (t.used) return bad(res, 400, 'This spin token has already been used');
 
-    // Load wheel config for this mint
-    const { data: config, error: cfgErr } = await supabase
-      .from('wheel_configurations')
-      .select('token_name, payout_amounts, payout_weights, image_url')
-      .eq('contract_address', tokenRow.contract_address)
-      .single();
-    if (cfgErr || !config) return res.status(400).json({ error: 'Invalid wheel configuration' });
-    if (!Array.isArray(config.payout_amounts) || config.payout_amounts.length === 0) {
-      return res.status(400).json({ error: 'No payout amounts configured.' });
-    }
-
-    // Validate mint belongs to this server (enabled)
-    {
-      const { data: st, error: stErr } = await supabase
-        .from('server_tokens')
-        .select('contract_address, enabled')
-        .eq('server_id', server_id);
-      if (stErr || !st?.some(t => t.contract_address === tokenRow.contract_address && t.enabled !== false)) {
-        return res.status(400).json({ error: 'Invalid token for this server' });
-      }
-    }
-
-    // Role + limit
-    const [{ data: userData, error: userErr }, { data: adminRow }] = await Promise.all([
-      supabase.from('users').select('spin_limit').eq('discord_id', tokenRow.discord_id).single(),
-      supabase.from('server_admins').select('role').eq('discord_id', tokenRow.discord_id).eq('server_id', server_id).single()
+    // Validate server+token mapping
+    const [{ data: st, error: stErr }, { data: roleRow }] = await Promise.all([
+      supabase.from('server_tokens').select('contract_address').eq('server_id', server_id),
+      supabase.from('server_admins').select('role').eq('discord_id', discord_id).eq('server_id', server_id).maybeSingle(),
     ]);
-    if (userErr || !userData) return res.status(400).json({ error: 'User not found' });
-    const role = adminRow?.role || null;
+    if (stErr || !st?.some(x => x.contract_address === contract_address)) {
+      return bad(res, 400, 'Token not enabled on this server');
+    }
+    const role = roleRow?.role || null;
     const isSuperadmin = role === 'superadmin';
 
-    // -------- CONFIG PATH (page load) --------
-    if (!spin) {
-      if (tokenRow.used) return res.status(400).json({ error: 'This spin token has already been used' });
+    // --------- Daily limit (per user per day per token per server) ----------
+    let spins_left;
+    if (!isSuperadmin) {
+      const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { count, error: cntErr } = await supabase
+        .from('daily_spins')
+        .select('id', { count: 'exact', head: true })
+        .eq('discord_id', discord_id)
+        .eq('server_id', server_id)
+        .eq('contract_address', contract_address)
+        .gte('created_at_utc', sinceISO);
+      if (cntErr) return bad(res, 500, 'DB error checking spin history', cntErr.message);
+      const used = count ?? 0;
+      const { data: uRow } = await supabase
+        .from('users').select('spin_limit').eq('discord_id', discord_id).maybeSingle();
+      const limit = Number(uRow?.spin_limit ?? 1);
+      if (used >= limit) return bad(res, 403, 'Daily spin limit reached');
+      spins_left = Math.max(0, limit - used);
+    } else {
+      spins_left = 'Unlimited';
+    }
 
-      // Admin balances (best-effort only)
+    // --------- Load wheel config ----------
+    const { data: cfg, error: cfgErr } = await supabase
+      .from('wheel_configurations')
+      .select('token_name, payout_amounts, payout_weights, image_url')
+      .eq('contract_address', contract_address)
+      .single();
+    if (cfgErr || !cfg) return bad(res, 400, 'Wheel not configured for this token');
+
+    // Coerce to **numbers** and validate
+    const amounts = Array.isArray(cfg.payout_amounts)
+      ? cfg.payout_amounts.map(n => Number(n)).filter(Number.isFinite)
+      : [];
+    let weights = Array.isArray(cfg.payout_weights)
+      ? cfg.payout_weights.map(n => Number(n)).map(n => (Number.isFinite(n) && n > 0 ? n : 0))
+      : [];
+
+    // If any mismatch/invalid, force uniform weights
+    let usedFallback = false;
+    if (weights.length !== amounts.length || amounts.length === 0 || weights.reduce((a, b) => a + b, 0) <= 0) {
+      weights = Array(amounts.length).fill(1);
+      usedFallback = true;
+    }
+
+    // ---------- CONFIG PATH (no spin; just return config/info) ----------
+    if (!spin) {
+      // Optional admin balances (best-effort)
       let adminInfo;
       if (role === 'admin' || role === 'superadmin') {
         try {
-          const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-          const poolPk = funding.publicKey;
+          const payer = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+          const poolPubkey = payer.publicKey;
+          const tokenMint = new PublicKey(contract_address);
+          const ata = await getAssociatedTokenAddress(tokenMint, poolPubkey);
 
-          let tokenAmt = 'N/A';
+          let tokenAmt = 'N/A', gasAmt = 'N/A', tokenUsdValue = 'N/A', gasUsdValue = 'N/A';
           try {
-            const ata = await getAssociatedTokenAddress(new PublicKey(tokenRow.contract_address), poolPk);
             const bal = await connection.getTokenAccountBalance(ata);
             tokenAmt = bal.value.uiAmount;
           } catch {}
-
-          let gasAmt = 'N/A';
           try {
-            const lamports = await connection.getBalance(poolPk, 'processed');
+            const lamports = await connection.getBalance(poolPubkey, 'processed');
             gasAmt = lamports / LAMPORTS_PER_SOL;
           } catch {}
 
-          let tokenUsdValue = 'N/A', gasUsdValue = 'N/A';
+          // (optional) USD quotes via CMC
           if (COINMARKETCAP_API_KEY) {
             try {
-              const g = await fetch('https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOL&convert=USD', { headers: { 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY }});
-              const gj = await g.json();
-              const solPrice = gj?.data?.SOL?.quote?.USD?.price;
-              if (typeof solPrice === 'number' && typeof gasAmt === 'number') gasUsdValue = (gasAmt * solPrice).toFixed(2);
-            } catch {}
-            try {
-              const sym = String(config.token_name || '').toUpperCase().trim();
-              if (sym) {
-                const t = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${encodeURIComponent(sym)}&convert=USD`, { headers: { 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY }});
-                const tj = await t.json();
-                const price = tj?.data?.[sym]?.quote?.USD?.price;
-                if (typeof price === 'number' && typeof tokenAmt === 'number') tokenUsdValue = (tokenAmt * price).toFixed(2);
+              const gasRes = await fetch('https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOL&convert=USD', {
+                headers: { 'X-CMC_PRO_API_KEY': COINMARKETCAP_API_KEY }
+              });
+              const gasJson = await gasRes.json();
+              const solPrice = gasJson?.data?.SOL?.quote?.USD?.price;
+              if (typeof solPrice === 'number' && typeof gasAmt === 'number') {
+                gasUsdValue = (gasAmt * solPrice).toFixed(2);
               }
             } catch {}
           }
 
           adminInfo = {
             gasSymbol: 'SOL',
-            gasAmt, gasUsdValue,
-            tokenSymbol: config.token_name,
-            tokenAmt, tokenUsdValue,
-            poolAddr: poolPk.toString()
+            gasAmt,
+            gasUsdValue,
+            tokenSymbol: cfg.token_name || 'TOKEN',
+            tokenAmt,
+            tokenUsdValue,
+            poolAddr: poolPubkey.toString(),
           };
         } catch {}
       }
 
       return res.status(200).json({
         tokenConfig: {
-          token_name: config.token_name,
-          payout_amounts: config.payout_amounts,
-          image_url: config.image_url || 'https://solspin.lightningworks.io/img/Wheel_Generic_800px.webp'
+          token_name: cfg.token_name || 'TOKEN',
+          payout_amounts: amounts,
+          image_url: cfg.image_url || 'https://solspin.lightningworks.io/img/Wheel_Generic_800px.webp',
         },
-        spins_left: isSuperadmin ? 'Unlimited' : userData.spin_limit,
+        spins_left,
         adminInfo,
         role,
-        contract_address: tokenRow.contract_address
+        contract_address,
+        // debug hint only for us (not displayed by UI): tells us if weights fell back
+        weights_fallback: usedFallback,
       });
     }
 
-    // -------- SPIN PATH (claim now) --------
-    // Atomically mark link used here (not during config)
-    {
-      const { data: claimed, error: claimErr } = await supabase
-        .from('spin_tokens')
-        .update({ used: true, used_at: new Date().toISOString() })
-        .eq('token', signedToken)
-        .eq('used', false)
-        .select('token')
-        .single();
-
-      if (claimErr) {
-        console.error('Token claim error:', claimErr.message);
-        return res.status(500).json({ error: 'Failed to claim token' });
-      }
-      if (!claimed) {
-        return res.status(400).json({ error: 'This spin token has already been used' });
+    // ---------- SPIN PATH: robust weighted selection ----------
+    // Sum can overflow if weights are HUGE; guard by reducing in Number-safe chunks.
+    let totalWeight = 0;
+    for (const w of weights) {
+      totalWeight += w;
+      if (!Number.isFinite(totalWeight)) {
+        return bad(res, 400, 'Invalid wheel weights (overflow)');
       }
     }
-
-    // Daily limit (24h) — scope to this user+server+mint
-    let spins_left = userData.spin_limit;
-    if (!isSuperadmin) {
-      const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const { count, error: cntErr } = await supabase
-        .from('daily_spins')
-        .select('id', { count: 'exact', head: true })
-        .eq('discord_id', tokenRow.discord_id)
-        .eq('server_id', server_id)
-        .eq('contract_address', tokenRow.contract_address)
-        .gte('created_at_utc', sinceISO);
-      if (cntErr) return res.status(500).json({ error: 'DB error checking spin history' });
-      const used = count ?? 0;
-      const limit = Number(userData.spin_limit ?? 0);
-      if (used >= limit) return res.status(403).json({ error: 'Daily spin limit reached' });
-      spins_left = Math.max(0, limit - used);
-    } else {
-      spins_left = 'Unlimited';
+    if (totalWeight <= 0) {
+      // Should never happen due to fallback above
+      weights = Array(amounts.length).fill(1);
+      totalWeight = amounts.length;
+      usedFallback = true;
     }
 
-    // Random pick
-    const weights = Array.isArray(config.payout_weights) && config.payout_weights.length === config.payout_amounts.length
-      ? config.payout_weights
-      : config.payout_amounts.map(() => 1);
-    const totalWeight = weights.reduce((a, b) => a + b, 0);
-    const r = randomInt(0, totalWeight);
-    let acc = 0, idx = 0;
-    for (let i = 0; i < weights.length; i++) { acc += weights[i]; if (r < acc) { idx = i; break; } }
-    const rewardAmount = Number(config.payout_amounts[idx]);
-    const prizeText = `${rewardAmount} ${config.token_name}`;
+    const r = randomInt(0, totalWeight); // 0..totalWeight-1 inclusive
+    let acc = 0, selectedIndex = 0;
+    for (let i = 0; i < weights.length; i++) {
+      acc += weights[i];
+      if (r < acc) {
+        selectedIndex = i;
+        break;
+      }
+    }
+    const rewardAmount = Number(amounts[selectedIndex]); // display units
+    if (!Number.isFinite(rewardAmount) || rewardAmount <= 0) {
+      return bad(res, 400, 'Invalid reward configuration');
+    }
 
-    // Transfer
-    const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-    const userPk = new PublicKey(tokenRow.wallet_address);
-    const mintPk = new PublicKey(tokenRow.contract_address);
+    // ---------- SPL transfer ----------
+    const payer = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+    const userWallet = new PublicKey(wallet_address);
+    const tokenMint = new PublicKey(contract_address);
 
-    const fromAta = await getAssociatedTokenAddress(mintPk, funding.publicKey);
-    const toAta   = await getAssociatedTokenAddress(mintPk, userPk);
+    const fromTokenAddr = await getAssociatedTokenAddress(tokenMint, payer.publicKey);
+    const toTokenAddr   = await getAssociatedTokenAddress(tokenMint, userWallet);
 
     const ixs = [];
     const [fromInfo, toInfo] = await Promise.all([
-      connection.getAccountInfo(fromAta),
-      connection.getAccountInfo(toAta)
+      connection.getAccountInfo(fromTokenAddr),
+      connection.getAccountInfo(toTokenAddr),
     ]);
+
     if (!fromInfo) {
-      ixs.push(createAssociatedTokenAccountInstruction(funding.publicKey, fromAta, funding.publicKey, mintPk));
+      ixs.push(
+        createAssociatedTokenAccountInstruction(
+          payer.publicKey, fromTokenAddr, payer.publicKey, tokenMint
+        )
+      );
     }
     if (!toInfo) {
-      ixs.push(createAssociatedTokenAccountInstruction(funding.publicKey, toAta, userPk, mintPk));
+      ixs.push(
+        createAssociatedTokenAccountInstruction(
+          payer.publicKey, toTokenAddr, userWallet, tokenMint
+        )
+      );
     }
-    ixs.push(createTransferInstruction(fromAta, toAta, funding.publicKey, rewardAmount * (10 ** 5))); // decimals=5
 
-    const txSig = await sendTxWithFreshBlockhash({
-      connection, payer: funding, instructions: ixs, recentAccounts: [], maxRetries: 4, commitment: 'confirmed'
+    // Decimals: 5 (HAROLD). If you later add a decimals column, read it and replace 5 here.
+    const DECIMALS = 5;
+    const baseUnits = BigInt(Math.round(rewardAmount * (10 ** DECIMALS)));
+
+    ixs.push(
+      createTransferInstruction(
+        fromTokenAddr,
+        toTokenAddr,
+        payer.publicKey,
+        Number(baseUnits) // spl-token createTransferInstruction expects number for u64-safe ranges in JS impl
+      )
+    );
+
+    const signature = await sendTxWithFreshBlockhash({
+      connection,
+      payer,
+      instructions: ixs,
+      recentAccounts: [],
+      maxRetries: 4,
+      commitment: 'confirmed',
     });
 
-    // Record spin
+    // ---------- Record spin ----------
     const nowIso = new Date().toISOString();
     const { error: insErr } = await supabase.from('daily_spins').insert({
-      discord_id:  tokenRow.discord_id,
+      discord_id,
       server_id,
-      contract_address: tokenRow.contract_address,
-      wallet_address: tokenRow.wallet_address,
-      reward: rewardAmount,
-      amount_base: rewardAmount * (10 ** 5),
-      signature: txSig,
-      created_at_utc: nowIso
+      contract_address,
+      wallet_address,
+      reward: String(rewardAmount),        // legacy display column (kept for now)
+      amount_base: Number(baseUnits),      // integer base units
+      signature,
+      created_at_utc: nowIso,
     });
     if (insErr) {
       console.error('Spin insert error:', insErr.message);
-      return res.status(500).json({ error: 'Failed to record spin' });
+      return bad(res, 500, 'Failed to record spin', insErr.message);
     }
 
-    // Save signature on token row (bookkeeping)
-    await supabase.from('spin_tokens').update({ signature: txSig }).eq('token', signedToken);
+    // Burn token
+    await supabase.from('spin_tokens').update({ used: true, signature }).eq('token', signedToken);
 
-    return res.status(200).json({ segmentIndex: idx, prize: prizeText, spins_left });
-  } catch (err) {
-    console.error('API error:', err.message, err.stack);
-    return res.status(500).json({ error: 'An internal error occurred.' });
+    return res.status(200).json({
+      segmentIndex: selectedIndex,
+      prize: `${rewardAmount} ${cfg.token_name || 'TOKEN'}`,
+      spins_left,
+      // debug echo so we can verify once and then remove:
+      debug_weights_used: { amounts, weights, usedFallback },
+    });
+  } catch (e) {
+    console.error('spin fatal:', e);
+    return bad(res, 500, 'Spin error', String(e?.message || e));
   }
 }
