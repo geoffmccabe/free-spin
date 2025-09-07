@@ -221,7 +221,7 @@ export default async function handler(req, res) {
     }
 
     const rewardAmount = Number(config.payout_amounts[selectedIndex]); // display units
-    const amountBase = rewardAmount * (10 ** 5);                       // 5 decimals as per your mint
+    const amountBase = rewardAmount * (10 ** 5);                       // 5 decimals (HAROLD)
     const prizeText = `${rewardAmount} ${config.token_name}`;
 
     const fundingWallet = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
@@ -266,14 +266,16 @@ export default async function handler(req, res) {
       commitment: 'confirmed',
     });
 
-    // Record spin (omit created_at_utc; your trigger handles timestamps)
+    // Record spin — IMPORTANT: include wallet_address (many schemas mark it NOT NULL)
     const { error: insertErr } = await supabase.from('daily_spins').insert({
       discord_id,
       server_id,
       contract_address,
-      reward: rewardAmount,   // legacy display units
-      amount_base: amountBase,
-      signature: sig,
+      wallet_address,           // <— add this; many installs require it
+      reward: rewardAmount,     // legacy display units
+      amount_base: amountBase,  // bigint
+      signature: sig
+      // created_at_utc is set by your trigger
     });
 
     if (insertErr) {
