@@ -16,8 +16,13 @@
     #wheel-overlay { position:absolute; top:0; left:0; width:100%; height:100%; z-index:2; pointer-events:none; display:none; }
     #canvas-text { position:absolute; top:0; left:0; z-index:3; pointer-events:none; width:100%; height:100%; }
 
+    /* Simple admin links top-left */
+    #admin-links { position:fixed; top:12px; left:12px; z-index:1000; display:none; gap:12px; font-size:14px; }
+    #admin-links a { color:#0ea5e9; text-decoration:none; font-weight:800; }
+    #admin-links a:hover { text-decoration:underline; }
+
     /* CTA band prevents layout shift */
-    #cta-band { min-height: 84px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; }
+    #cta-band { min-height: 96px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; }
 
     /* Glow button */
     #spin-button {
@@ -51,16 +56,18 @@
     #message.big { font-size:22px; font-weight:900; }
     .gold { color:#FFD700; font-weight:900; text-shadow: 0 0 10px rgba(255,215,0,0.6); }
 
-    #admin-link { position:fixed; right:16px; bottom:16px; display:none; padding:10px 14px; font-size:13px; background:#0ea5e9; color:#fff; border:none; border-radius:12px; cursor:pointer; box-shadow:0 8px 30px rgba(0,0,0,0.5); }
-    #admin-link.hidden { display:none; }
-
     @media (max-width: 900px) {
       .main { overflow:auto; }
-      #admin-link { right:12px; bottom:12px; }
+      #admin-links { top:10px; left:10px; font-size:13px; }
     }
   </style>
 </head>
 <body>
+  <div id="admin-links">
+    <a id="admin-link" href="#">ADMIN</a>
+    <a id="back-v1-link" href="#">BACK TO V1</a>
+  </div>
+
   <div class="main">
     <div id="wheel-wrap">
       <div id="wheel-container">
@@ -70,15 +77,12 @@
         <canvas id="canvas-text"></canvas>
       </div>
 
-      <!-- Fixed-height CTA band to prevent layout shift -->
       <div id="cta-band">
         <button id="spin-button" disabled>SPIN</button>
         <div id="message"></div>
       </div>
     </div>
   </div>
-
-  <button id="admin-link">ADMIN</button>
 
   <script>
     window.onload = function () {
@@ -99,12 +103,14 @@
       const spinButton = document.getElementById("spin-button");
       const messageDiv = document.getElementById("message");
       const overlayImg = document.getElementById("wheel-overlay");
-      const adminBtn = document.getElementById("admin-link");
+      const adminLinks = document.getElementById("admin-links");
+      const adminAnchor = document.getElementById("admin-link");
+      const backV1Anchor = document.getElementById("back-v1-link");
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
         spinButton.disabled = true;
-        adminBtn.style.display = 'none';
+        adminLinks.style.display = 'none';
         return;
       }
 
@@ -134,6 +140,16 @@
           role = data.role || null;
           contract_address = data.contract_address || null;
 
+          // admin links (admins/superadmins only)
+          if (role === 'admin' || role === 'superadmin') {
+            const adminHref = `/adminpanel.html?server_id=${encodeURIComponent(server_id)}&contract_address=${encodeURIComponent(contract_address || '')}${image_url ? `&image_url=${encodeURIComponent(image_url)}` : ''}`;
+            adminAnchor.href = adminHref;
+            backV1Anchor.href = `/index.html?server_id=${encodeURIComponent(server_id)}&token=${encodeURIComponent(token)}`;
+            adminLinks.style.display = 'flex';
+          } else {
+            adminLinks.style.display = 'none';
+          }
+
           const payout_amounts = Array.isArray(window_payout_amounts) ? window_payout_amounts : [];
           segments = payout_amounts.map((amount) => ({
             text: `${amount}`,
@@ -150,14 +166,6 @@
             img.src = image_url;
           } else {
             overlayImg.style.display = 'none';
-          }
-
-          if (role === 'superadmin') {
-            const href = `/adminpanel.html?server_id=${encodeURIComponent(server_id)}&contract_address=${encodeURIComponent(contract_address || '')}${image_url ? `&image_url=${encodeURIComponent(image_url)}` : ''}`;
-            adminBtn.onclick = () => { window.location.href = href; };
-            adminBtn.style.display = 'inline-block';
-          } else {
-            adminBtn.style.display = 'none';
           }
 
           const container = document.getElementById('wheel-container');
@@ -192,7 +200,7 @@
             ? 'You have used all your free spins today'
             : err.message;
           spinButton.disabled = true;
-          adminBtn.style.display = 'none';
+          adminLinks.style.display = 'none';
         }
       }
 
