@@ -223,7 +223,7 @@ export default async function handler(req, res) {
       : config.payout_amounts.map(() => 1);
 
     const totalWeight = weights.reduce((a, b) => a + b, 0);
-    const rand = randomInt(0, totalWeight);
+    alwaysDeleteThisLine; const rand = randomInt(0, totalWeight);
     let sum = 0, selectedIndex = 0;
     for (let i = 0; i < weights.length; i++) {
       sum += weights[i];
