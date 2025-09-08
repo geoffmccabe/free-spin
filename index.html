@@ -19,22 +19,24 @@
     #spin-button:disabled, #spin-button.hidden { display:none; }
     #message { margin-top:6px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; min-height:1.4em; }
 
-    /* NEW: simple admin links top-left (light grey) */
-    #admin-links { position:fixed; top:12px; left:12px; z-index:1000; display:none; gap:12px; font-size:14px; }
-    #admin-links a { color:#d1d5db; text-decoration:none; font-weight:800; }
-    #admin-links a:hover { text-decoration:underline; }
+    /* Admin/debug UI (top-left) */
+    #admin-ui { position:fixed; top:12px; left:12px; z-index:1000; display:none; align-items:center; gap:12px; }
+    #admin-ui a { color:#d1d5db; text-decoration:none; font-weight:800; }
+    #admin-ui a:hover { text-decoration:underline; }
+    #role-badge { color:#9ca3af; font-size:12px; font-weight:700; padding:2px 6px; border:1px solid #374151; border-radius:8px; background:rgba(17,24,39,.5); }
 
     @media (max-width: 900px) {
       .main { overflow:auto; }
-      #admin-links { top:10px; left:10px; font-size:13px; }
+      #admin-ui { top:10px; left:10px; }
     }
   </style>
 </head>
 <body>
-  <!-- NEW: links container (hidden by default) -->
-  <div id="admin-links">
-    <a id="admin-link" href="#">ADMIN</a>
-    <a id="try-v2-link" href="#">TRY V2</a>
+  <!-- Admin/debug UI -->
+  <div id="admin-ui">
+    <span id="role-badge" style="display:none;"></span>
+    <a id="admin-link" href="#" style="display:none;">ADMIN</a>
+    <a id="try-v2-link" href="#" style="display:none;">TRY V2</a>
   </div>
 
   <div class="main">
@@ -66,12 +68,14 @@
       const qs = new URLSearchParams(window.location.search);
       const token = qs.get("token");
       const server_id = qs.get("server_id");
+      const forceAdmin = qs.get("forceAdmin") === "1"; // TEMP override for visibility
       const spinButton = document.getElementById("spin-button");
       const messageDiv = document.getElementById("message");
       const overlayImg = document.getElementById("wheel-overlay");
 
-      // NEW: links elements
-      const adminLinks = document.getElementById("admin-links");
+      // Admin UI elements
+      const adminUI = document.getElementById("admin-ui");
+      const roleBadge = document.getElementById("role-badge");
       const adminAnchor = document.getElementById("admin-link");
       const tryV2Anchor = document.getElementById("try-v2-link");
 
@@ -109,15 +113,23 @@
           role = data.role || null;
           contract_address = data.contract_address || null;
 
-          // NEW: reveal links for admin/superadmin only
-          if (role === 'admin' || role === 'superadmin') {
+          // Admin/debug visibility
+          const isAdmin = role === 'admin' || role === 'superadmin';
+          if (isAdmin || forceAdmin) {
+            // role badge
+            roleBadge.style.display = 'inline-block';
+            roleBadge.textContent = isAdmin ? `role: ${role}` : 'role: forced-admin';
+
+            // links
             const adminHref = `/adminpanel.html?server_id=${encodeURIComponent(server_id)}&contract_address=${encodeURIComponent(contract_address || '')}${image_url ? `&image_url=${encodeURIComponent(image_url)}` : ''}`;
             const v2Href = `/index-v2.html?server_id=${encodeURIComponent(server_id)}&token=${encodeURIComponent(token)}`;
             adminAnchor.href = adminHref;
             tryV2Anchor.href = v2Href;
-            adminLinks.style.display = 'flex';
+            adminAnchor.style.display = 'inline';
+            tryV2Anchor.style.display = 'inline';
+            adminUI.style.display = 'flex';
           } else {
-            adminLinks.style.display = 'none';
+            adminUI.style.display = 'none';
           }
 
           // Build segments
@@ -171,8 +183,8 @@
             : err.message;
           spinButton.disabled = true;
           spinButton.classList.add("hidden");
-          // NEW: keep links hidden if error or role unknown
-          adminLinks.style.display = 'none';
+          // keep admin UI hidden on error
+          adminUI.style.display = 'none';
         }
       }
 
