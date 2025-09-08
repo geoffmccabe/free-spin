@@ -54,12 +54,22 @@ export default async function handler(req, res) {
       .from('spin_tokens')
       .select('discord_id, wallet_address, contract_address, used')
       .eq('token', signedToken)
-      .maybeSingle(); // <-- changed from .single()
+      .maybeSingle(); // safe single
 
     if (tErr || !t) return res.status(400).json({ error: 'Invalid token' });
     if (t.used)     return res.status(400).json({ error: 'This spin token has already been used' });
 
     const { discord_id, wallet_address, contract_address } = t;
+
+    // ---- LOOKUP ROLE FOR THIS USER ON THIS SERVER ----
+    const { data: adminRec, error: adminErr } = await supabase
+      .from('server_admins')
+      .select('role')
+      .eq('discord_id', discord_id)
+      .eq('server_id', server_id)
+      .maybeSingle();
+
+    const role = adminErr ? null : (adminRec?.role || null);
 
     // ---- SERVER ↔ TOKEN CHECK (must belong to this server) ----
     const { data: stRows, error: stErr } = await supabase
@@ -80,7 +90,7 @@ export default async function handler(req, res) {
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
       .eq('contract_address', contract_address)
-      .maybeSingle(); // <-- changed from .single()
+      .maybeSingle(); // safe single
 
     if (cfgErr || !cfg) return res.status(400).json({ error: 'Invalid wheel configuration' });
 
@@ -107,8 +117,7 @@ export default async function handler(req, res) {
           .gte('created_at_utc', sinceISO);
         const used = count ?? 0;
         spins_left = Math.max(0, 1 - used);
-      } catch (e) {
-        // don’t block the wheel on count errors
+      } catch {
         spins_left = 1;
       }
 
@@ -120,6 +129,7 @@ export default async function handler(req, res) {
         },
         spins_left,
         contract_address,
+        role, // returned on page-load for UI gating
       });
     }
 
@@ -189,7 +199,7 @@ export default async function handler(req, res) {
       server_id,
       wallet_address,
       contract_address,
-      reward: String(rewardDisplay),   // keep legacy display units
+      reward: String(rewardDisplay),   // display units
       amount_base: amountBase,         // canonical
       signature,
       created_at_utc: nowISO,
@@ -197,7 +207,6 @@ export default async function handler(req, res) {
 
     if (insErr) {
       console.error('Insert error:', insErr.message);
-      // NOTE: do NOT revert the on-chain transfer; just report the failure
       return res.status(500).json({ error: 'Failed to record spin' });
     }
 
@@ -211,6 +220,8 @@ export default async function handler(req, res) {
       segmentIndex: idx,
       prize: `${rewardDisplay} ${tokenName}`,
       signature,
+      role, // included here too (not required, but harmless)
+      contract_address,
     });
 
   } catch (err) {
