@@ -18,10 +18,12 @@
     #spin-button { display:inline-block; margin-top:6px; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
     #spin-button:disabled, #spin-button.hidden { display:none; }
     #message { margin-top:6px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; min-height:1.4em; }
-    /* Simple admin links top-left */
+
+    /* NEW: simple admin links top-left (light grey) */
     #admin-links { position:fixed; top:12px; left:12px; z-index:1000; display:none; gap:12px; font-size:14px; }
-    #admin-links a { color:#0ea5e9; text-decoration:none; font-weight:800; }
+    #admin-links a { color:#d1d5db; text-decoration:none; font-weight:800; }
     #admin-links a:hover { text-decoration:underline; }
+
     @media (max-width: 900px) {
       .main { overflow:auto; }
       #admin-links { top:10px; left:10px; font-size:13px; }
@@ -29,6 +31,7 @@
   </style>
 </head>
 <body>
+  <!-- NEW: links container (hidden by default) -->
   <div id="admin-links">
     <a id="admin-link" href="#">ADMIN</a>
     <a id="try-v2-link" href="#">TRY V2</a>
@@ -66,6 +69,8 @@
       const spinButton = document.getElementById("spin-button");
       const messageDiv = document.getElementById("message");
       const overlayImg = document.getElementById("wheel-overlay");
+
+      // NEW: links elements
       const adminLinks = document.getElementById("admin-links");
       const adminAnchor = document.getElementById("admin-link");
       const tryV2Anchor = document.getElementById("try-v2-link");
@@ -91,6 +96,7 @@
 
       async function initializeWheel() {
         try {
+          // Config-only: we do NOT mark token used here
           const res = await fetch("/api/spin", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -103,7 +109,7 @@
           role = data.role || null;
           contract_address = data.contract_address || null;
 
-          // show admin links for admins/superadmins only
+          // NEW: reveal links for admin/superadmin only
           if (role === 'admin' || role === 'superadmin') {
             const adminHref = `/adminpanel.html?server_id=${encodeURIComponent(server_id)}&contract_address=${encodeURIComponent(contract_address || '')}${image_url ? `&image_url=${encodeURIComponent(image_url)}` : ''}`;
             const v2Href = `/index-v2.html?server_id=${encodeURIComponent(server_id)}&token=${encodeURIComponent(token)}`;
@@ -114,6 +120,7 @@
             adminLinks.style.display = 'none';
           }
 
+          // Build segments
           const payout_amounts = Array.isArray(window_payout_amounts) ? window_payout_amounts : [];
           segments = payout_amounts.map((amount) => ({
             text: `${amount}`,
@@ -123,6 +130,7 @@
           }));
           if (segments.length === 0) throw new Error("No payout amounts configured.");
 
+          // Preload overlay image to avoid broken-image flash
           if (image_url) {
             const img = new Image();
             img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
@@ -132,6 +140,7 @@
             overlayImg.style.display = 'none';
           }
 
+          // Mechanics wheel (unchanged)
           const container = document.getElementById('wheel-container');
           const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
 
@@ -162,6 +171,7 @@
             : err.message;
           spinButton.disabled = true;
           spinButton.classList.add("hidden");
+          // NEW: keep links hidden if error or role unknown
           adminLinks.style.display = 'none';
         }
       }
