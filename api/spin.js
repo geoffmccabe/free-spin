@@ -7,7 +7,7 @@ import {
   createTransferInstruction,
 } from '@solana/spl-token';
 import { createHmac, randomInt } from 'crypto';
-import { sendTxWithFreshBlockhash } from '../lib/solanaSend.js';
+import sendTxWithFreshBlockhash from '../lib/solanaSend.js';
 
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json');
@@ -16,7 +16,6 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // ---- ENV ----
   const {
     SUPABASE_URL,
     SUPABASE_SERVICE_ROLE_KEY,
@@ -34,64 +33,54 @@ export default async function handler(req, res) {
   const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
   try {
-    // ---- INPUT ----
     const { token: signedToken, server_id, spin } = req.body || {};
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
 
-    // ---- HMAC VERIFY (uuid.hmac) ----
+    // Token HMAC verify
     const [rawToken, providedSig] = String(signedToken).split('.');
-    if (!rawToken || !providedSig) {
-      return res.status(400).json({ error: 'Invalid token format' });
-    }
+    if (!rawToken || !providedSig) return res.status(400).json({ error: 'Invalid token format' });
     const expectedSig = createHmac('sha256', SPIN_KEY).update(rawToken).digest('hex');
-    if (providedSig !== expectedSig) {
-      return res.status(403).json({ error: 'Invalid token signature' });
-    }
+    if (providedSig !== expectedSig) return res.status(403).json({ error: 'Invalid token signature' });
 
-    // ---- FETCH SPIN TOKEN (NOTE: no server_id column in spin_tokens) ----
+    // Fetch spin token
     const { data: t, error: tErr } = await supabase
       .from('spin_tokens')
       .select('discord_id, wallet_address, contract_address, used')
       .eq('token', signedToken)
-      .maybeSingle(); // safe single
+      .maybeSingle();
 
     if (tErr || !t) return res.status(400).json({ error: 'Invalid token' });
     if (t.used)     return res.status(400).json({ error: 'This spin token has already been used' });
 
     const { discord_id, wallet_address, contract_address } = t;
 
-    // ---- LOOKUP ROLE FOR THIS USER ON THIS SERVER ----
-    const { data: adminRec, error: adminErr } = await supabase
+    // Role lookup
+    const { data: adminRec } = await supabase
       .from('server_admins')
       .select('role')
       .eq('discord_id', discord_id)
       .eq('server_id', server_id)
       .maybeSingle();
+    const role = adminRec?.role || null;
 
-    const role = adminErr ? null : (adminRec?.role || null);
-
-    // ---- SERVER ↔ TOKEN CHECK (must belong to this server) ----
+    // Ensure token allowed for this server
     const { data: stRows, error: stErr } = await supabase
       .from('server_tokens')
       .select('contract_address, enabled')
       .eq('server_id', server_id);
-
     if (stErr || !Array.isArray(stRows) || !stRows.length) {
       return res.status(400).json({ error: 'Server is not configured for any tokens' });
     }
     const allowed = stRows.some(r => r.contract_address === contract_address && (r.enabled !== false));
-    if (!allowed) {
-      return res.status(400).json({ error: 'This token is not enabled for this server' });
-    }
+    if (!allowed) return res.status(400).json({ error: 'This token is not enabled for this server' });
 
-    // ---- LOAD WHEEL CONFIG ----
+    // Load wheel config
     const { data: cfg, error: cfgErr } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
       .eq('contract_address', contract_address)
-      .maybeSingle(); // safe single
-
+      .maybeSingle();
     if (cfgErr || !cfg) return res.status(400).json({ error: 'Invalid wheel configuration' });
 
     const tokenName = cfg.token_name || 'Token';
@@ -99,12 +88,10 @@ export default async function handler(req, res) {
     const weights = Array.isArray(cfg.payout_weights) && cfg.payout_weights.length === amounts.length
       ? cfg.payout_weights.map(Number)
       : amounts.map(() => 1);
-
     if (!amounts.length) return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
 
-    // ---- PAGE LOAD PATH (spin not requested) ----
+    // PAGE LOAD (no spin)
     if (!spin) {
-      // Simple "spins left": 1 per 24h per token per server (superadmins handled in UI separately)
       let spins_left = 1;
       try {
         const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -129,12 +116,12 @@ export default async function handler(req, res) {
         },
         spins_left,
         contract_address,
-        role, // returned on page-load for UI gating
+        role, // used by UI to reveal admin links
       });
     }
 
-    // ---- SPIN PATH ----
-    // Weighted pick (server-side)
+    // SPIN PATH
+    // Weighted pick
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const r = randomInt(0, totalWeight);
     let acc = 0, idx = 0;
@@ -142,11 +129,11 @@ export default async function handler(req, res) {
       acc += weights[i];
       if (r < acc) { idx = i; break; }
     }
-    const rewardDisplay = Number(amounts[idx]);          // e.g. 3, 30, 100, etc.
-    const decimals = 5;                                  // HAROLD / FATCOIN use 5
-    const amountBase = rewardDisplay * (10 ** decimals); // base units
+    const rewardDisplay = Number(amounts[idx]);
+    const decimals = 5; // HAROLD/FATCOIN decimals
+    const amountBase = rewardDisplay * (10 ** decimals);
 
-    // Build & send transfer
+    // Build SPL transfer
     const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
     const userPk  = new PublicKey(wallet_address);
     const mintPk  = new PublicKey(contract_address);
@@ -177,22 +164,30 @@ export default async function handler(req, res) {
       fromATA, toATA, funding.publicKey, amountBase
     ));
 
+    // HARD TIMEOUT WRAPPER around send/confirm to prevent hangs
+    const SEND_TIMEOUT_MS = 25000;
     let signature;
     try {
-      signature = await sendTxWithFreshBlockhash({
-        connection,
-        payer: funding,
-        instructions: ixs,
-        recentAccounts: [],
-        maxRetries: 4,
-        commitment: 'confirmed',
-      });
+      signature = await Promise.race([
+        sendTxWithFreshBlockhash({
+          connection,
+          payer: funding,
+          instructions: ixs,
+          maxRetries: 3,
+          commitment: 'confirmed',
+          perAttemptConfirmTimeoutMs: 9000,
+          overallTimeoutMs: SEND_TIMEOUT_MS,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`send/confirm timed out after ${SEND_TIMEOUT_MS}ms`)), SEND_TIMEOUT_MS)
+        ),
+      ]);
     } catch (e) {
       console.error('Transfer failed:', e?.message || e);
-      return res.status(502).json({ error: 'Token transfer failed' });
+      return res.status(502).json({ error: 'Token transfer failed (network busy). Please try again.' });
     }
 
-    // Record spin (must include created_at_utc for your trigger)
+    // Record spin
     const nowISO = new Date().toISOString();
     const { error: insErr } = await supabase.from('daily_spins').insert({
       discord_id,
@@ -204,9 +199,9 @@ export default async function handler(req, res) {
       signature,
       created_at_utc: nowISO,
     });
-
     if (insErr) {
       console.error('Insert error:', insErr.message);
+      // NOTE: do not revert chain transfer; just report the failure
       return res.status(500).json({ error: 'Failed to record spin' });
     }
 
@@ -220,7 +215,7 @@ export default async function handler(req, res) {
       segmentIndex: idx,
       prize: `${rewardDisplay} ${tokenName}`,
       signature,
-      role, // included here too (not required, but harmless)
+      role, // included; harmless for clients that read it
       contract_address,
     });
 
