@@ -1,7 +1,7 @@
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { createClient } from '@supabase/supabase-js';
 import { Connection } from '@solana/web3.js';
-import { handleLeaderboardCommand } from './leaderboards.js';
+import { handleLeaderboardCommand } from './public/leaderboards.js';
 import { handleSpinCommand, handleWalletCommand, handleSetTokenCommand, handleHelpCommand } from './commands.js';
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
