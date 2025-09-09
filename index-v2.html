@@ -24,7 +24,7 @@
 
     /* Simple admin links top-left */
     #admin-links { position:fixed; top:12px; left:12px; z-index:1000; display:none; gap:12px; font-size:14px; }
-    #admin-links a { color:#0ea5e9; text-decoration:none; font-weight:800; }
+    #admin-links a { color:#aaa; text-decoration:none; font-weight:800; }
     #admin-links a:hover { text-decoration:underline; }
 
     /* CTA band prevents layout shift */
@@ -116,6 +116,7 @@
       let lastAngle = 0;
       let maxDelta = 0;
       let fadeOutTimer = null;
+      let audioUnlocked = false;
 
       // celebrations
       let celebration = null;        // behind
@@ -136,6 +137,24 @@
         spinButton.disabled = true;
         return;
       }
+
+      // --- One-time audio unlock (helps mobile Safari/Chrome) ---
+      function unlockAudioOnce() {
+        if (audioUnlocked) return;
+        audioUnlocked = true;
+        // try to prime both audio elements on the first user gesture
+        [spinAudio, cheerAudio].forEach(a => {
+          try {
+            a.muted = false;
+            a.volume = a === spinAudio ? 0.0 : 0.0; // silent kick
+            const p = a.play();
+            if (p && p.then) p.then(()=>a.pause()).catch(()=>{});
+            a.currentTime = 0;
+          } catch {}
+        });
+        window.removeEventListener('pointerdown', unlockAudioOnce, { passive:true });
+      }
+      window.addEventListener('pointerdown', unlockAudioOnce, { passive:true });
 
       function resizeCanvas() {
         const container = document.getElementById('wheel-container');
@@ -280,10 +299,13 @@
         if (!spinAudio) return;
         try {
           clearInterval(fadeOutTimer);
+          spinAudio.load();           // ensure buffered
           spinAudio.currentTime = 0;
-          spinAudio.volume = 0.9;
+          spinAudio.muted = false;
+          spinAudio.volume = 0.95;
           spinAudio.playbackRate = 1.6; // fast at start
-          spinAudio.play().catch(() => {});
+          const p = spinAudio.play();
+          if (p && p.catch) p.catch(()=>{ /* autoplay guard handled by unlock */ });
         } catch {}
       }
 
@@ -298,11 +320,11 @@
         clearInterval(fadeOutTimer);
         fadeOutTimer = setInterval(() => {
           i++;
-          spinAudio.volume = Math.max(0, 0.9 * (1 - i/steps));
+          spinAudio.volume = Math.max(0, 0.95 * (1 - i/steps));
           if (i >= steps) {
             clearInterval(fadeOutTimer);
             spinAudio.pause();
-            spinAudio.volume = 0.9;
+            spinAudio.volume = 0.95;
           }
         }, 50);
       }
@@ -594,13 +616,14 @@
         return wonW < maxW;
       }
 
-      // Play cheer once (for rare wins)
-      function playCheerOnce() {
+      // Play cheer for any win; louder for rare wins
+      function playCheer(rare) {
         if (!cheerAudio) return;
         try {
           cheerAudio.currentTime = 0;
-          cheerAudio.volume = 1.0;
-          cheerAudio.play().catch(()=>{});
+          cheerAudio.volume = rare ? 1.0 : 0.33; // 1/3 volume for most-common
+          const p = cheerAudio.play();
+          if (p && p.catch) p.catch(()=>{});
         } catch {}
       }
 
@@ -650,10 +673,12 @@
           startSpinSound();
           mechanicsWheel.startAnimation();
 
-          // If this is a rare win: schedule the cheer + front celebration near the end
-          if (isRareWin(segmentIndex)) {
-            setTimeout(() => { playCheerOnce(); startFrontCelebration(6000); }, 1200);
-          }
+          // Decide rare vs common now; schedule cheer (and front celebration if rare)
+          const rare = isRareWin(segmentIndex);
+          setTimeout(() => {
+            playCheer(rare);
+            if (rare) startFrontCelebration(6000);
+          }, 1200);
 
         } catch (err) {
           messageDiv.textContent = `Spin failed: ${err.message}`;
