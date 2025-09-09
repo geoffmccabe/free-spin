@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Spin the Wheel • V2 (sound + celebrations + cheer)</title>
+  <title>Spin the Wheel • V2 (sound fixed + celebrations + cheer)</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.4/TweenMax.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
   <style>
@@ -24,7 +24,7 @@
 
     /* Simple admin links top-left */
     #admin-links { position:fixed; top:12px; left:12px; z-index:1000; display:none; gap:12px; font-size:14px; }
-    #admin-links a { color:#0ea5e9; text-decoration:none; font-weight:800; }
+    #admin-links a { color:#aaa; text-decoration:none; font-weight:800; }
     #admin-links a:hover { text-decoration:underline; }
 
     /* CTA band prevents layout shift */
@@ -62,6 +62,11 @@
     #message.big { font-size:22px; font-weight:900; }
     .gold { color:#FFD700; font-weight:900; text-shadow: 0 0 10px rgba(255,215,0,0.6); }
 
+    /* tiny toast for audio errors */
+    #toast { position:fixed; bottom:14px; left:14px; z-index:3000; background:rgba(20,20,20,.9); color:#fff; padding:10px 14px; border-radius:10px; font-size:13px; display:none; border:1px solid rgba(255,255,255,.15); }
+    #toast.show { display:block; animation: fadeout 4s forwards; }
+    @keyframes fadeout { 0%{opacity:1;} 80%{opacity:1;} 100%{opacity:0; display:none;} }
+
     @media (max-width: 900px) {
       .main { overflow:auto; }
       #admin-links { top:10px; left:10px; font-size:13px; }
@@ -92,9 +97,12 @@
     </div>
   </div>
 
-  <!-- Sounds -->
-  <audio id="spin-audio" src="bike-loop-103290.mp3" preload="auto" loop></audio>
-  <audio id="cheer-audio" src="applause-01-253125.mp3" preload="auto"></audio>
+  <!-- tiny toast -->
+  <div id="toast"></div>
+
+  <!-- Sounds (absolute paths; put the mp3s in your /public folder) -->
+  <audio id="spin-audio" src="/bike-loop-103290.mp3" preload="auto" loop></audio>
+  <audio id="cheer-audio" src="/applause-01-253125.mp3" preload="auto"></audio>
 
   <script>
     window.onload = function () {
@@ -130,6 +138,14 @@
       const adminLinks = document.getElementById("admin-links");
       const adminAnchor = document.getElementById("admin-link");
       const backV1Anchor = document.getElementById("back-v1-link");
+      const toast = document.getElementById('toast');
+
+      function showToast(msg) {
+        toast.textContent = msg;
+        toast.classList.remove('show');
+        void toast.offsetWidth; // reflow
+        toast.classList.add('show');
+      }
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
@@ -275,15 +291,32 @@
         }
       }
 
-      // --- Sound helpers ---
-      function startSpinSound() {
+      // --- Sound helpers (MUST be called synchronously in click handler to satisfy autoplay) ---
+      function startSpinSoundImmediate() {
         if (!spinAudio) return;
         try {
           clearInterval(fadeOutTimer);
           spinAudio.currentTime = 0;
-          spinAudio.volume = 0.9;
+          spinAudio.muted = false;
+          spinAudio.volume = 0.95;
           spinAudio.playbackRate = 1.6; // fast at start
-          spinAudio.play().catch(() => {});
+          const p = spinAudio.play();
+          if (p && p.catch) p.catch(() => { showToast('Audio blocked — tap again to allow sound.'); });
+        } catch {
+          showToast('Audio error starting spin sound.');
+        }
+      }
+
+      function primeCheerInGesture() {
+        if (!cheerAudio) return;
+        try {
+          cheerAudio.currentTime = 0;
+          cheerAudio.volume = 0.01; // barely audible
+          const p = cheerAudio.play();
+          if (p && p.then) {
+            p.then(() => { cheerAudio.pause(); cheerAudio.currentTime = 0; cheerAudio.volume = 1.0; })
+             .catch(() => {}); // if blocked, main click already tried — we’ll rely on second click
+          }
         } catch {}
       }
 
@@ -298,11 +331,11 @@
         clearInterval(fadeOutTimer);
         fadeOutTimer = setInterval(() => {
           i++;
-          spinAudio.volume = Math.max(0, 0.9 * (1 - i/steps));
+          spinAudio.volume = Math.max(0, 0.95 * (1 - i/steps));
           if (i >= steps) {
             clearInterval(fadeOutTimer);
             spinAudio.pause();
-            spinAudio.volume = 0.9;
+            spinAudio.volume = 0.95;
           }
         }, 50);
       }
@@ -594,14 +627,17 @@
         return wonW < maxW;
       }
 
-      // Play cheer once (for rare wins)
-      function playCheerOnce() {
+      // Play cheer for any win; louder for rare wins
+      function playCheer(rare) {
         if (!cheerAudio) return;
         try {
           cheerAudio.currentTime = 0;
-          cheerAudio.volume = 1.0;
-          cheerAudio.play().catch(()=>{});
-        } catch {}
+          cheerAudio.volume = rare ? 1.0 : 0.33; // 1/3 volume for most-common
+          const p = cheerAudio.play();
+          if (p && p.catch) p.catch(() => { showToast('Cheer blocked by browser — tap again to allow.'); });
+        } catch {
+          showToast('Audio error playing cheer.');
+        }
       }
 
       async function doSpin() {
@@ -609,6 +645,11 @@
         hasSpun = true;
         isSpinning = true;
         spinButton.disabled = true;
+
+        // IMPORTANT: start audio and prime cheer *synchronously in this click handler*
+        startSpinSoundImmediate();
+        primeCheerInGesture();
+
         messageDiv.textContent = "Preparing your spin...";
 
         try {
@@ -647,13 +688,14 @@
           mechanicsWheel.draw();
           drawTextWheel(-60);
 
-          startSpinSound();
           mechanicsWheel.startAnimation();
 
-          // If this is a rare win: schedule the cheer + front celebration near the end
-          if (isRareWin(segmentIndex)) {
-            setTimeout(() => { playCheerOnce(); startFrontCelebration(6000); }, 1200);
-          }
+          // Decide rare vs common now; schedule cheer (and front celebration if rare)
+          const rare = isRareWin(segmentIndex);
+          setTimeout(() => {
+            playCheer(rare);
+            if (rare) startFrontCelebration(6000);
+          }, 1200);
 
         } catch (err) {
           messageDiv.textContent = `Spin failed: ${err.message}`;
