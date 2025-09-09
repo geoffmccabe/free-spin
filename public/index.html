@@ -18,25 +18,19 @@
     #spin-button { display:inline-block; margin-top:6px; padding:10px 18px; font-size:14px; background:#ff4500; color:#fff; border:none; border-radius:12px; cursor:pointer; }
     #spin-button:disabled, #spin-button.hidden { display:none; }
     #message { margin-top:6px; color:#fff; font-size:14px; font-weight:600; white-space:pre-line; min-height:1.4em; }
-
-    /* Admin/debug UI (top-left) */
-    #admin-ui { position:fixed; top:12px; left:12px; z-index:1000; display:none; align-items:center; gap:12px; }
-    #admin-ui a { color:#d1d5db; text-decoration:none; font-weight:800; }
-    #admin-ui a:hover { text-decoration:underline; }
-    #role-badge { color:#9ca3af; font-size:12px; font-weight:700; padding:2px 6px; border:1px solid #374151; border-radius:8px; background:rgba(17,24,39,.5); }
-
+    /* Admin / v2 links top-left (only shown for admins) */
+    #admin-links { position:fixed; top:10px; left:10px; display:none; gap:12px; color:#bbb; font-size:13px; z-index:20; }
+    #admin-links a { color:#bbb; text-decoration:none; }
+    #admin-links a:hover { text-decoration:underline; }
     @media (max-width: 900px) {
       .main { overflow:auto; }
-      #admin-ui { top:10px; left:10px; }
     }
   </style>
 </head>
 <body>
-  <!-- Admin/debug UI -->
-  <div id="admin-ui">
-    <span id="role-badge" style="display:none;"></span>
-    <a id="admin-link" href="#" style="display:none;">ADMIN</a>
-    <a id="try-v2-link" href="#" style="display:none;">TRY V2</a>
+  <div id="admin-links">
+    <a id="admin-link" href="#" rel="nofollow">ADMIN</a>
+    <a id="try-v2-link" href="#" rel="nofollow">TRY v2</a>
   </div>
 
   <div class="main">
@@ -68,16 +62,12 @@
       const qs = new URLSearchParams(window.location.search);
       const token = qs.get("token");
       const server_id = qs.get("server_id");
-      const forceAdmin = qs.get("forceAdmin") === "1"; // TEMP override for visibility
       const spinButton = document.getElementById("spin-button");
       const messageDiv = document.getElementById("message");
       const overlayImg = document.getElementById("wheel-overlay");
-
-      // Admin UI elements
-      const adminUI = document.getElementById("admin-ui");
-      const roleBadge = document.getElementById("role-badge");
-      const adminAnchor = document.getElementById("admin-link");
-      const tryV2Anchor = document.getElementById("try-v2-link");
+      const adminLinks = document.getElementById("admin-links");
+      const adminBtn = document.getElementById("admin-link");
+      const tryV2Btn = document.getElementById("try-v2-link");
 
       if (!token || !server_id) {
         messageDiv.textContent = "No spin link or server ID provided.";
@@ -113,25 +103,6 @@
           role = data.role || null;
           contract_address = data.contract_address || null;
 
-          // Admin/debug visibility
-          const isAdmin = role === 'admin' || role === 'superadmin';
-          if (isAdmin || forceAdmin) {
-            // role badge
-            roleBadge.style.display = 'inline-block';
-            roleBadge.textContent = isAdmin ? `role: ${role}` : 'role: forced-admin';
-
-            // links
-            const adminHref = `/adminpanel.html?server_id=${encodeURIComponent(server_id)}&contract_address=${encodeURIComponent(contract_address || '')}${image_url ? `&image_url=${encodeURIComponent(image_url)}` : ''}`;
-            const v2Href = `/index-v2.html?server_id=${encodeURIComponent(server_id)}&token=${encodeURIComponent(token)}`;
-            adminAnchor.href = adminHref;
-            tryV2Anchor.href = v2Href;
-            adminAnchor.style.display = 'inline';
-            tryV2Anchor.style.display = 'inline';
-            adminUI.style.display = 'flex';
-          } else {
-            adminUI.style.display = 'none';
-          }
-
           // Build segments
           const payout_amounts = Array.isArray(window_payout_amounts) ? window_payout_amounts : [];
           segments = payout_amounts.map((amount) => ({
@@ -142,7 +113,7 @@
           }));
           if (segments.length === 0) throw new Error("No payout amounts configured.");
 
-          // Preload overlay image to avoid broken-image flash
+          // Preload overlay image (from your DB config) or use default
           if (image_url) {
             const img = new Image();
             img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
@@ -152,7 +123,15 @@
             overlayImg.style.display = 'none';
           }
 
-          // Mechanics wheel (unchanged)
+          // Admin links (top-left)
+          if (role === 'admin' || role === 'superadmin') {
+            const adminHref = `/adminpanel.html?server_id=${encodeURIComponent(server_id)}&contract_address=${encodeURIComponent(contract_address || '')}${image_url ? `&image_url=${encodeURIComponent(image_url)}` : ''}`;
+            adminBtn.href = adminHref;
+            tryV2Btn.href = `/index-v2.html?token=${encodeURIComponent(token)}&server_id=${encodeURIComponent(server_id)}`;
+            adminLinks.style.display = 'flex';
+          }
+
+          // Mechanics wheel
           const container = document.getElementById('wheel-container');
           const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
 
@@ -183,8 +162,6 @@
             : err.message;
           spinButton.disabled = true;
           spinButton.classList.add("hidden");
-          // keep admin UI hidden on error
-          adminUI.style.display = 'none';
         }
       }
 
