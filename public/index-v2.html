@@ -6,6 +6,7 @@
   <title>Spin the Wheel • V2</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/1.20.4/TweenMax.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/zarocknz/javascript-winwheel@2.7.0/Winwheel.min.js"></script>
+  <script type="module" src="./effects-v2.js"></script>
   <style>
     html, body { background:#000; color:#fff; font-family: Inter, system-ui, sans-serif; text-align:center; margin:0; padding:0; overflow:hidden; height:100vh; }
     .main { height:100vh; display:grid; grid-template-columns: 1fr; align-items:center; justify-items:center; padding:16px; box-sizing:border-box; }
@@ -16,54 +17,24 @@
     #wheel-overlay { position:absolute; top:0; left:0; width:100%; height:100%; z-index:2; pointer-events:none; display:none; }
     #canvas-text { position:absolute; top:0; left:0; z-index:3; pointer-events:none; width:100%; height:100%; }
 
-    /* BEHIND celebration canvas */
-    #celebration-canvas { position:fixed; inset:0; z-index:0; pointer-events:none; }
-
-    /* FRONT celebration canvas (on top of everything) */
-    #front-celebration { position:fixed; inset:0; z-index:3000; pointer-events:none; }
-
-    /* Admin links */
-    #admin-links { position:fixed; top:12px; left:12px; z-index:2000; display:none; gap:12px; font-size:14px; }
-    #admin-links a { color:#aaa; text-decoration:none; font-weight:800; }
-    #admin-links a:hover { text-decoration:underline; }
-
-    /* CTA band prevents layout shift */
-    #cta-band { min-height: 96px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; }
-
-    /* Glow button */
     #spin-button {
-      display:inline-block; padding:12px 22px; font-size:16px; font-weight:800; letter-spacing:1px;
+      display:inline-block; padding:12px 22px; font-size:16px; font-weight:800;
       background:#ff4500; color:#fff; border:none; border-radius:14px; cursor:pointer;
-      text-shadow: 0 0 6px rgba(255,255,255,0.5);
-      box-shadow: 0 0 12px rgba(255,69,0,0.7), 0 0 24px rgba(255,69,0,0.35), inset 0 0 8px rgba(255,255,255,0.12);
-      transition: transform .08s ease, box-shadow .2s ease;
-      position:relative;
     }
-    #spin-button:hover { transform: translateY(-1px); box-shadow: 0 0 16px rgba(255,69,0,0.9), 0 0 36px rgba(255,69,0,0.45), inset 0 0 10px rgba(255,255,255,0.16); }
-    #spin-button:active { transform: translateY(0); }
-    #spin-button:disabled { opacity:0.75; cursor:not-allowed; }
+    #spin-button:disabled { opacity:0.6; cursor:not-allowed; }
 
-    #message { color:#fff; font-size:16px; font-weight:600; white-space:pre-line; min-height:1.4em; text-wrap:balance; }
-    #message.big { font-size:22px; font-weight:900; }
-    .gold { color:#FFD700; font-weight:900; text-shadow: 0 0 10px rgba(255,215,0,0.6); }
+    #message { color:#fff; font-size:18px; font-weight:700; white-space:pre-line; min-height:1.4em; }
+    .gold { color:#FFD700; font-weight:900; text-shadow:0 0 10px rgba(255,215,0,0.6); }
 
-    #toast { position:fixed; bottom:14px; left:14px; z-index:3500; background:rgba(20,20,20,.9); color:#fff; padding:10px 14px; border-radius:10px; font-size:13px; display:none; border:1px solid rgba(255,255,255,.15); }
-    #toast.show { display:block; animation: fadeout 4s forwards; }
-    @keyframes fadeout { 0%{opacity:1;} 80%{opacity:1;} 100%{opacity:0; display:none;} }
-
-    @media (max-width: 900px) {
-      .main { overflow:auto; }
-      #admin-links { top:10px; left:10px; font-size:13px; }
+    /* canvases injected by effects-v2.js */
+    #celebration-canvas, #front-celebration {
+      position:fixed; inset:0; pointer-events:none;
     }
+    #celebration-canvas { z-index:0; }
+    #front-celebration { z-index:2000; }
   </style>
 </head>
 <body>
-  <!-- Admin links -->
-  <div id="admin-links">
-    <a id="admin-link" href="#">ADMIN</a>
-    <a id="back-v1-link" href="#">BACK TO V1</a>
-  </div>
-
   <div class="main">
     <div id="wheel-wrap">
       <div id="wheel-container">
@@ -72,583 +43,143 @@
         <img id="wheel-overlay" alt="Wheel Overlay"/>
         <canvas id="canvas-text"></canvas>
       </div>
-
-      <div id="cta-band">
-        <button id="spin-button" disabled>SPIN</button>
-        <div id="message"></div>
-      </div>
+      <button id="spin-button" disabled>SPIN</button>
+      <div id="message"></div>
     </div>
   </div>
 
-  <div id="toast"></div>
+  <script type="module">
+    import * as effects from './effects-v2.js';
 
-  <!-- Sounds (served from /public) -->
-  <audio id="spin-audio" src="/bike-loop-103290.mp3" preload="auto" loop></audio>
-  <audio id="cheer-audio" src="/applause-01-253125.mp3" preload="auto"></audio>
+    let mechanicsWheel = null;
+    let segments = [];
+    let announcedPrize = null;
+    let finalSpinsLeft = null;
 
-  <script>
-    window.onload = function () {
-      let segments = [];
-      let payout_weights = [];
-      let mechanicsWheel = null;
-      let hasSpun = false;
-      let isSpinning = false;
-      let announcedPrize = null;
-      let finalSpinsLeft = null;
-      let role = null;
-      let contract_address = null;
-      let token_name = null;
-      let image_url = null;
+    const qs = new URLSearchParams(window.location.search);
+    const token = qs.get("token");
+    const server_id = qs.get("server_id");
 
-      // audio
-      const spinAudio = document.getElementById('spin-audio');
-      const cheerAudio = document.getElementById('cheer-audio');
-      let lastAngle = 0, maxDelta = 0, fadeOutTimer = null;
+    const spinButton = document.getElementById("spin-button");
+    const messageDiv = document.getElementById("message");
+    const overlayImg = document.getElementById("wheel-overlay");
 
-      // celebrations
-      let celebration = null;        // behind
-      let frontCelebration = null;   // front
+    function resizeCanvas() {
+      const container = document.getElementById('wheel-container');
+      const size = Math.min(container.offsetWidth, container.offsetHeight);
+      [document.getElementById('canvas-mechanics'), document.getElementById('canvas-text')].forEach(c => {
+        c.width = size; c.height = size;
+      });
+    }
+    window.addEventListener('resize', () => { resizeCanvas(); drawTextWheel(); });
+    resizeCanvas();
 
-      // rare flag and segment chosen – used in callbackFinished
-      let rareWin = false;
+    async function initializeWheel() {
+      try {
+        const res = await fetch("/api/spin", {
+          method:"POST", headers:{ "Content-Type": "application/json" },
+          body: JSON.stringify({ token, server_id })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.tokenConfig) throw new Error(data.error || "Failed to load spin configuration");
 
-      const qs = new URLSearchParams(window.location.search);
-      const token = qs.get("token");
-      const server_id = qs.get("server_id");
-      const spinButton = document.getElementById("spin-button");
-      const messageDiv = document.getElementById("message");
-      const overlayImg = document.getElementById("wheel-overlay");
-      const adminLinks = document.getElementById("admin-links");
-      const adminAnchor = document.getElementById("admin-link");
-      const backV1Anchor = document.getElementById("back-v1-link");
-      const toast = document.getElementById('toast');
+        const { token_name, payout_amounts, payout_weights, image_url } = data.tokenConfig;
+        segments = payout_amounts.map(a => ({
+          text:`${a}`, text2:token_name, textFillStyle:'white', textFontFamily:'Arial'
+        }));
 
-      function showToast(msg) {
-        toast.textContent = msg;
-        toast.classList.remove('show'); void toast.offsetWidth;
-        toast.classList.add('show');
-      }
+        if (image_url) { overlayImg.src=image_url; overlayImg.style.display='block'; }
 
-      if (!token || !server_id) {
-        messageDiv.textContent = "No spin link or server ID provided.";
-        spinButton.disabled = true;
-        return;
-      }
-
-      function resizeCanvas() {
         const container = document.getElementById('wheel-container');
-        const size = Math.min(container.offsetWidth, container.offsetHeight);
-        const canvases = [document.getElementById('canvas-mechanics'), document.getElementById('canvas-text')];
-        canvases.forEach(canvas => { canvas.width = Math.max(size, 1); canvas.height = Math.max(size, 1); });
-      }
-      window.addEventListener('resize', () => { resizeCanvas(); drawTextWheel(); });
-      resizeCanvas();
+        const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
 
-      async function initializeWheel() {
-        try {
-          const res = await fetch("/api/spin", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token, server_id })
-          });
-          const data = await res.json();
-          if (!res.ok || !data.tokenConfig) throw new Error(data.error || "Failed to load spin configuration");
-
-          ({ token_name, payout_amounts: window_payout_amounts, payout_weights: window_payout_weights, image_url } = data.tokenConfig);
-          role = data.role || null;
-          contract_address = data.contract_address || null;
-
-          payout_weights = Array.isArray(window_payout_weights) && window_payout_weights.length === window_payout_amounts.length
-            ? window_payout_weights.map(Number)
-            : window_payout_amounts.map(() => 1);
-
-          // admin links
-          if (role === 'admin' || role === 'superadmin') {
-            const adminHref = `/adminpanel.html?server_id=${encodeURIComponent(server_id)}&contract_address=${encodeURIComponent(contract_address || '')}${image_url ? `&image_url=${encodeURIComponent(image_url)}` : ''}`;
-            adminAnchor.href = adminHref;
-            backV1Anchor.href = `/index.html?server_id=${encodeURIComponent(server_id)}&token=${encodeURIComponent(token)}`;
-            adminLinks.style.display = 'flex';
-          } else {
-            adminLinks.style.display = 'none';
-          }
-
-          const payout_amounts = Array.isArray(window_payout_amounts) ? window_payout_amounts : [];
-          segments = payout_amounts.map((amount) => ({
-            text: `${amount}`,
-            text2: `${token_name}`,
-            textFillStyle: 'white',
-            textFontFamily: 'Arial'
-          }));
-          if (segments.length === 0) throw new Error("No payout amounts configured.");
-
-          if (image_url) {
-            const img = new Image();
-            img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
-            img.onerror = () => { overlayImg.style.display = 'none'; };
-            img.src = image_url;
-          } else {
-            overlayImg.style.display = 'none';
-          }
-
-          const container = document.getElementById('wheel-container');
-          const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
-
-          mechanicsWheel = new Winwheel({
-            canvasId: 'canvas-mechanics',
-            numSegments: segments.length,
-            segments: segments.map(() => ({ fillStyle: 'transparent', strokeStyle: 'none' })),
-            outerRadius: radius,
-            pointerAngle: 90,
-            animation: {
-              type: 'spinToStop', duration: 5, spins: 8,
-              // while spinning: keep text aligned and modulate sound rate
-              callbackBefore: () => {
-                const adjustedAngle = (mechanicsWheel.rotationAngle || 0) - 30;
-                drawTextWheel(adjustedAngle - 60);
-                overlayImg.style.transform = `rotate(${adjustedAngle}deg)`;
-                updateSpinSoundRate(mechanicsWheel.rotationAngle || 0);
-              },
-              // finished: show prize, stop spin sound, start applause + celebrations
-              callbackFinished: () => {
-                stopSpinSound(true);
-
-                const spinsLeftText = typeof finalSpinsLeft === 'number' ? `Spins Left Today: ${finalSpinsLeft}` : 'Unlimited spins';
-                messageDiv.classList.add('big');
-                messageDiv.innerHTML = announcedPrize
-                  ? `You won: <span class="gold">${announcedPrize}</span>\n${spinsLeftText}`
-                  : `Spin completed.\n${spinsLeftText}`;
-
-                // start both celebrations (front only if rare), and then applause
-                startCelebrationBehind(9000);
-                if (rareWin) startFrontCelebration(7000);
-                playCheer(rareWin);
-                isSpinning = false;
-                spinButton.disabled = true;
-              }
-            }
-          });
-
-          drawTextWheel();
-          spinButton.disabled = false;
-          messageDiv.textContent = '';
-          messageDiv.classList.remove('big');
-        } catch (err) {
-          messageDiv.textContent = (err.message === 'This spin token has already been used' || err.message === 'Daily spin limit reached')
-            ? 'You have used all your free spins today'
-            : err.message;
-          spinButton.disabled = true;
-          adminLinks.style.display = 'none';
-        }
-      }
-
-      function drawTextWheel(rotation = -60) {
-        const canvas = document.getElementById("canvas-text");
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        const centerX = canvas.width / 2;
-        const centerY = canvas.height / 2;
-        const numSegments = segments.length;
-        if (!numSegments) return;
-        const radius = Math.min(canvas.width, canvas.height) / 2;
-
-        const numberFontPx = Math.max(10, Math.min(48, Math.round(radius * 0.12)));
-        const tokenFontPx  = Math.max(8,  Math.min(36, Math.round(radius * 0.09)));
-
-        const quantityRadius = radius * 0.8;
-        const tokenRadius    = quantityRadius * 0.85;
-
-        const segmentAngle = (2 * Math.PI) / numSegments;
-
-        for (let i = 1; i <= numSegments; i++) {
-          const seg = segments[i - 1];
-          const angle = rotation * (Math.PI / 180) + (i - 1) * segmentAngle + segmentAngle / 2;
-
-          ctx.save();
-          ctx.translate(centerX, centerY);
-          ctx.rotate(angle);
-          ctx.fillStyle = seg.textFillStyle || 'white';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-
-          ctx.font = `${numberFontPx}px ${seg.textFontFamily || 'Arial'}`;
-          ctx.fillText(seg.text, 0, -quantityRadius);
-
-          ctx.font = `${tokenFontPx}px ${seg.textFontFamily || 'Arial'}`;
-          ctx.fillText(seg.text2, 0, -tokenRadius);
-
-          ctx.restore();
-        }
-      }
-
-      // --- Sound helpers ---
-      function startSpinSoundImmediate() {
-        if (!spinAudio) return;
-        try {
-          clearInterval(fadeOutTimer);
-          spinAudio.currentTime = 0;
-          spinAudio.muted = false;
-          spinAudio.volume = 0.95;
-          spinAudio.playbackRate = 1.6; // quick at start
-          const p = spinAudio.play();
-          if (p && p.catch) p.catch(() => { showToast('Audio blocked — tap again to allow sound.'); });
-        } catch {
-          showToast('Audio error starting spin sound.');
-        }
-      }
-      function stopSpinSound(fade = true) {
-        if (!spinAudio) return;
-        if (!fade) { spinAudio.pause(); return; }
-        const steps = 10; let i = 0;
-        clearInterval(fadeOutTimer);
-        fadeOutTimer = setInterval(() => {
-          i++; spinAudio.volume = Math.max(0, 0.95 * (1 - i/steps));
-          if (i >= steps) { clearInterval(fadeOutTimer); spinAudio.pause(); spinAudio.volume = 0.95; }
-        }, 50);
-      }
-      function updateSpinSoundRate(currentAngle) {
-        if (!spinAudio || !isSpinning) return;
-        let delta = currentAngle - lastAngle;
-        if (delta > 180) delta -= 360;
-        if (delta < -180) delta += 360;
-        const speed = Math.abs(delta);
-        if (speed > maxDelta) maxDelta = speed || maxDelta;
-
-        const baseline = maxDelta || 1;
-        const ratio = Math.min(1, Math.max(0, speed / baseline)); // 0..1
-        // nudge down as we approach stop angle for more obvious slow-down
-        const stopAngle = mechanicsWheel?.animation?.stopAngle ?? 0;
-        let remaining = stopAngle - currentAngle; while (remaining < 0) remaining += 360;
-        const slowNudge = Math.max(0, Math.min(1, remaining / 200)); // smaller when near stop
-        const finalRate = Math.max(0.45, Math.min(1.9, (0.5 + ratio * 1.4) * (0.7 + 0.3 * slowNudge)));
-
-        spinAudio.playbackRate = finalRate;
-        lastAngle = currentAngle;
-      }
-
-      // applause after stop
-      function playCheer(rare) {
-        if (!cheerAudio) return;
-        try {
-          cheerAudio.currentTime = 0;
-          cheerAudio.volume = rare ? 1.0 : 0.33; // 1/3 volume for most-common wins
-          const p = cheerAudio.play();
-          if (p && p.catch) p.catch(() => { showToast('Cheer blocked by browser — tap again to allow.'); });
-        } catch {
-          showToast('Audio error playing cheer.');
-        }
-      }
-
-      // --- Celebration BEHIND (random blobs) ---
-      function startCelebrationBehind(durationMs = 9000) {
-        stopCelebrationBehind();
-
-        const canvas = document.createElement('canvas');
-        canvas.id = 'celebration-canvas';
-        document.body.appendChild(canvas);
-        const ctx = canvas.getContext('2d');
-
-        function size() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
-        size();
-        const resizeHandler = () => size();
-
-        const width = () => canvas.width;
-        const height = () => canvas.height;
-        const avg = () => (width() + height()) / 2;
-        const speedRange = 3;
-        const maxCombo = 15;
-        const baseRadius = 2;
-        const count = Math.min(180, Math.round(avg() * 0.25));
-        const TWOPI = Math.PI * 2;
-
-        const blobs = [];
-        function rand(min, max) { return Math.random() * (max - min) + min; }
-        function dist(p1, p2) { const dx = p1.x - p2.x, dy = p1.y - p2.y; return Math.hypot(dx, dy); }
-
-        function Blob() {
-          this.radius = baseRadius;
-          this.targetRadius = baseRadius;
-          this.x = rand(this.radius, width() - this.radius);
-          this.y = rand(this.radius, height() - this.radius);
-          this.vx = rand(-speedRange, speedRange);
-          this.vy = rand(-speedRange, speedRange);
-          this.hue = Math.floor(rand(0, 360));
-          this.combineCount = 1;
-          this.deathFlag = 0;
-          this.immuneFlag = 0;
-          this.index = 0;
-        }
-        Blob.prototype.update = function(i) {
-          if (this.deathFlag) { blobs.splice(i, 1); return; }
-          if (this.combineCount >= maxCombo) {
-            let j = this.combineCount - 4;
-            while (j--) {
-              const b = new Blob();
-              b.x = this.x; b.y = this.y;
-              b.vx = rand(-speedRange, speedRange);
-              b.vy = rand(-speedRange, speedRange);
-              b.immuneFlag = 50;
-              blobs.push(b);
-            }
-            ctx.fillStyle = 'rgba(255,255,255,0.75)';
-            ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, TWOPI); ctx.fill();
-            blobs.splice(i, 1);
-            return;
-          }
-          this.index = i;
-          if (this.immuneFlag > 0) this.immuneFlag--;
-          this.radius += (this.targetRadius - this.radius) * 0.2;
-          this.x += this.vx; this.y += this.vy;
-          this.wrapBounds(); this.checkCollisions();
-        };
-        Blob.prototype.checkCollisions = function() {
-          let i = blobs.length;
-          while (i--) {
-            if (this.index !== i) {
-              const other = blobs[i];
-              if (!this.immuneFlag && dist(this, other) <= this.radius + other.radius) {
-                if (this.radius >= other.radius) {
-                  this.targetRadius += other.radius;
-                  this.combineCount += other.combineCount;
-                  this.hue = Math.floor(Math.random()*360);
-                  other.deathFlag = 1;
-                } else {
-                  other.targetRadius += this.radius;
-                  other.combineCount += this.combineCount;
-                  other.hue = Math.floor(Math.random()*360);
-                  this.deathFlag = 1;
-                }
-                break;
-              }
+        mechanicsWheel = new Winwheel({
+          canvasId: 'canvas-mechanics',
+          numSegments: segments.length,
+          segments: segments.map(() => ({ fillStyle:'transparent', strokeStyle:'none' })),
+          outerRadius: radius,
+          pointerAngle:90,
+          animation: {
+            type:'spinToStop', duration:5, spins:8,
+            callbackFinished: () => {
+              const spinsLeftText = typeof finalSpinsLeft === 'number' ? `Spins Left Today: ${finalSpinsLeft}` : 'Unlimited spins';
+              messageDiv.innerHTML = announcedPrize
+                ? `You won: <span class="gold">${announcedPrize}</span>\n${spinsLeftText}`
+                : `Spin complete.\n${spinsLeftText}`;
+              effects.onWin({ prize: announcedPrize, rare: true }); // let effects decide rare vs common
+            },
+            callbackBefore: () => {
+              effects.tick(mechanicsWheel.rotationAngle);
+              drawTextWheel(mechanicsWheel.rotationAngle - 60);
+              overlayImg.style.transform = `rotate(${mechanicsWheel.rotationAngle-30}deg)`;
             }
           }
-        };
-        Blob.prototype.wrapBounds = function() {
-          if (this.x + this.radius < 0) this.x = width() + this.radius;
-          if (this.x - this.radius > width()) this.x = -this.radius;
-          if (this.y + this.radius < 0) this.y = height() + this.radius;
-          if (this.y - this.radius > height()) this.y = -this.radius;
-        };
-        Blob.prototype.render = function() {
-          ctx.beginPath();
-          ctx.arc(this.x, this.y, this.radius, 0, TWOPI);
-          ctx.fillStyle = `hsl(${this.hue}, 100%, 50%)`;
-          ctx.fill();
-        };
+        });
 
-        function createBlobs() { for (let i = 0; i < count; i++) blobs.push(new Blob()); }
-        function loop() {
-          ctx.clearRect(0, 0, width(), height());
-          for (let i = blobs.length - 1; i >= 0; i--) blobs[i].update(i);
-          for (let i = blobs.length - 1; i >= 0; i--) blobs[i].render();
-          if (Date.now() < celebration.stopAt) celebration.rafId = requestAnimationFrame(loop);
-          else stopCelebrationBehind();
-        }
-
-        createBlobs();
-        celebration = { canvas, ctx, rafId: null, stopAt: Date.now() + durationMs, resizeHandler };
-        loop();
-        window.addEventListener('resize', resizeHandler);
-      }
-      function stopCelebrationBehind() {
-        if (!celebration) return;
-        cancelAnimationFrame(celebration.rafId || 0);
-        window.removeEventListener('resize', celebration.resizeHandler || (()=>{}));
-        celebration.canvas.remove();
-        celebration = null;
-      }
-
-      // --- Celebration FRONT (particle burst) ---
-      function startFrontCelebration(durationMs = 7000) {
-        stopFrontCelebration();
-
-        const canvas = document.createElement('canvas');
-        canvas.id = 'front-celebration';
-        document.body.appendChild(canvas);
-        const ctx = canvas.getContext('2d');
-
-        let W = 0, H = 0, VPY = 0, VPX = 0;
-        let focalLength = 300, angleX = 180, angleY = 180, angleZ = 180, angle = 0, cycle = 0;
-        let colors = { r: 255, g: 0, b: 0 };
-        let emitters = [];
-
-        function size() {
-          W = canvas.width = window.innerWidth;
-          H = canvas.height = document.body.offsetHeight || window.innerHeight;
-          VPY = H / 2; VPX = W / 2;
-        }
-        size();
-        const resizeHandler = () => size();
-
-        function colorCycle() {
-          cycle += .6; if (cycle > 100) cycle = 0;
-          colors.r = ~~ (Math.sin(.3 * cycle + 0) * 127 + 128);
-          colors.g = ~~ (Math.sin(.3 * cycle + 2) * 127 + 128);
-          colors.b = ~~ (Math.sin(.3 * cycle + 4) * 127 + 128);
-        }
-
-        function Particle(x, y, z, color) {
-          this.x = x; this.y = y; this.z = z;
-          this.startX = this.x; this.startY = this.y; this.startZ = this.z;
-          this.ox = this.x; this.oy = this.y; this.oz = this.z;
-          this.xPos = 0; this.yPos = 0;
-          this.vx = (Math.random() * 10) - 5;
-          this.vy = (Math.random() * 10) - 5;
-          this.vz = (Math.random() * 10) - 5;
-          this.color = [color.r, color.g, color.b];
-          this.render = true;
-          this.size = Math.round(1 + Math.random() * 1);
-        }
-        Particle.prototype.rotate = function () {
-          const x = this.startX * Math.cos(angleZ) - this.startY * Math.sin(angleZ);
-          const y = this.startY * Math.cos(angleZ) + this.startX * Math.sin(angleZ);
-          this.x = x; this.y = y;
-        };
-        Particle.prototype.update = function () {
-          this.x = (this.startX += this.vx);
-          this.y = (this.startY += this.vy);
-          this.z = (this.startZ -= this.vz);
-          this.rotate();
-          this.vy += 0.1;
-          this.x += this.vx; this.y += this.vy; this.z -= this.vz;
-          this.render = false;
-          if (this.z > -focalLength) {
-            const scale = focalLength / (focalLength + this.z);
-            this.size = scale * 2;
-            this.xPos = VPX + this.x * scale;
-            this.yPos = VPY + this.y * scale;
-            this.render = true;
-          }
-        };
-
-        function Emitter() { this.reset(); }
-        Emitter.prototype.reset = function () {
-          const PART_NUM = 200;
-          const x = (Math.random() * 400) - 200;
-          const y = (Math.random() * 400) - 200;
-          const z = (Math.random() * 800) - 200;
-          this.x = x || 0; this.y = y || 0; this.z = z || 0;
-          this.particles = [];
-          for (let i = 0; i < PART_NUM; i++) {
-            this.particles.push(new Particle(this.x, this.y, this.z, { r: colors.r, g: colors.g, b: colors.b }));
-          }
-        };
-        Emitter.prototype.update = function () {
-          angleY = (angle - VPX) * 0.0001;
-          angleX = (angle - VPX) * 0.0001;
-          this.particles.sort((a,b)=> b.z - a.z);
-          for (let i = 0; i < this.particles.length; i++) this.particles[i].update();
-          if (this.particles.length <= 0) this.reset();
-        };
-        Emitter.prototype.render = function (imgData) {
-          const data = imgData.data;
-          for (let i = 0; i < this.particles.length; i++) {
-            const p = this.particles[i];
-            const dist = Math.sqrt((p.x - p.ox)**2 + (p.y - p.oy)**2 + (p.z - p.oz)**2);
-            if (dist > 255) { p.render = false; this.particles.splice(i,1); i--; continue; }
-            if (p.render && p.xPos < W && p.xPos > 0 && p.yPos > 0 && p.yPos < H) {
-              for (let w=0; w<p.size; w++) for (let h=0; h<p.size; h++) {
-                if (p.xPos+w < W && p.xPos+w>0 && p.yPos+h>0 && p.yPos+h<H) {
-                  const idx = (~~(p.xPos+w) + (~~(p.yPos+h) * W)) * 4;
-                  data[idx] = p.color[0]; data[idx+1] = p.color[1]; data[idx+2] = p.color[2]; data[idx+3] = 255 - dist;
-                }
-              }
-            }
-          }
-        };
-
-        for (let e = 0; e < 30; e++) { colorCycle(); emitters.push(new Emitter()); }
-
-        function render() {
-          colorCycle();
-          angleY = Math.sin(angle += 0.01);
-          angleX = Math.sin(angle);
-          angleZ = Math.sin(angle);
-          const imgData = ctx.createImageData(W, H);
-          for (let e = 0; e < 30; e++) { emitters[e].update(); emitters[e].render(imgData); }
-          ctx.putImageData(imgData, 0, 0);
-          if (Date.now() < frontCelebration.stopAt) {
-            frontCelebration.rafId = requestAnimationFrame(render);
-          } else {
-            stopFrontCelebration();
-          }
-        }
-
-        frontCelebration = { canvas, ctx, rafId: null, stopAt: Date.now() + durationMs, resizeHandler };
-        setTimeout(() => { size(); render(); }, 50);
-        window.addEventListener('resize', resizeHandler);
-      }
-      function stopFrontCelebration() {
-        if (!frontCelebration) return;
-        cancelAnimationFrame(frontCelebration.rafId || 0);
-        window.removeEventListener('resize', frontCelebration.resizeHandler || (()=>{}));
-        frontCelebration.canvas.remove();
-        frontCelebration = null;
-      }
-
-      // Determine if win is “rare” vs most-common (by weights)
-      function isRareWin(segmentIndex) {
-        if (!Array.isArray(payout_weights) || payout_weights.length === 0) return false;
-        const maxW = Math.max(...payout_weights);
-        const wonW = Number(payout_weights[segmentIndex] ?? 0);
-        return wonW < maxW; // strictly less than the most-common weight
-        }
-
-      async function doSpin() {
-        if (hasSpun || isSpinning || !mechanicsWheel) return;
-        hasSpun = true;
-        isSpinning = true;
+        drawTextWheel();
+        spinButton.disabled = false;
+      } catch (err) {
+        messageDiv.textContent = err.message;
         spinButton.disabled = true;
-
-        // Start spin sound within the click handler (browser gesture)
-        startSpinSoundImmediate();
-
-        messageDiv.textContent = "Preparing your spin...";
-
-        try {
-          const res = await fetch("/api/spin", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token, spin: true, server_id })
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "Server error during spin");
-
-          const segmentIndex = data.segmentIndex;
-          const seg = mechanicsWheel.segments[segmentIndex + 1];
-          if (!seg) throw new Error("Invalid segment returned from server");
-
-          // decide rare/common now; run AFTER stop
-          rareWin = isRareWin(segmentIndex);
-
-          const center = (seg.startAngle + seg.endAngle) / 2;
-          const randomOffset = (Math.random() * (seg.endAngle - seg.startAngle) * 0.8) - ((seg.endAngle - seg.startAngle) * 0.4);
-          mechanicsWheel.animation.stopAngle = (center + randomOffset) % 360;
-          announcedPrize = data.prize;
-          finalSpinsLeft = data.spins_left;
-
-          // reset audio dynamics
-          lastAngle = mechanicsWheel.rotationAngle || 0;
-          maxDelta = 0;
-
-          messageDiv.textContent = "Spinning...";
-          mechanicsWheel.stopAnimation(false);
-          mechanicsWheel.rotationAngle = 0;
-          mechanicsWheel.draw();
-          drawTextWheel(-60);
-          mechanicsWheel.startAnimation();
-
-        } catch (err) {
-          messageDiv.textContent = `Spin failed: ${err.message}`;
-          isSpinning = false;
-          hasSpun = false;
-          spinButton.disabled = false;
-          stopSpinSound(false);
-        }
       }
+    }
 
-      document.getElementById('spin-button').addEventListener('click', doSpin);
-      initializeWheel();
-    };
+    function drawTextWheel(rotation=-60) {
+      const canvas=document.getElementById("canvas-text");
+      const ctx=canvas.getContext('2d');
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      const centerX=canvas.width/2, centerY=canvas.height/2;
+      const numSegments=segments.length;
+      if (!numSegments) return;
+      const radius=Math.min(canvas.width,canvas.height)/2;
+      const numFontPx=Math.round(radius*0.12), tokenFontPx=Math.round(radius*0.09);
+      const qRadius=radius*0.8, tRadius=qRadius*0.85;
+      const segAngle=(2*Math.PI)/numSegments;
+      for (let i=0;i<numSegments;i++){
+        const seg=segments[i];
+        const angle=(rotation*Math.PI/180)+(i*segAngle)+(segAngle/2);
+        ctx.save(); ctx.translate(centerX,centerY); ctx.rotate(angle);
+        ctx.fillStyle=seg.textFillStyle||'white'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.font=`${numFontPx}px ${seg.textFontFamily||'Arial'}`; ctx.fillText(seg.text,0,-qRadius);
+        ctx.font=`${tokenFontPx}px ${seg.textFontFamily||'Arial'}`; ctx.fillText(seg.text2,0,-tRadius);
+        ctx.restore();
+      }
+    }
+
+    async function doSpin() {
+      spinButton.disabled = true;
+      messageDiv.textContent = "Preparing your spin...";
+      effects.startSpin();
+      try {
+        const res = await fetch("/api/spin", {
+          method:"POST", headers:{ "Content-Type": "application/json" },
+          body: JSON.stringify({ token, spin:true, server_id })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error||"Spin failed");
+
+        const segmentIndex=data.segmentIndex;
+        const seg=mechanicsWheel.segments[segmentIndex+1];
+        if (!seg) throw new Error("Invalid segment");
+        const center=(seg.startAngle+seg.endAngle)/2;
+        mechanicsWheel.animation.stopAngle=(center + (Math.random()*(seg.endAngle-seg.startAngle)*0.8) - ((seg.endAngle-seg.startAngle)*0.4)) % 360;
+
+        announcedPrize=data.prize;
+        finalSpinsLeft=data.spins_left;
+        mechanicsWheel.stopAnimation(false);
+        mechanicsWheel.rotationAngle=0;
+        mechanicsWheel.draw();
+        drawTextWheel(-60);
+        mechanicsWheel.startAnimation();
+      } catch (err) {
+        messageDiv.textContent=err.message;
+        spinButton.disabled=false;
+        effects.stopSpinSound();
+      }
+    }
+
+    document.getElementById('spin-button').addEventListener('click', doSpin);
+    initializeWheel();
   </script>
 </body>
 </html>
