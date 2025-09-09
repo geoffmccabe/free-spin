@@ -1,78 +1,6 @@
 import { createHmac, randomUUID } from 'crypto';
 import { supabase, retryQuery, SPIN_CHANNEL_NAME, SPIN_URL, DEFAULT_TOKEN_ADDRESS } from './index.js';
 
-// ---------- Robust spin URL resolver (with caching) ----------
-let RESOLVED_SPIN_BASE = null;
-let resolvingPromise = null;
-
-async function headOk(url, timeoutMs = 2000) {
-  try {
-    const c = new AbortController();
-    const t = setTimeout(() => c.abort(), timeoutMs);
-    const res = await fetch(url, { method: 'HEAD', redirect: 'follow', signal: c.signal });
-    clearTimeout(t);
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-function normalizeBase(base) {
-  return String(base || '').trim().replace(/\s+/g, '');
-}
-
-function toOrigin(u) {
-  try { return new URL(u).origin; } catch { return null; }
-}
-
-async function resolveSpinBase() {
-  if (RESOLVED_SPIN_BASE) return RESOLVED_SPIN_BASE;
-  if (resolvingPromise) return resolvingPromise;
-
-  const base = normalizeBase(SPIN_URL);
-  if (!base) throw new Error('SPIN_URL env var is empty');
-
-  const origin = toOrigin(base);
-  const stripped = base.replace(/\/+$/,''); // no trailing slash
-
-  // Candidates in order:
-  const candidates = [];
-  // 1) As provided
-  candidates.push(base);
-  // 2) If not explicitly a file, try /index.html then /index-v2.html
-  const lastSeg = stripped.split('/').pop() || '';
-  const looksLikeFile = /\.[a-z0-9]+$/i.test(lastSeg);
-  if (!looksLikeFile) {
-    candidates.push(`${stripped}/index.html`);
-    candidates.push(`${stripped}/index-v2.html`);
-  }
-  // 3) Domain root as last resort
-  if (origin) candidates.push(`${origin}/`);
-
-  resolvingPromise = (async () => {
-    for (const c of candidates) {
-      const ok = await headOk(c);
-      if (ok) {
-        RESOLVED_SPIN_BASE = c;
-        console.log(`[spin-url] resolved to: ${c}`);
-        resolvingPromise = null;
-        return RESOLVED_SPIN_BASE;
-      }
-      console.warn(`[spin-url] candidate failed: ${c}`);
-    }
-    resolvingPromise = null;
-    throw new Error('No working spin page found (all candidates 404).');
-  })();
-
-  return resolvingPromise;
-}
-
-function buildSpinLink(base, token, server_id) {
-  const sep = base.includes('?') ? '&' : (base.endsWith('/') ? '?' : '?');
-  return `${base}${sep}token=${encodeURIComponent(token)}&server_id=${encodeURIComponent(server_id)}`;
-}
-// -------------------------------------------------------------
-
 async function handleSpinCommand(interaction, supabase, retryQuery) {
   const discord_id = interaction.user.id;
   const server_id = interaction.guildId;
@@ -203,16 +131,11 @@ async function handleSpinCommand(interaction, supabase, retryQuery) {
     })
   );
 
-  // ------- Resolve a working page URL before sending -------
-  let baseForSpin;
-  try {
-    baseForSpin = await resolveSpinBase();
-  } catch (e) {
-    console.error(`[spin-url] resolution failed: ${e.message}`);
-    return interaction.editReply({ content: `⚠️ Spin page is updating. Please try again in a minute.`, flags: 64 });
-  }
+  // Use SPIN_URL EXACTLY as set; only append query params.
+  const base = (SPIN_URL || '').trim();
+  const sep = base.includes('?') ? '&' : '?';
+  const spinUrl = `${base}${sep}token=${encodeURIComponent(tokenData.token)}&server_id=${encodeURIComponent(server_id)}`;
 
-  const spinUrl = buildSpinLink(baseForSpin, tokenData.token, server_id);
   const spinsLeftText = typeof spinsLeft === 'number' ? `${spinsLeft} spin${spinsLeft === 1 ? '' : 's'} left today` : 'Unlimited spins';
   console.log(`Sending spin URL: ${spinUrl}`);
   return interaction.editReply({ content: `Your spin is ready! Click here: ${spinUrl}\n${spinsLeftText}`, flags: 64 });
