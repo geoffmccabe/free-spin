@@ -131,8 +131,9 @@ async function handleSpinCommand(interaction, supabase, retryQuery) {
     })
   );
 
-  // Use SPIN_URL EXACTLY as set; only append query params.
+  // Use SPIN_URL EXACTLY as provided. No preflight, no guessing.
   const base = (SPIN_URL || '').trim();
+  console.log(`[spin-url] using verbatim: ${base}`);
   const sep = base.includes('?') ? '&' : '?';
   const spinUrl = `${base}${sep}token=${encodeURIComponent(tokenData.token)}&server_id=${encodeURIComponent(server_id)}`;
 
