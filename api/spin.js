@@ -16,7 +16,6 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // ---- ENV ----
   const {
     SUPABASE_URL,
     SUPABASE_SERVICE_ROLE_KEY,
@@ -34,37 +33,29 @@ export default async function handler(req, res) {
   const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
   try {
-    // ---- INPUT ----
     const { token: signedToken, server_id, spin } = req.body || {};
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
 
-    // ---- HMAC VERIFY (uuid.hmac) ----
+    // Verify HMAC
     const [rawToken, providedSig] = String(signedToken).split('.');
-    if (!rawToken || !providedSig) {
-      return res.status(400).json({ error: 'Invalid token format' });
-    }
+    if (!rawToken || !providedSig) return res.status(400).json({ error: 'Invalid token format' });
     const expectedSig = createHmac('sha256', SPIN_KEY).update(rawToken).digest('hex');
-    if (providedSig !== expectedSig) {
-      return res.status(403).json({ error: 'Invalid token signature' });
-    }
+    if (providedSig !== expectedSig) return res.status(403).json({ error: 'Invalid token signature' });
 
-    // ---- FETCH SPIN TOKEN (NOTE: no server_id column in spin_tokens) ----
+    // Load spin token
     const { data: t, error: tErr } = await supabase
       .from('spin_tokens')
       .select('discord_id, wallet_address, contract_address, used')
       .eq('token', signedToken)
       .maybeSingle();
 
-    if (tErr || !t) {
-      console.error('[spin] token lookup', tErr?.message);
-      return res.status(400).json({ error: 'Invalid token' });
-    }
+    if (tErr || !t) return res.status(400).json({ error: 'Invalid token' });
     if (t.used)     return res.status(400).json({ error: 'This spin token has already been used' });
 
     const { discord_id, wallet_address, contract_address } = t;
 
-    // ---- SERVER ↔ TOKEN CHECK (must belong to this server) ----
+    // Server-token allowlist
     const { data: stRows, error: stErr } = await supabase
       .from('server_tokens')
       .select('contract_address, enabled')
@@ -75,11 +66,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Server is not configured for any tokens' });
     }
     const allowed = stRows.some(r => r.contract_address === contract_address && (r.enabled !== false));
-    if (!allowed) {
-      return res.status(400).json({ error: 'This token is not enabled for this server' });
-    }
+    if (!allowed) return res.status(400).json({ error: 'This token is not enabled for this server' });
 
-    // ---- ADMIN ROLE (for spins_left display) ----
+    // Role (for spins_left)
     let role = null;
     {
       const { data: adminRow } = await supabase
@@ -91,10 +80,10 @@ export default async function handler(req, res) {
       role = adminRow?.role || null;
     }
 
-    // ---- LOAD WHEEL CONFIG ----
+    // Wheel config (no decimals column required)
     const { data: cfg, error: cfgErr } = await supabase
       .from('wheel_configurations')
-      .select('token_name, payout_amounts, payout_weights, image_url, decimals')
+      .select('token_name, payout_amounts, payout_weights, image_url')
       .eq('contract_address', contract_address)
       .maybeSingle();
 
@@ -108,13 +97,12 @@ export default async function handler(req, res) {
     const weights = Array.isArray(cfg.payout_weights) && cfg.payout_weights.length === amounts.length
       ? cfg.payout_weights.map(Number)
       : amounts.map(() => 1);
-    const decimals = Number.isFinite(cfg.decimals) ? Number(cfg.decimals) : 5;
+    const decimals = 5; // default
 
     if (!amounts.length) return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
 
-    // ---- PAGE LOAD PATH (spin not requested) ----
+    // Page load (no spin)
     if (!spin) {
-      // Simple "spins left": 1 per 24h per token per server (superadmins unlimited)
       let spins_left = 1;
       try {
         if (role === 'superadmin') {
@@ -131,8 +119,7 @@ export default async function handler(req, res) {
           const used = count ?? 0;
           spins_left = Math.max(0, 1 - used);
         }
-      } catch (e) {
-        // don’t block the wheel on count errors
+      } catch {
         spins_left = 1;
       }
 
@@ -149,8 +136,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ---- SPIN PATH ----
-    // Weighted pick (server-side)
+    // Spin: weighted pick
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const r = randomInt(0, totalWeight);
     let acc = 0, idx = 0;
@@ -158,10 +144,10 @@ export default async function handler(req, res) {
       acc += weights[i];
       if (r < acc) { idx = i; break; }
     }
-    const rewardDisplay = Number(amounts[idx]);          // e.g. 3, 30, 100, etc.
-    const amountBase = Math.trunc(rewardDisplay * (10 ** decimals)); // base units
+    const rewardDisplay = Number(amounts[idx]);
+    const amountBase = Math.trunc(rewardDisplay * (10 ** decimals));
 
-    // Build addresses
+    // Build keys
     const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
     const userPk  = new PublicKey(wallet_address);
     const mintPk  = new PublicKey(contract_address);
@@ -169,18 +155,18 @@ export default async function handler(req, res) {
     const fromATA = await getAssociatedTokenAddress(mintPk, funding.publicKey);
     const toATA   = await getAssociatedTokenAddress(mintPk, userPk);
 
-    // ---- PRE-FLIGHT BALANCE CHECK (avoid mislabeling as "network busy") ----
+    // Pre-flight balance check (don’t mislabel)
     try {
       const balInfo = await connection.getTokenAccountBalance(fromATA);
-      const uiAmt = Number(balInfo?.value?.amount || 0); // in base units string
-      if (!Number.isFinite(uiAmt) || uiAmt < amountBase) {
+      const baseAmt = Number(balInfo?.value?.amount || 0);
+      if (!Number.isFinite(baseAmt) || baseAmt < amountBase) {
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
       }
-    } catch (e) {
-      // if the account is missing, create it in TX below; skip check
+    } catch {
+      // if from ATA missing, we’ll create it in tx below
     }
 
-    // Build instructions (create ATAs if missing)
+    // Build ixs (create ATAs if missing)
     const ixs = [];
     const [fromInfo, toInfo] = await Promise.all([
       connection.getAccountInfo(fromATA),
@@ -202,6 +188,7 @@ export default async function handler(req, res) {
       fromATA, toATA, funding.publicKey, amountBase
     ));
 
+    // Send
     let signature;
     try {
       signature = await sendTxWithFreshBlockhash({
@@ -216,7 +203,6 @@ export default async function handler(req, res) {
       const msg = String(e?.message || e);
       console.error('[spin] sendTx error:', msg);
 
-      // Map common simulation errors to clearer reasons
       if (msg.includes('insufficient') || msg.includes('Insufficient') || msg.includes('0x1')) {
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
       }
@@ -226,26 +212,25 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: 'Token transfer failed (network busy). Please try again.' });
     }
 
-    // Record spin (must include created_at_utc for your trigger)
+    // Record spin
     const nowISO = new Date().toISOString();
     const { error: insErr } = await supabase.from('daily_spins').insert({
       discord_id,
       server_id,
       wallet_address,
       contract_address,
-      reward: rewardDisplay,        // store as number
-      amount_base: amountBase,      // canonical
+      reward: rewardDisplay,
+      amount_base: amountBase,
       signature,
       created_at_utc: nowISO,
     });
 
     if (insErr) {
       console.error('[spin] insert daily_spins error:', insErr.message);
-      // NOTE: do NOT revert the on-chain transfer; just report the failure
       return res.status(500).json({ error: 'Failed to record spin' });
     }
 
-    // Burn the token
+    // Burn spin token
     await supabase
       .from('spin_tokens')
       .update({ used: true, signature })
