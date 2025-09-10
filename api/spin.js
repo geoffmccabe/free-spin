@@ -16,6 +16,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // ---- ENV ----
   const {
     SUPABASE_URL,
     SUPABASE_SERVICE_ROLE_KEY,
@@ -25,7 +26,7 @@ export default async function handler(req, res) {
   } = process.env;
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !FUNDING_WALLET_PRIVATE_KEY || !SPIN_KEY) {
-    console.error('Missing required env vars');
+    console.error('[spin] Missing required env vars');
     return res.status(500).json({ error: 'Server is misconfigured. Admin has been notified.' });
   }
 
@@ -33,72 +34,105 @@ export default async function handler(req, res) {
   const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
   try {
+    // ---- INPUT ----
     const { token: signedToken, server_id, spin } = req.body || {};
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
 
-    // ---- HMAC VERIFY ----
+    // ---- HMAC VERIFY (uuid.hmac) ----
     const [rawToken, providedSig] = String(signedToken).split('.');
-    if (!rawToken || !providedSig) return res.status(400).json({ error: 'Invalid token format' });
+    if (!rawToken || !providedSig) {
+      return res.status(400).json({ error: 'Invalid token format' });
+    }
     const expectedSig = createHmac('sha256', SPIN_KEY).update(rawToken).digest('hex');
-    if (providedSig !== expectedSig) return res.status(403).json({ error: 'Invalid token signature' });
+    if (providedSig !== expectedSig) {
+      return res.status(403).json({ error: 'Invalid token signature' });
+    }
 
-    // ---- FETCH SPIN TOKEN ----
+    // ---- FETCH SPIN TOKEN (NOTE: no server_id column in spin_tokens) ----
     const { data: t, error: tErr } = await supabase
       .from('spin_tokens')
       .select('discord_id, wallet_address, contract_address, used')
       .eq('token', signedToken)
-      .single();
+      .maybeSingle();
 
-    if (tErr || !t) return res.status(400).json({ error: 'Invalid token' });
+    if (tErr || !t) {
+      console.error('[spin] token lookup', tErr?.message);
+      return res.status(400).json({ error: 'Invalid token' });
+    }
     if (t.used)     return res.status(400).json({ error: 'This spin token has already been used' });
 
     const { discord_id, wallet_address, contract_address } = t;
 
-    // ---- SERVER ↔ TOKEN CHECK ----
+    // ---- SERVER ↔ TOKEN CHECK (must belong to this server) ----
     const { data: stRows, error: stErr } = await supabase
       .from('server_tokens')
       .select('contract_address, enabled')
       .eq('server_id', server_id);
 
     if (stErr || !Array.isArray(stRows) || !stRows.length) {
+      console.error('[spin] server_tokens error', stErr?.message);
       return res.status(400).json({ error: 'Server is not configured for any tokens' });
     }
     const allowed = stRows.some(r => r.contract_address === contract_address && (r.enabled !== false));
-    if (!allowed) return res.status(400).json({ error: 'This token is not enabled for this server' });
+    if (!allowed) {
+      return res.status(400).json({ error: 'This token is not enabled for this server' });
+    }
 
-    // ---- WHEEL CONFIG ----
+    // ---- ADMIN ROLE (for spins_left display) ----
+    let role = null;
+    {
+      const { data: adminRow } = await supabase
+        .from('server_admins')
+        .select('role')
+        .eq('server_id', server_id)
+        .eq('discord_id', discord_id)
+        .maybeSingle();
+      role = adminRow?.role || null;
+    }
+
+    // ---- LOAD WHEEL CONFIG ----
     const { data: cfg, error: cfgErr } = await supabase
       .from('wheel_configurations')
-      .select('token_name, payout_amounts, payout_weights, image_url')
+      .select('token_name, payout_amounts, payout_weights, image_url, decimals')
       .eq('contract_address', contract_address)
-      .single();
+      .maybeSingle();
 
-    if (cfgErr || !cfg) return res.status(400).json({ error: 'Invalid wheel configuration' });
+    if (cfgErr || !cfg) {
+      console.error('[spin] config error', cfgErr?.message);
+      return res.status(400).json({ error: 'Invalid wheel configuration' });
+    }
 
     const tokenName = cfg.token_name || 'Token';
     const amounts = Array.isArray(cfg.payout_amounts) ? cfg.payout_amounts.map(Number) : [];
     const weights = Array.isArray(cfg.payout_weights) && cfg.payout_weights.length === amounts.length
       ? cfg.payout_weights.map(Number)
       : amounts.map(() => 1);
+    const decimals = Number.isFinite(cfg.decimals) ? Number(cfg.decimals) : 5;
 
     if (!amounts.length) return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
 
-    // ---- PAGE LOAD (no spin) ----
+    // ---- PAGE LOAD PATH (spin not requested) ----
     if (!spin) {
+      // Simple "spins left": 1 per 24h per token per server (superadmins unlimited)
       let spins_left = 1;
       try {
-        const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        const { count } = await supabase
-          .from('daily_spins')
-          .select('id', { count: 'exact', head: true })
-          .eq('discord_id', discord_id)
-          .eq('server_id', server_id)
-          .eq('contract_address', contract_address)
-          .gte('created_at_utc', sinceISO);
-        const used = count ?? 0;
-        spins_left = Math.max(0, 1 - used);
-      } catch {
+        if (role === 'superadmin') {
+          spins_left = 'Unlimited';
+        } else {
+          const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+          const { count } = await supabase
+            .from('daily_spins')
+            .select('id', { count: 'exact', head: true })
+            .eq('discord_id', discord_id)
+            .eq('server_id', server_id)
+            .eq('contract_address', contract_address)
+            .gte('created_at_utc', sinceISO);
+          const used = count ?? 0;
+          spins_left = Math.max(0, 1 - used);
+        }
+      } catch (e) {
+        // don’t block the wheel on count errors
         spins_left = 1;
       }
 
@@ -109,12 +143,14 @@ export default async function handler(req, res) {
           payout_weights: weights,
           image_url: cfg.image_url || '/img/Wheel_Generic_800px.webp',
         },
+        role,
         spins_left,
         contract_address,
       });
     }
 
-    // ---- SPIN (weighted pick) ----
+    // ---- SPIN PATH ----
+    // Weighted pick (server-side)
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const r = randomInt(0, totalWeight);
     let acc = 0, idx = 0;
@@ -122,11 +158,10 @@ export default async function handler(req, res) {
       acc += weights[i];
       if (r < acc) { idx = i; break; }
     }
-    const rewardDisplay = Number(amounts[idx]);
-    const decimals = 5; // Harold / Fatcoin
-    const amountBase = rewardDisplay * (10 ** decimals);
+    const rewardDisplay = Number(amounts[idx]);          // e.g. 3, 30, 100, etc.
+    const amountBase = Math.trunc(rewardDisplay * (10 ** decimals)); // base units
 
-    // ---- BUILD TRANSFER ----
+    // Build addresses
     const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
     const userPk  = new PublicKey(wallet_address);
     const mintPk  = new PublicKey(contract_address);
@@ -134,11 +169,24 @@ export default async function handler(req, res) {
     const fromATA = await getAssociatedTokenAddress(mintPk, funding.publicKey);
     const toATA   = await getAssociatedTokenAddress(mintPk, userPk);
 
+    // ---- PRE-FLIGHT BALANCE CHECK (avoid mislabeling as "network busy") ----
+    try {
+      const balInfo = await connection.getTokenAccountBalance(fromATA);
+      const uiAmt = Number(balInfo?.value?.amount || 0); // in base units string
+      if (!Number.isFinite(uiAmt) || uiAmt < amountBase) {
+        return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
+      }
+    } catch (e) {
+      // if the account is missing, create it in TX below; skip check
+    }
+
+    // Build instructions (create ATAs if missing)
     const ixs = [];
     const [fromInfo, toInfo] = await Promise.all([
       connection.getAccountInfo(fromATA),
       connection.getAccountInfo(toATA),
     ]);
+
     if (!fromInfo) {
       ixs.push(createAssociatedTokenAccountInstruction(
         funding.publicKey, fromATA, funding.publicKey, mintPk
@@ -149,85 +197,64 @@ export default async function handler(req, res) {
         funding.publicKey, toATA, userPk, mintPk
       ));
     }
-    ixs.push(createTransferInstruction(fromATA, toATA, funding.publicKey, amountBase));
 
-    // ---- SEND W/ RETRIES ----
-    async function tryOnce(retryIndex = 0) {
-      return await sendTxWithFreshBlockhash({
+    ixs.push(createTransferInstruction(
+      fromATA, toATA, funding.publicKey, amountBase
+    ));
+
+    let signature;
+    try {
+      signature = await sendTxWithFreshBlockhash({
         connection,
         payer: funding,
         instructions: ixs,
-        recentAccounts: [],
-        maxRetries: 4 + retryIndex,
+        recentAccounts: [fromATA, toATA, mintPk, userPk.toBase58()],
+        maxRetries: 4,
         commitment: 'confirmed',
       });
-    }
+    } catch (e) {
+      const msg = String(e?.message || e);
+      console.error('[spin] sendTx error:', msg);
 
-    let signature = '';
-    let ok = false;
-    const attempts = 3;
-    const baseDelay = 800;
-
-    for (let i = 0; i < attempts; i++) {
-      try {
-        console.log(`[spin] transfer attempt ${i + 1}/${attempts}`);
-        signature = await tryOnce(i);
-        ok = true;
-        break;
-      } catch (e) {
-        const msg = (e?.message || String(e)).toLowerCase();
-        const transient =
-          msg.includes('busy') || msg.includes('blockhash') || msg.includes('rate') ||
-          msg.includes('429')  || msg.includes('timeout')   || msg.includes('unavailable') ||
-          msg.includes('gateway') || msg.includes('connection') || msg.includes('slot');
-        if (i < attempts - 1 && transient) {
-          await new Promise(r => setTimeout(r, baseDelay * (2 ** i)));
-          continue;
-        }
-        console.error('Transfer failed (final):', e?.message || e);
-        signature = '';       // <-- pending marker (empty string, not NULL)
-        ok = false;
-        break;
+      // Map common simulation errors to clearer reasons
+      if (msg.includes('insufficient') || msg.includes('Insufficient') || msg.includes('0x1')) {
+        return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
       }
+      if (msg.includes('address not found') || msg.includes('could not find')) {
+        return res.status(503).json({ error: 'Temporary RPC issue. Please try again.' });
+      }
+      return res.status(502).json({ error: 'Token transfer failed (network busy). Please try again.' });
     }
 
-    // ---- RECORD SPIN (no NULLs) ----
+    // Record spin (must include created_at_utc for your trigger)
     const nowISO = new Date().toISOString();
     const { error: insErr } = await supabase.from('daily_spins').insert({
       discord_id,
       server_id,
       wallet_address,
       contract_address,
-      reward: String(rewardDisplay),
-      amount_base: amountBase,
-      signature,            // '' if pending, tx sig string if succeeded
+      reward: rewardDisplay,        // store as number
+      amount_base: amountBase,      // canonical
+      signature,
       created_at_utc: nowISO,
     });
 
     if (insErr) {
-      console.error('Insert error:', insErr.message);
+      console.error('[spin] insert daily_spins error:', insErr.message);
+      // NOTE: do NOT revert the on-chain transfer; just report the failure
       return res.status(500).json({ error: 'Failed to record spin' });
     }
 
-    // ---- BURN TOKEN ----
+    // Burn the token
     await supabase
       .from('spin_tokens')
-      .update({ used: true, signature }) // '' if pending
+      .update({ used: true, signature })
       .eq('token', signedToken);
-
-    // ---- RESPOND ----
-    if (!ok) {
-      return res.status(200).json({
-        segmentIndex: idx,
-        prize: `${rewardDisplay} ${tokenName}`,
-        pending: true,
-        message: 'Network congested — payout will be retried automatically.',
-      });
-    }
 
     return res.status(200).json({
       segmentIndex: idx,
       prize: `${rewardDisplay} ${tokenName}`,
+      spins_left: role === 'superadmin' ? 'Unlimited' : undefined,
       signature,
     });
 
