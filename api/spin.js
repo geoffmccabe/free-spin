@@ -156,39 +156,69 @@ export default async function handler(req, res) {
       }
     }
 
-    // *** ATOMIC TOKEN CLAIM (NULL or FALSE treated as unused) ***
-    let claimRow = null, claimErr = null;
+    // ==== DETERMINISTIC TWO-STEP TOKEN CLAIM ====
+    // Step A: claim where used = false
+    let claimData = null, claimError = null;
+
     try {
-      const resp = await supabase
+      const respA = await supabase
         .from('spin_tokens')
         .update({ used: true })
-        .or('used.is.null,used.eq.false')   // NULL-safe
         .eq('token', signedToken)
+        .eq('used', false)
         .select('token')
         .maybeSingle();
 
-      claimRow = resp.data || null;
-      claimErr = resp.error || null;
+      if (respA.error) {
+        claimError = respA.error;
+      } else if (respA.data) {
+        claimData = respA.data;
+      } else {
+        // Step B: claim where used IS NULL
+        const respB = await supabase
+          .from('spin_tokens')
+          .update({ used: true })
+          .eq('token', signedToken)
+          .is('used', null)
+          .select('token')
+          .maybeSingle();
+
+        if (respB.error) {
+          claimError = respB.error;
+        } else if (respB.data) {
+          claimData = respB.data;
+        }
+      }
     } catch (e) {
-      claimErr = e;
+      claimError = e;
     }
 
-    if (claimErr) {
-      console.error('[spin] token claim error:', claimErr.message || claimErr);
+    if (claimError) {
+      console.error('[spin] token claim error (update failed):', claimError.message || claimError);
       return res.status(400).json({ error: 'Token claim failed' });
     }
-    if (!claimRow) {
-      // clarify if it’s already used
-      const { data: again } = await supabase
+
+    if (!claimData) {
+      // Re-check actual state to decide message
+      const { data: again, error: againErr } = await supabase
         .from('spin_tokens')
         .select('used, signature')
         .eq('token', signedToken)
         .maybeSingle();
-      if (again?.used) {
+
+      if (againErr) {
+        console.error('[spin] token recheck error:', againErr.message);
+        return res.status(400).json({ error: 'Token claim failed' });
+      }
+
+      if (again?.used === true) {
         return res.status(400).json({ error: 'This spin token has already been used' });
       }
+
+      console.error('[spin] token claim matched 0 rows (used neither false nor null?)');
       return res.status(400).json({ error: 'Token claim failed' });
     }
+    // ==== CLAIMED SUCCESSFULLY ====
 
     // Weighted pick
     const totalWeight = weights.reduce((a, b) => a + b, 0);
