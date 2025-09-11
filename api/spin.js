@@ -37,25 +37,35 @@ export default async function handler(req, res) {
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
 
-    // Verify HMAC
+    // ---- Verify HMAC ----
     const [rawToken, providedSig] = String(signedToken).split('.');
     if (!rawToken || !providedSig) return res.status(400).json({ error: 'Invalid token format' });
     const expectedSig = createHmac('sha256', SPIN_KEY).update(rawToken).digest('hex');
     if (providedSig !== expectedSig) return res.status(403).json({ error: 'Invalid token signature' });
 
-    // Load spin token (read only)
-    const { data: t, error: tErr } = await supabase
+    // ---- ATOMIC CLAIM of spin token (treat NULL as false) ----
+    // If zero rows are returned, the token is already claimed.
+    const usedAt = new Date().toISOString();
+    const { data: claimRow, error: claimErr } = await supabase
       .from('spin_tokens')
-      .select('discord_id, wallet_address, contract_address, used, signature')
+      .update({ used: true, used_at: usedAt })
       .eq('token', signedToken)
+      .or('used.is.null,used.eq.false')   // <— legacy rows had NULL
+      .select('discord_id, wallet_address, contract_address')
       .maybeSingle();
 
-    if (tErr || !t) return res.status(400).json({ error: 'Invalid token' });
-    if (t.used)     return res.status(400).json({ error: 'This spin token has already been used' });
+    if (claimErr) {
+      console.error('[spin] token claim error:', claimErr.message);
+      return res.status(400).json({ error: 'Token claim failed' });
+    }
+    if (!claimRow) {
+      // Someone already claimed/used this token
+      return res.status(400).json({ error: 'This spin token has already been used' });
+    }
 
-    const { discord_id, wallet_address, contract_address } = t;
+    const { discord_id, wallet_address, contract_address } = claimRow;
 
-    // Server-token allowlist
+    // ---- Server-token allowlist ----
     const { data: stRows, error: stErr } = await supabase
       .from('server_tokens')
       .select('contract_address, enabled')
@@ -68,7 +78,7 @@ export default async function handler(req, res) {
     const allowed = stRows.some(r => r.contract_address === contract_address && (r.enabled !== false));
     if (!allowed) return res.status(400).json({ error: 'This token is not enabled for this server' });
 
-    // Role
+    // ---- Role (for spins_left) ----
     let role = null;
     {
       const { data: adminRow } = await supabase
@@ -80,7 +90,7 @@ export default async function handler(req, res) {
       role = adminRow?.role || null;
     }
 
-    // Wheel config
+    // ---- Wheel config ----
     const { data: cfg, error: cfgErr } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -97,11 +107,11 @@ export default async function handler(req, res) {
     const weights = Array.isArray(cfg.payout_weights) && cfg.payout_weights.length === amounts.length
       ? cfg.payout_weights.map(Number)
       : amounts.map(() => 1);
-    const decimals = 5;
+    const decimals = 5; // HAROLD/FATCOIN default
 
     if (!amounts.length) return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
 
-    // PAGE LOAD (no spin)
+    // ---- Page load path (no spin) ----
     if (!spin) {
       let spins_left = 1;
       try {
@@ -136,91 +146,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // SERVER-SIDE LIMIT (non-admin)
-    if (role !== 'superadmin') {
-      const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const { count, error: cntErr } = await supabase
-        .from('daily_spins')
-        .select('id', { count: 'exact', head: true })
-        .eq('discord_id', discord_id)
-        .eq('server_id', server_id)
-        .eq('contract_address', contract_address)
-        .gte('created_at_utc', sinceISO);
-
-      if (cntErr) {
-        console.error('[spin] limit count error:', cntErr.message);
-        return res.status(503).json({ error: 'Temporary database issue. Please try again.' });
-      }
-      if ((count ?? 0) >= 1) {
-        return res.status(429).json({ error: 'Daily spin limit reached' });
-      }
-    }
-
-    // ==== DETERMINISTIC TWO-STEP TOKEN CLAIM ====
-    // Step A: claim where used = false
-    let claimData = null, claimError = null;
-
-    try {
-      const respA = await supabase
-        .from('spin_tokens')
-        .update({ used: true })
-        .eq('token', signedToken)
-        .eq('used', false)
-        .select('token')
-        .maybeSingle();
-
-      if (respA.error) {
-        claimError = respA.error;
-      } else if (respA.data) {
-        claimData = respA.data;
-      } else {
-        // Step B: claim where used IS NULL
-        const respB = await supabase
-          .from('spin_tokens')
-          .update({ used: true })
-          .eq('token', signedToken)
-          .is('used', null)
-          .select('token')
-          .maybeSingle();
-
-        if (respB.error) {
-          claimError = respB.error;
-        } else if (respB.data) {
-          claimData = respB.data;
-        }
-      }
-    } catch (e) {
-      claimError = e;
-    }
-
-    if (claimError) {
-      console.error('[spin] token claim error (update failed):', claimError.message || claimError);
-      return res.status(400).json({ error: 'Token claim failed' });
-    }
-
-    if (!claimData) {
-      // Re-check actual state to decide message
-      const { data: again, error: againErr } = await supabase
-        .from('spin_tokens')
-        .select('used, signature')
-        .eq('token', signedToken)
-        .maybeSingle();
-
-      if (againErr) {
-        console.error('[spin] token recheck error:', againErr.message);
-        return res.status(400).json({ error: 'Token claim failed' });
-      }
-
-      if (again?.used === true) {
-        return res.status(400).json({ error: 'This spin token has already been used' });
-      }
-
-      console.error('[spin] token claim matched 0 rows (used neither false nor null?)');
-      return res.status(400).json({ error: 'Token claim failed' });
-    }
-    // ==== CLAIMED SUCCESSFULLY ====
-
-    // Weighted pick
+    // ---- Spin: weighted pick ----
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const r = randomInt(0, totalWeight);
     let acc = 0, idx = 0;
@@ -231,7 +157,7 @@ export default async function handler(req, res) {
     const rewardDisplay = Number(amounts[idx]);
     const amountBase = Math.trunc(rewardDisplay * (10 ** decimals));
 
-    // Keys
+    // ---- Keys & ATAs ----
     const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
     const userPk  = new PublicKey(wallet_address);
     const mintPk  = new PublicKey(contract_address);
@@ -239,7 +165,7 @@ export default async function handler(req, res) {
     const fromATA = await getAssociatedTokenAddress(mintPk, funding.publicKey);
     const toATA   = await getAssociatedTokenAddress(mintPk, userPk);
 
-    // Pool balance preflight
+    // Pre-flight: pool balance
     try {
       const balInfo = await connection.getTokenAccountBalance(fromATA);
       const baseAmt = Number(balInfo?.value?.amount || 0);
@@ -247,10 +173,10 @@ export default async function handler(req, res) {
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
       }
     } catch {
-      // we'll create ATA if missing below
+      // ignore; ATA may be created in tx
     }
 
-    // Instructions
+    // Build instructions
     const ixs = [];
     const [fromInfo, toInfo] = await Promise.all([
       connection.getAccountInfo(fromATA),
@@ -272,7 +198,7 @@ export default async function handler(req, res) {
       fromATA, toATA, funding.publicKey, amountBase
     ));
 
-    // Send
+    // ---- Send ----
     let signature;
     try {
       signature = await sendTxWithFreshBlockhash({
@@ -287,17 +213,16 @@ export default async function handler(req, res) {
       const msg = String(e?.message || e);
       console.error('[spin] sendTx error:', msg);
 
-      // Do NOT revert token claim
-      if (msg.toLowerCase().includes('insufficient')) {
+      if (msg.toLowerCase().includes('insufficient') || msg.includes('0x1')) {
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
       }
-      if (msg.includes('address not found') || msg.includes('could not find')) {
+      if (msg.toLowerCase().includes('address not found') || msg.toLowerCase().includes('could not find')) {
         return res.status(503).json({ error: 'Temporary RPC issue. Please try again.' });
       }
       return res.status(502).json({ error: 'Token transfer failed (network busy). Please try again.' });
     }
 
-    // Record spin
+    // ---- Record spin ----
     const nowISO = new Date().toISOString();
     const { error: insErr } = await supabase.from('daily_spins').insert({
       discord_id,
@@ -309,12 +234,13 @@ export default async function handler(req, res) {
       signature,
       created_at_utc: nowISO,
     });
+
     if (insErr) {
       console.error('[spin] insert daily_spins error:', insErr.message);
       return res.status(500).json({ error: 'Failed to record spin' });
     }
 
-    // Stamp signature on token row
+    // ---- Mark signature on token row (already claimed above) ----
     await supabase
       .from('spin_tokens')
       .update({ signature })
