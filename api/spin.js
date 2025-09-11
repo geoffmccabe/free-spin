@@ -156,17 +156,18 @@ export default async function handler(req, res) {
       }
     }
 
-    // *** ATOMIC TOKEN CLAIM (treat NULL as unused) ***
+    // *** ATOMIC TOKEN CLAIM (NULL or FALSE treated as unused) ***
     let claimRow = null, claimErr = null;
     try {
       const resp = await supabase
         .from('spin_tokens')
-        .update({ used: true, claimed_at: new Date().toISOString() })
+        .update({ used: true })
+        .or('used.is.null,used.eq.false')   // NULL-safe
         .eq('token', signedToken)
-        .or('used.is.null,used.eq.false')         // <— allow NULL or false
         .select('token')
         .maybeSingle();
-      claimRow = resp.data;
+
+      claimRow = resp.data || null;
       claimErr = resp.error || null;
     } catch (e) {
       claimErr = e;
@@ -177,7 +178,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Token claim failed' });
     }
     if (!claimRow) {
-      // clarify if it’s actually used already
+      // clarify if it’s already used
       const { data: again } = await supabase
         .from('spin_tokens')
         .select('used, signature')
