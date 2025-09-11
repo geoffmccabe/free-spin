@@ -11,10 +11,7 @@ import { sendTxWithFreshBlockhash } from '../lib/solanaSend.js';
 
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json');
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
     SUPABASE_URL,
@@ -80,7 +77,7 @@ export default async function handler(req, res) {
       role = adminRow?.role || null;
     }
 
-    // Wheel config (no decimals column required)
+    // Wheel config
     const { data: cfg, error: cfgErr } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -97,7 +94,7 @@ export default async function handler(req, res) {
     const weights = Array.isArray(cfg.payout_weights) && cfg.payout_weights.length === amounts.length
       ? cfg.payout_weights.map(Number)
       : amounts.map(() => 1);
-    const decimals = 5; // default
+    const decimals = 5;
 
     if (!amounts.length) return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
 
@@ -136,6 +133,19 @@ export default async function handler(req, res) {
       });
     }
 
+    // 🔒 Mark token as used BEFORE transfer (atomic guard)
+    const { data: claim, error: claimErr } = await supabase
+      .from('spin_tokens')
+      .update({ used: true })
+      .eq('token', signedToken)
+      .eq('used', false)
+      .select()
+      .maybeSingle();
+
+    if (claimErr || !claim) {
+      return res.status(400).json({ error: 'This spin token has already been used' });
+    }
+
     // Spin: weighted pick
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const r = randomInt(0, totalWeight);
@@ -155,24 +165,23 @@ export default async function handler(req, res) {
     const fromATA = await getAssociatedTokenAddress(mintPk, funding.publicKey);
     const toATA   = await getAssociatedTokenAddress(mintPk, userPk);
 
-    // Pre-flight balance check (don’t mislabel)
+    // Pre-flight balance check
     try {
       const balInfo = await connection.getTokenAccountBalance(fromATA);
       const baseAmt = Number(balInfo?.value?.amount || 0);
       if (!Number.isFinite(baseAmt) || baseAmt < amountBase) {
-        return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
+        return res.status(503).json({ error: 'Prize pool is low. Please notify an admin.' });
       }
     } catch {
-      // if from ATA missing, we’ll create it in tx below
+      // ignore, ATA may not exist yet
     }
 
-    // Build ixs (create ATAs if missing)
+    // Build instructions
     const ixs = [];
     const [fromInfo, toInfo] = await Promise.all([
       connection.getAccountInfo(fromATA),
       connection.getAccountInfo(toATA),
     ]);
-
     if (!fromInfo) {
       ixs.push(createAssociatedTokenAccountInstruction(
         funding.publicKey, fromATA, funding.publicKey, mintPk
@@ -183,33 +192,28 @@ export default async function handler(req, res) {
         funding.publicKey, toATA, userPk, mintPk
       ));
     }
+    ixs.push(createTransferInstruction(fromATA, toATA, funding.publicKey, amountBase));
 
-    ixs.push(createTransferInstruction(
-      fromATA, toATA, funding.publicKey, amountBase
-    ));
-
-    // Send
+    // Send transfer
     let signature;
     try {
       signature = await sendTxWithFreshBlockhash({
         connection,
         payer: funding,
         instructions: ixs,
-        recentAccounts: [fromATA, toATA, mintPk, userPk.toBase58()],
         maxRetries: 4,
         commitment: 'confirmed',
       });
     } catch (e) {
       const msg = String(e?.message || e);
       console.error('[spin] sendTx error:', msg);
-
-      if (msg.includes('insufficient') || msg.includes('Insufficient') || msg.includes('0x1')) {
-        return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
+      if (msg.includes('insufficient')) {
+        return res.status(503).json({ error: 'Prize pool is empty. Please notify an admin.' });
       }
-      if (msg.includes('address not found') || msg.includes('could not find')) {
-        return res.status(503).json({ error: 'Temporary RPC issue. Please try again.' });
+      if (msg.includes('blockhash')) {
+        return res.status(503).json({ error: 'Temporary network issue. Please try again.' });
       }
-      return res.status(502).json({ error: 'Token transfer failed (network busy). Please try again.' });
+      return res.status(502).json({ error: 'Token transfer failed. Please try again later.' });
     }
 
     // Record spin
@@ -224,17 +228,13 @@ export default async function handler(req, res) {
       signature,
       created_at_utc: nowISO,
     });
-
     if (insErr) {
       console.error('[spin] insert daily_spins error:', insErr.message);
       return res.status(500).json({ error: 'Failed to record spin' });
     }
 
-    // Burn spin token
-    await supabase
-      .from('spin_tokens')
-      .update({ used: true, signature })
-      .eq('token', signedToken);
+    // Update spin token with signature
+    await supabase.from('spin_tokens').update({ signature }).eq('token', signedToken);
 
     return res.status(200).json({
       segmentIndex: idx,
