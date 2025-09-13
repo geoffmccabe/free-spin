@@ -16,7 +16,6 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // ---- ENV ----
   const {
     SUPABASE_URL,
     SUPABASE_SERVICE_ROLE_KEY,
@@ -34,22 +33,17 @@ export default async function handler(req, res) {
   const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
   try {
-    // ---- INPUT ----
     const { token: signedToken, server_id, spin } = req.body || {};
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
 
-    // ---- HMAC VERIFY (uuid.hmac) ----
+    // Verify HMAC
     const [rawToken, providedSig] = String(signedToken).split('.');
-    if (!rawToken || !providedSig) {
-      return res.status(400).json({ error: 'Invalid token format' });
-    }
+    if (!rawToken || !providedSig) return res.status(400).json({ error: 'Invalid token format' });
     const expectedSig = createHmac('sha256', SPIN_KEY).update(rawToken).digest('hex');
-    if (providedSig !== expectedSig) {
-      return res.status(403).json({ error: 'Invalid token signature' });
-    }
+    if (providedSig !== expectedSig) return res.status(403).json({ error: 'Invalid token signature' });
 
-    // ---- FETCH SPIN TOKEN ----
+    // Load spin token (single read — no mutation here)
     const { data: t, error: tErr } = await supabase
       .from('spin_tokens')
       .select('discord_id, wallet_address, contract_address, used')
@@ -57,11 +51,9 @@ export default async function handler(req, res) {
       .maybeSingle();
 
     if (tErr || !t) return res.status(400).json({ error: 'Invalid token' });
-    if (t.used)     return res.status(400).json({ error: 'This spin token has already been used' });
-
     const { discord_id, wallet_address, contract_address } = t;
 
-    // ---- SERVER ↔ TOKEN CHECK ----
+    // Server-token allowlist
     const { data: stRows, error: stErr } = await supabase
       .from('server_tokens')
       .select('contract_address, enabled')
@@ -72,11 +64,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Server is not configured for any tokens' });
     }
     const allowed = stRows.some(r => r.contract_address === contract_address && (r.enabled !== false));
-    if (!allowed) {
-      return res.status(400).json({ error: 'This token is not enabled for this server' });
-    }
+    if (!allowed) return res.status(400).json({ error: 'This token is not enabled for this server' });
 
-    // ---- ROLE (for superadmin bypass) ----
+    // Role
     let role = null;
     {
       const { data: adminRow } = await supabase
@@ -88,7 +78,7 @@ export default async function handler(req, res) {
       role = adminRow?.role || null;
     }
 
-    // ---- LOAD WHEEL CONFIG ----
+    // Wheel config (no decimals column in your schema; set default)
     const { data: cfg, error: cfgErr } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -105,14 +95,12 @@ export default async function handler(req, res) {
     const weights = Array.isArray(cfg.payout_weights) && cfg.payout_weights.length === amounts.length
       ? cfg.payout_weights.map(Number)
       : amounts.map(() => 1);
+    const decimals = 5; // default
 
-    if (!amounts.length) {
-      return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
-    }
+    if (!amounts.length) return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
 
-    // ---- PAGE LOAD PATH (spin not requested) ----
+    // Page load (no spin): return config + spins_left
     if (!spin) {
-      // Spins-left: 1 per 24h per discord_id (superadmin shows Unlimited)
       let spins_left = 1;
       try {
         if (role === 'superadmin') {
@@ -146,41 +134,60 @@ export default async function handler(req, res) {
       });
     }
 
-    // =====================================================================
-    // SINGLE FIX: PER-WALLET DAILY LIMIT (blocks farming to same wallet)
-    // =====================================================================
+    // === ACTUAL SPIN FLOW (exploit-safe) ===
+
+    // A) For non-superadmins, insert a "pre-claim lock" row into daily_spins
+    //    We use the unique signature index to allow only 1 claim per (user,server,token,UTC day).
+    //    For superadmins, skip the per-day lock (they can test repeatedly) but still consume the token atomically.
+    const todayUTC = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const lockSignature = `lock:${server_id}|${discord_id}|${contract_address}|${todayUTC}`;
+
+    let preclaimRowId = null;
     if (role !== 'superadmin') {
-      try {
-        const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        const { count: walletToday } = await supabase
-          .from('daily_spins')
-          .select('id', { count: 'exact', head: true })
-          .eq('server_id', server_id)
-          .eq('contract_address', contract_address)
-          .eq('wallet_address', wallet_address)
-          .gte('created_at_utc', sinceISO);
+      const { data: preclaim, error: preErr } = await supabase
+        .from('daily_spins')
+        .insert([{
+          discord_id,
+          server_id,
+          contract_address,
+          reward: 0,
+          amount_base: 0,
+          signature: lockSignature,  // unique "lock"
+          token: signedToken,
+          is_test: false,
+          created_at_utc: new Date().toISOString(),
+          created_at_ms: Date.now(),
+          wallet_address: wallet_address || null,
+        }])
+        .select('id')
+        .single();
 
-        if ((walletToday ?? 0) > 0) {
-          // Optional: burn the token so it can’t be reused
-          await supabase.from('spin_tokens')
-            .update({ used: true, signature: 'wallet_daily_limit' })
-            .eq('token', signedToken);
-
-          return res.status(429).json({ error: 'Daily limit reached for this wallet.' });
-        }
-      } catch (e) {
-        console.error('[spin] per-wallet check failed:', e?.message || e);
-        // Fail safe: do NOT allow if we can’t check. Prevent drain on outage.
-        await supabase.from('spin_tokens')
-          .update({ used: true, signature: 'wallet_check_failed' })
-          .eq('token', signedToken);
-        return res.status(503).json({ error: 'Please try again later.' });
+      if (preErr) {
+        // Unique violation on signature means they already spun today
+        // (or another tab claimed the pre-lock first)
+        return res.status(429).json({ error: 'You have already claimed your spin today.' });
       }
+      preclaimRowId = preclaim?.id || null;
     }
-    // =====================================================================
 
-    // ---- SPIN PATH ----
-    // Weighted pick (server-side)
+    // B) Atomically consume THIS token so it cannot be reused in another tab
+    const { data: claimRow, error: claimErr } = await supabase
+      .from('spin_tokens')
+      .update({ used: true, used_at: new Date().toISOString() })
+      .eq('token', signedToken)
+      .is('used', false)
+      .select('discord_id, wallet_address, contract_address')
+      .maybeSingle();
+
+    if (claimErr || !claimRow) {
+      // Token was already used (race) — clean up the preclaim lock (if any)
+      if (preclaimRowId) {
+        await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
+      }
+      return res.status(409).json({ error: 'This spin token has already been used' });
+    }
+
+    // C) Weighted pick
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const r = randomInt(0, totalWeight);
     let acc = 0, idx = 0;
@@ -188,11 +195,10 @@ export default async function handler(req, res) {
       acc += weights[i];
       if (r < acc) { idx = i; break; }
     }
-    const rewardDisplay = Number(amounts[idx]);          // e.g. 3, 30, 100, etc.
-    const decimals = 5;                                  // HAROLD / FATCOIN use 5
+    const rewardDisplay = Number(amounts[idx]);
     const amountBase = Math.trunc(rewardDisplay * (10 ** decimals));
 
-    // Build & send transfer
+    // D) Build addresses and do a quick prize pool check
     const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
     const userPk  = new PublicKey(wallet_address);
     const mintPk  = new PublicKey(contract_address);
@@ -200,9 +206,21 @@ export default async function handler(req, res) {
     const fromATA = await getAssociatedTokenAddress(mintPk, funding.publicKey);
     const toATA   = await getAssociatedTokenAddress(mintPk, userPk);
 
-    const ixs = [];
+    try {
+      const balInfo = await connection.getTokenAccountBalance(fromATA);
+      const baseAmt = Number(balInfo?.value?.amount || 0);
+      if (!Number.isFinite(baseAmt) || baseAmt < amountBase) {
+        // Revert token + preclaim so user can try later
+        if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
+        await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
+        return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
+      }
+    } catch {
+      // continue; if ATA missing, we’ll create it in the tx
+    }
 
-    // Ensure ATAs exist
+    // E) Build ixs (create ATAs if missing), then send
+    const ixs = [];
     const [fromInfo, toInfo] = await Promise.all([
       connection.getAccountInfo(fromATA),
       connection.getAccountInfo(toATA),
@@ -229,13 +247,17 @@ export default async function handler(req, res) {
         connection,
         payer: funding,
         instructions: ixs,
-        recentAccounts: [],
+        recentAccounts: [fromATA, toATA, mintPk, userPk.toBase58()],
         maxRetries: 4,
         commitment: 'confirmed',
       });
     } catch (e) {
       const msg = String(e?.message || e);
       console.error('[spin] sendTx error:', msg);
+
+      // Clean up so user can try again later; do not burn the token or keep the lock
+      if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
+      await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
 
       if (msg.includes('insufficient') || msg.includes('Insufficient') || msg.includes('0x1')) {
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
@@ -246,33 +268,51 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: 'Token transfer failed (network busy). Please try again.' });
     }
 
-    // Record spin (must include created_at_utc for your trigger)
+    // F) Update the preclaim row (or insert a final row for superadmin) with real data
     const nowISO = new Date().toISOString();
-    const { error: insErr } = await supabase.from('daily_spins').insert({
+    const baseRow = {
       discord_id,
       server_id,
       wallet_address,
       contract_address,
-      reward: String(rewardDisplay),   // keep legacy display units
-      amount_base: amountBase,         // canonical
-      signature,
+      reward: rewardDisplay,
+      amount_base: amountBase,
+      signature,                 // swap out the lock with the real tx id
       created_at_utc: nowISO,
-    });
+      created_at_ms: Date.now(),
+      is_test: false,
+      token: signedToken,
+    };
 
-    if (insErr) {
-      console.error('[spin] insert daily_spins error:', insErr.message);
-      return res.status(500).json({ error: 'Failed to record spin' });
+    if (role !== 'superadmin' && preclaimRowId) {
+      // Update the lock row in place
+      const { error: updErr } = await supabase
+        .from('daily_spins')
+        .update(baseRow)
+        .eq('id', preclaimRowId);
+      if (updErr) {
+        console.error('[spin] update daily_spins (lock->final) error:', updErr.message);
+        // We won't revert the transfer; log and continue
+      }
+    } else {
+      // Superadmin path: just insert a normal row (unlimited testing)
+      const { error: insErr } = await supabase.from('daily_spins').insert(baseRow);
+      if (insErr) {
+        console.error('[spin] insert daily_spins (superadmin) error:', insErr.message);
+      }
     }
 
-    // Burn the token
+    // Also mark the spin_token row with the tx signature (optional)
     await supabase
       .from('spin_tokens')
-      .update({ used: true, signature })
+      .update({ signature })
       .eq('token', signedToken);
 
+    // Response
     return res.status(200).json({
       segmentIndex: idx,
       prize: `${rewardDisplay} ${tokenName}`,
+      spins_left: role === 'superadmin' ? 'Unlimited' : undefined,
       signature,
     });
 
