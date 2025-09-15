@@ -43,7 +43,7 @@ export default async function handler(req, res) {
     const expectedSig = createHmac('sha256', SPIN_KEY).update(rawToken).digest('hex');
     if (providedSig !== expectedSig) return res.status(403).json({ error: 'Invalid token signature' });
 
-    // Load spin token (single read — no mutation here)
+    // Load spin token
     const { data: t, error: tErr } = await supabase
       .from('spin_tokens')
       .select('discord_id, wallet_address, contract_address, used')
@@ -78,7 +78,7 @@ export default async function handler(req, res) {
       role = adminRow?.role || null;
     }
 
-    // Wheel config (no decimals column in your schema; set default)
+    // Wheel config
     const { data: cfg, error: cfgErr } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -99,7 +99,25 @@ export default async function handler(req, res) {
 
     if (!amounts.length) return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
 
-    // Page load (no spin): return config + spins_left
+    // Helper to fetch prices (best-effort; failures fall back to 0)
+    async function getPricesUSD(mintAddress) {
+      let solUsd = 0, tokenUsd = 0;
+      try {
+        // SOL price (CoinGecko)
+        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+        const j = await r.json();
+        solUsd = Number(j?.solana?.usd || 0) || 0;
+      } catch {}
+      try {
+        // Token price (Jupiter) by mint
+        const r2 = await fetch(`https://price.jup.ag/v4/price?ids=${encodeURIComponent(mintAddress)}`);
+        const j2 = await r2.json();
+        tokenUsd = Number(j2?.data?.[mintAddress]?.price || 0) || 0;
+      } catch {}
+      return { solUsd, tokenUsd };
+    }
+
+    // Page load (no spin): return config + spins_left **and adminInfo**
     if (!spin) {
       let spins_left = 1;
       try {
@@ -121,6 +139,45 @@ export default async function handler(req, res) {
         spins_left = 1;
       }
 
+      // === Admin panel balances (best-effort; never block UI) ===
+      let adminInfo = {};
+      try {
+        const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+        const poolAddr = funding.publicKey.toBase58();
+
+        // raw balances
+        const [lamports, fromATA] = await Promise.all([
+          connection.getBalance(funding.publicKey, 'confirmed'),
+          getAssociatedTokenAddress(new PublicKey(contract_address), funding.publicKey),
+        ]);
+
+        let tokenBase = 0;
+        try {
+          const balInfo = await connection.getTokenAccountBalance(fromATA, 'confirmed');
+          tokenBase = Number(balInfo?.value?.amount || 0) || 0;
+        } catch {
+          tokenBase = 0; // ATA may not exist yet
+        }
+
+        // prices
+        const { solUsd, tokenUsd } = await getPricesUSD(contract_address);
+
+        // convert to display units
+        const gasAmt = lamports / 1e9;
+        const tokenAmt = tokenBase / (10 ** decimals);
+
+        adminInfo = {
+          poolAddr,
+          gasAmt,
+          gasUsdValue: solUsd ? Math.round(gasAmt * solUsd) : 0,
+          tokenAmt,
+          tokenUsdValue: tokenUsd ? Math.round(tokenAmt * tokenUsd) : 0,
+        };
+      } catch (e) {
+        console.warn('[spin] adminInfo fetch failed (non-fatal):', e?.message || e);
+        adminInfo = {};
+      }
+
       return res.status(200).json({
         tokenConfig: {
           token_name: tokenName,
@@ -131,18 +188,17 @@ export default async function handler(req, res) {
         role,
         spins_left,
         contract_address,
+        adminInfo, // <-- what the admin panel expects
       });
     }
 
-    // === ACTUAL SPIN FLOW (exploit-safe) ===
+    // ====== SPIN FLOW (hardened against racing tabs) ======
 
-    // A) For non-superadmins, insert a "pre-claim lock" row into daily_spins
-    //    We use the unique signature index to allow only 1 claim per (user,server,token,UTC day).
-    //    For superadmins, skip the per-day lock (they can test repeatedly) but still consume the token atomically.
-    const todayUTC = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    // Pre-claim lock (skip for superadmin)
+    const todayUTC = new Date().toISOString().slice(0, 10);
     const lockSignature = `lock:${server_id}|${discord_id}|${contract_address}|${todayUTC}`;
-
     let preclaimRowId = null;
+
     if (role !== 'superadmin') {
       const { data: preclaim, error: preErr } = await supabase
         .from('daily_spins')
@@ -152,7 +208,7 @@ export default async function handler(req, res) {
           contract_address,
           reward: 0,
           amount_base: 0,
-          signature: lockSignature,  // unique "lock"
+          signature: lockSignature,
           token: signedToken,
           is_test: false,
           created_at_utc: new Date().toISOString(),
@@ -163,14 +219,12 @@ export default async function handler(req, res) {
         .single();
 
       if (preErr) {
-        // Unique violation on signature means they already spun today
-        // (or another tab claimed the pre-lock first)
         return res.status(429).json({ error: 'You have already claimed your spin today.' });
       }
       preclaimRowId = preclaim?.id || null;
     }
 
-    // B) Atomically consume THIS token so it cannot be reused in another tab
+    // Atomic token consume
     const { data: claimRow, error: claimErr } = await supabase
       .from('spin_tokens')
       .update({ used: true, used_at: new Date().toISOString() })
@@ -180,14 +234,11 @@ export default async function handler(req, res) {
       .maybeSingle();
 
     if (claimErr || !claimRow) {
-      // Token was already used (race) — clean up the preclaim lock (if any)
-      if (preclaimRowId) {
-        await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
-      }
+      if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
       return res.status(409).json({ error: 'This spin token has already been used' });
     }
 
-    // C) Weighted pick
+    // Weighted pick
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const r = randomInt(0, totalWeight);
     let acc = 0, idx = 0;
@@ -198,7 +249,7 @@ export default async function handler(req, res) {
     const rewardDisplay = Number(amounts[idx]);
     const amountBase = Math.trunc(rewardDisplay * (10 ** decimals));
 
-    // D) Build addresses and do a quick prize pool check
+    // Build addresses; quick pool check
     const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
     const userPk  = new PublicKey(wallet_address);
     const mintPk  = new PublicKey(contract_address);
@@ -210,16 +261,15 @@ export default async function handler(req, res) {
       const balInfo = await connection.getTokenAccountBalance(fromATA);
       const baseAmt = Number(balInfo?.value?.amount || 0);
       if (!Number.isFinite(baseAmt) || baseAmt < amountBase) {
-        // Revert token + preclaim so user can try later
         if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
         await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
       }
     } catch {
-      // continue; if ATA missing, we’ll create it in the tx
+      // continue; ATA may be created by tx below
     }
 
-    // E) Build ixs (create ATAs if missing), then send
+    // Build ixs
     const ixs = [];
     const [fromInfo, toInfo] = await Promise.all([
       connection.getAccountInfo(fromATA),
@@ -241,6 +291,7 @@ export default async function handler(req, res) {
       fromATA, toATA, funding.publicKey, amountBase
     ));
 
+    // Send
     let signature;
     try {
       signature = await sendTxWithFreshBlockhash({
@@ -255,20 +306,19 @@ export default async function handler(req, res) {
       const msg = String(e?.message || e);
       console.error('[spin] sendTx error:', msg);
 
-      // Clean up so user can try again later; do not burn the token or keep the lock
       if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
       await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
 
-      if (msg.includes('insufficient') || msg.includes('Insufficient') || msg.includes('0x1')) {
+      if (msg.toLowerCase().includes('insufficient') || msg.includes('0x1')) {
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
       }
-      if (msg.includes('address not found') || msg.includes('could not find')) {
+      if (msg.toLowerCase().includes('address not found') || msg.toLowerCase().includes('could not find')) {
         return res.status(503).json({ error: 'Temporary RPC issue. Please try again.' });
       }
       return res.status(502).json({ error: 'Token transfer failed (network busy). Please try again.' });
     }
 
-    // F) Update the preclaim row (or insert a final row for superadmin) with real data
+    // Record spin (update lock row or insert free row for superadmin)
     const nowISO = new Date().toISOString();
     const baseRow = {
       discord_id,
@@ -277,7 +327,7 @@ export default async function handler(req, res) {
       contract_address,
       reward: rewardDisplay,
       amount_base: amountBase,
-      signature,                 // swap out the lock with the real tx id
+      signature,
       created_at_utc: nowISO,
       created_at_ms: Date.now(),
       is_test: false,
@@ -285,30 +335,18 @@ export default async function handler(req, res) {
     };
 
     if (role !== 'superadmin' && preclaimRowId) {
-      // Update the lock row in place
       const { error: updErr } = await supabase
         .from('daily_spins')
         .update(baseRow)
         .eq('id', preclaimRowId);
-      if (updErr) {
-        console.error('[spin] update daily_spins (lock->final) error:', updErr.message);
-        // We won't revert the transfer; log and continue
-      }
+      if (updErr) console.error('[spin] update daily_spins (lock->final) error:', updErr.message);
     } else {
-      // Superadmin path: just insert a normal row (unlimited testing)
       const { error: insErr } = await supabase.from('daily_spins').insert(baseRow);
-      if (insErr) {
-        console.error('[spin] insert daily_spins (superadmin) error:', insErr.message);
-      }
+      if (insErr) console.error('[spin] insert daily_spins (superadmin) error:', insErr.message);
     }
 
-    // Also mark the spin_token row with the tx signature (optional)
-    await supabase
-      .from('spin_tokens')
-      .update({ signature })
-      .eq('token', signedToken);
+    await supabase.from('spin_tokens').update({ signature }).eq('token', signedToken);
 
-    // Response
     return res.status(200).json({
       segmentIndex: idx,
       prize: `${rewardDisplay} ${tokenName}`,
