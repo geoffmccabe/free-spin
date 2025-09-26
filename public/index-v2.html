@@ -147,7 +147,9 @@
     }
 
     async function doSpin() {
+      const spinButton = document.getElementById("spin-button");
       spinButton.disabled = true;
+      const messageDiv = document.getElementById("message");
       messageDiv.textContent = "Preparing your spin...";
       effects.startSpin();
       try {
@@ -181,5 +183,8 @@
     document.getElementById('spin-button').addEventListener('click', doSpin);
     initializeWheel();
   </script>
+
+  <!-- Load the ATA gate AFTER the inline module so it can intercept the click -->
+  <script type="module" src="./atadetection.js"></script>
 </body>
 </html>
