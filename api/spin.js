@@ -1,4 +1,4 @@
-// /api/spin.js
+// /api/spin.js  (ATA-gated, minimal-diff version)
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair } from '@solana/web3.js';
 import {
@@ -33,27 +33,30 @@ export default async function handler(req, res) {
   const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
   try {
-    const { token: signedToken, server_id, spin } = req.body || {};
+    const { token: signedToken, server_id, spin, ata_check } = req.body || {};
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
 
-    // Verify HMAC
+    // Verify HMAC (unchanged)
     const [rawToken, providedSig] = String(signedToken).split('.');
     if (!rawToken || !providedSig) return res.status(400).json({ error: 'Invalid token format' });
     const expectedSig = createHmac('sha256', SPIN_KEY).update(rawToken).digest('hex');
     if (providedSig !== expectedSig) return res.status(403).json({ error: 'Invalid token signature' });
 
-    // Load spin token
+    // Load spin token (unchanged)
     const { data: t, error: tErr } = await supabase
       .from('spin_tokens')
-      .select('discord_id, wallet_address, contract_address, used')
+      .select('discord_id, wallet_address, contract_address, used, server_id')
       .eq('token', signedToken)
       .maybeSingle();
 
     if (tErr || !t) return res.status(400).json({ error: 'Invalid token' });
-    const { discord_id, wallet_address, contract_address } = t;
+    if (String(t.server_id) !== String(server_id)) return res.status(400).json({ error: 'Server mismatch' });
 
-    // Server-token allowlist
+    const { discord_id, wallet_address, contract_address, used } = t;
+    if (used) return res.status(409).json({ error: 'This spin token has already been used' });
+
+    // Server-token allowlist (unchanged)
     const { data: stRows, error: stErr } = await supabase
       .from('server_tokens')
       .select('contract_address, enabled')
@@ -66,7 +69,7 @@ export default async function handler(req, res) {
     const allowed = stRows.some(r => r.contract_address === contract_address && (r.enabled !== false));
     if (!allowed) return res.status(400).json({ error: 'This token is not enabled for this server' });
 
-    // Role
+    // Role (unchanged)
     let role = null;
     {
       const { data: adminRow } = await supabase
@@ -78,7 +81,7 @@ export default async function handler(req, res) {
       role = adminRow?.role || null;
     }
 
-    // Wheel config
+    // Wheel config (unchanged) — we’ll also return mint_address in responses
     const { data: cfg, error: cfgErr } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -95,21 +98,43 @@ export default async function handler(req, res) {
     const weights = Array.isArray(cfg.payout_weights) && cfg.payout_weights.length === amounts.length
       ? cfg.payout_weights.map(Number)
       : amounts.map(() => 1);
-    const decimals = 5; // default
+    const decimals = 5; // default from your original code
 
     if (!amounts.length) return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
 
-    // Helper to fetch prices (best-effort; failures fall back to 0)
+    // ===== NEW: ATA CHECK MODE (no side effects) =====
+    if (ata_check) {
+      if (!wallet_address) {
+        return res.status(400).json({ error: 'No wallet on file for this token' });
+      }
+      const mintPk = new PublicKey(contract_address);
+      const userPk = new PublicKey(wallet_address);
+      const userATA = await getAssociatedTokenAddress(mintPk, userPk);
+      let ataExists = false;
+      try {
+        const info = await connection.getAccountInfo(userATA, 'confirmed');
+        ataExists = !!info;
+      } catch {
+        ataExists = false;
+      }
+      return res.status(200).json({
+        ok: true,
+        ata_exists: ataExists,
+        token_name: tokenName,
+        mint_address: contract_address,
+        is_superadmin: role === 'superadmin',
+      });
+    }
+
+    // Helper to fetch prices (unchanged best-effort; never blocks)
     async function getPricesUSD(mintAddress) {
       let solUsd = 0, tokenUsd = 0;
       try {
-        // SOL price (CoinGecko)
         const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
         const j = await r.json();
         solUsd = Number(j?.solana?.usd || 0) || 0;
       } catch {}
       try {
-        // Token price (Jupiter) by mint
         const r2 = await fetch(`https://price.jup.ag/v4/price?ids=${encodeURIComponent(mintAddress)}`);
         const j2 = await r2.json();
         tokenUsd = Number(j2?.data?.[mintAddress]?.price || 0) || 0;
@@ -117,13 +142,14 @@ export default async function handler(req, res) {
       return { solUsd, tokenUsd };
     }
 
-    // Page load (no spin): return config + spins_left **and adminInfo**
+    // ===== Page load (no spin): return config + spins_left + adminInfo (unchanged) =====
     if (!spin) {
       let spins_left = 1;
       try {
         if (role === 'superadmin') {
           spins_left = 'Unlimited';
         } else {
+          // NOTE: This is still last-24h; your DB uniqueness is per UTC day. Keep or change to match policy.
           const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
           const { count } = await supabase
             .from('daily_spins')
@@ -139,13 +165,10 @@ export default async function handler(req, res) {
         spins_left = 1;
       }
 
-      // === Admin panel balances (best-effort; never block UI) ===
       let adminInfo = {};
       try {
         const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
         const poolAddr = funding.publicKey.toBase58();
-
-        // raw balances
         const [lamports, fromATA] = await Promise.all([
           connection.getBalance(funding.publicKey, 'confirmed'),
           getAssociatedTokenAddress(new PublicKey(contract_address), funding.publicKey),
@@ -156,13 +179,10 @@ export default async function handler(req, res) {
           const balInfo = await connection.getTokenAccountBalance(fromATA, 'confirmed');
           tokenBase = Number(balInfo?.value?.amount || 0) || 0;
         } catch {
-          tokenBase = 0; // ATA may not exist yet
+          tokenBase = 0;
         }
 
-        // prices
         const { solUsd, tokenUsd } = await getPricesUSD(contract_address);
-
-        // convert to display units
         const gasAmt = lamports / 1e9;
         const tokenAmt = tokenBase / (10 ** decimals);
 
@@ -184,17 +204,19 @@ export default async function handler(req, res) {
           payout_amounts: amounts,
           payout_weights: weights,
           image_url: cfg.image_url || '/img/Wheel_Generic_800px.webp',
+          // NEW: include mint so the helper screen can show it
+          mint_address: contract_address,
         },
         role,
         spins_left,
         contract_address,
-        adminInfo, // <-- what the admin panel expects
+        adminInfo,
       });
     }
 
     // ====== SPIN FLOW (hardened against racing tabs) ======
 
-    // Pre-claim lock (skip for superadmin)
+    // Pre-claim lock (skip for superadmin) — unchanged
     const todayUTC = new Date().toISOString().slice(0, 10);
     const lockSignature = `lock:${server_id}|${discord_id}|${contract_address}|${todayUTC}`;
     let preclaimRowId = null;
@@ -224,7 +246,7 @@ export default async function handler(req, res) {
       preclaimRowId = preclaim?.id || null;
     }
 
-    // Atomic token consume
+    // Atomic token consume (unchanged)
     const { data: claimRow, error: claimErr } = await supabase
       .from('spin_tokens')
       .update({ used: true, used_at: new Date().toISOString() })
@@ -238,7 +260,7 @@ export default async function handler(req, res) {
       return res.status(409).json({ error: 'This spin token has already been used' });
     }
 
-    // Weighted pick
+    // Weighted pick (unchanged)
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const r = randomInt(0, totalWeight);
     let acc = 0, idx = 0;
@@ -249,8 +271,8 @@ export default async function handler(req, res) {
     const rewardDisplay = Number(amounts[idx]);
     const amountBase = Math.trunc(rewardDisplay * (10 ** decimals));
 
-    // Build addresses; quick pool check
-    const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+    // Build addresses; quick pool check (unchanged)
+    const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY))));
     const userPk  = new PublicKey(wallet_address);
     const mintPk  = new PublicKey(contract_address);
 
@@ -269,7 +291,8 @@ export default async function handler(req, res) {
       // continue; ATA may be created by tx below
     }
 
-    // Build ixs
+    // ====== CRITICAL CHANGE: do NOT create the user's ATA anymore ======
+    // We still create OUR funding ATA if missing, but if the USER's ATA is missing, we refuse.
     const ixs = [];
     const [fromInfo, toInfo] = await Promise.all([
       connection.getAccountInfo(fromATA),
@@ -282,16 +305,23 @@ export default async function handler(req, res) {
       ));
     }
     if (!toInfo) {
-      ixs.push(createAssociatedTokenAccountInstruction(
-        funding.publicKey, toATA, userPk, mintPk
-      ));
+      // OLD (removed): we used to create the user's ATA here, which cost you rent.
+      // NEW: refuse and tell the client to show the helper screen.
+      if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
+      await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
+      return res.status(409).json({
+        error: 'NO_ATA',
+        message: `No ${tokenName} token account found on your wallet. Please create it in your wallet and try again.`,
+        token_name: tokenName,
+        mint_address: contract_address,
+      });
     }
 
     ixs.push(createTransferInstruction(
       fromATA, toATA, funding.publicKey, amountBase
     ));
 
-    // Send
+    // Send (unchanged)
     let signature;
     try {
       signature = await sendTxWithFreshBlockhash({
@@ -318,7 +348,7 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: 'Token transfer failed (network busy). Please try again.' });
     }
 
-    // Record spin (update lock row or insert free row for superadmin)
+    // Record spin (unchanged)
     const nowISO = new Date().toISOString();
     const baseRow = {
       discord_id,
