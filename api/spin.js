@@ -1,4 +1,4 @@
-// /api/spin.js  (ATA-gated, minimal-diff version — fixed)
+// /api/spin.js  (ATA-gated with DB lookup fallback: token OR id)
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair } from '@solana/web3.js';
 import {
@@ -37,26 +37,35 @@ export default async function handler(req, res) {
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
 
-    // Verify HMAC (unchanged)
+    // Verify HMAC
     const [rawToken, providedSig] = String(signedToken).split('.');
     if (!rawToken || !providedSig) return res.status(400).json({ error: 'Invalid token format' });
     const expectedSig = createHmac('sha256', SPIN_KEY).update(rawToken).digest('hex');
     if (providedSig !== expectedSig) return res.status(403).json({ error: 'Invalid token signature' });
 
-    // Load spin token (unchanged)
-    const { data: t, error: tErr } = await supabase
-      .from('spin_tokens')
-      .select('discord_id, wallet_address, contract_address, used, server_id')
-      .eq('token', signedToken)
-      .maybeSingle();
+    // ---- Load spin token row: try by token, then fallback to id (rawToken) ----
+    let t = null; let tErr = null;
 
-    if (tErr || !t) return res.status(400).json({ error: 'Invalid token' });
+    const selCols = 'discord_id, wallet_address, contract_address, used, server_id';
+    let q1 = await supabase.from('spin_tokens').select(selCols).eq('token', signedToken).maybeSingle();
+    tErr = q1.error; t = q1.data;
+
+    if ((tErr || !t)) {
+      // Fallback: some setups store only raw id in 'id' column
+      const q2 = await supabase.from('spin_tokens').select(selCols).eq('id', rawToken).maybeSingle();
+      tErr = q2.error; t = q2.data;
+    }
+
+    if (tErr || !t) {
+      if (tErr) console.error('[spin] spin_tokens lookup error:', tErr.message || tErr);
+      return res.status(400).json({ error: 'Invalid token' });
+    }
     if (String(t.server_id) !== String(server_id)) return res.status(400).json({ error: 'Server mismatch' });
 
     const { discord_id, wallet_address, contract_address, used } = t;
     if (used) return res.status(409).json({ error: 'This spin token has already been used' });
 
-    // Server-token allowlist (unchanged)
+    // Server-token allowlist
     const { data: stRows, error: stErr } = await supabase
       .from('server_tokens')
       .select('contract_address, enabled')
@@ -69,7 +78,7 @@ export default async function handler(req, res) {
     const allowed = stRows.some(r => r.contract_address === contract_address && (r.enabled !== false));
     if (!allowed) return res.status(400).json({ error: 'This token is not enabled for this server' });
 
-    // Role (unchanged)
+    // Role
     let role = null;
     {
       const { data: adminRow } = await supabase
@@ -81,7 +90,7 @@ export default async function handler(req, res) {
       role = adminRow?.role || null;
     }
 
-    // Wheel config (unchanged) — we’ll also return mint_address in responses
+    // Wheel config
     const { data: cfg, error: cfgErr } = await supabase
       .from('wheel_configurations')
       .select('token_name, payout_amounts, payout_weights, image_url')
@@ -102,7 +111,7 @@ export default async function handler(req, res) {
 
     if (!amounts.length) return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
 
-    // ===== NEW: ATA CHECK MODE (no side effects) =====
+    // ===== ATA CHECK MODE (no side effects) =====
     if (ata_check) {
       if (!wallet_address) {
         return res.status(400).json({ error: 'No wallet on file for this token' });
@@ -126,7 +135,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Helper to fetch prices (unchanged best-effort; never blocks)
+    // Helper to fetch prices (best-effort; never blocks UI)
     async function getPricesUSD(mintAddress) {
       let solUsd = 0, tokenUsd = 0;
       try {
@@ -142,14 +151,14 @@ export default async function handler(req, res) {
       return { solUsd, tokenUsd };
     }
 
-    // ===== Page load (no spin): return config + spins_left + adminInfo (unchanged) =====
+    // ===== Page load (no spin): return config + spins_left + adminInfo =====
     if (!spin) {
       let spins_left = 1;
       try {
         if (role === 'superadmin') {
           spins_left = 'Unlimited';
         } else {
-          // NOTE: This is still last-24h; your DB uniqueness is per UTC day. Keep or change to match policy.
+          // Note: last-24h view; your DB uniqueness is per UTC day — adjust if desired.
           const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
           const { count } = await supabase
             .from('daily_spins')
@@ -179,7 +188,7 @@ export default async function handler(req, res) {
           const balInfo = await connection.getTokenAccountBalance(fromATA, 'confirmed');
           tokenBase = Number(balInfo?.value?.amount || 0) || 0;
         } catch {
-          tokenBase = 0;
+          tokenBase = 0; // ATA may not exist yet
         }
 
         const { solUsd, tokenUsd } = await getPricesUSD(contract_address);
@@ -204,8 +213,7 @@ export default async function handler(req, res) {
           payout_amounts: amounts,
           payout_weights: weights,
           image_url: cfg.image_url || '/img/Wheel_Generic_800px.webp',
-          // NEW: include mint so the helper screen can show it
-          mint_address: contract_address,
+          mint_address: contract_address, // for helper screen
         },
         role,
         spins_left,
@@ -215,8 +223,6 @@ export default async function handler(req, res) {
     }
 
     // ====== SPIN FLOW (hardened against racing tabs) ======
-
-    // Pre-claim lock (skip for superadmin) — unchanged
     const todayUTC = new Date().toISOString().slice(0, 10);
     const lockSignature = `lock:${server_id}|${discord_id}|${contract_address}|${todayUTC}`;
     let preclaimRowId = null;
@@ -246,7 +252,7 @@ export default async function handler(req, res) {
       preclaimRowId = preclaim?.id || null;
     }
 
-    // Atomic token consume (unchanged)
+    // Atomic token consume
     const { data: claimRow, error: claimErr } = await supabase
       .from('spin_tokens')
       .update({ used: true, used_at: new Date().toISOString() })
@@ -255,12 +261,12 @@ export default async function handler(req, res) {
       .select('discord_id, wallet_address, contract_address')
       .maybeSingle();
 
-    if (claimErr || !claimRow) {
+    if (!claimRow || claimErr) {
       if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
       return res.status(409).json({ error: 'This spin token has already been used' });
     }
 
-    // Weighted pick (unchanged)
+    // Weighted pick
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const r = randomInt(0, totalWeight);
     let acc = 0, idx = 0;
@@ -271,7 +277,7 @@ export default async function handler(req, res) {
     const rewardDisplay = Number(amounts[idx]);
     const amountBase = Math.trunc(rewardDisplay * (10 ** decimals));
 
-    // Build addresses; quick pool check (unchanged)
+    // Build addresses; quick pool check
     const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
     const userPk  = new PublicKey(wallet_address);
     const mintPk  = new PublicKey(contract_address);
@@ -288,11 +294,10 @@ export default async function handler(req, res) {
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
       }
     } catch {
-      // continue; ATA may be created by tx below
+      // continue; ATA may be created by tx below (funding side)
     }
 
-    // ====== CRITICAL CHANGE: do NOT create the user's ATA anymore ======
-    // We still create OUR funding ATA if missing, but if the USER's ATA is missing, we refuse.
+    // ====== DO NOT create the user's ATA anymore ======
     const ixs = [];
     const [fromInfo, toInfo] = await Promise.all([
       connection.getAccountInfo(fromATA),
@@ -305,7 +310,6 @@ export default async function handler(req, res) {
       ));
     }
     if (!toInfo) {
-      // Refuse and tell the client to show the helper screen.
       if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
       await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
       return res.status(409).json({
@@ -320,7 +324,7 @@ export default async function handler(req, res) {
       fromATA, toATA, funding.publicKey, amountBase
     ));
 
-    // Send (unchanged)
+    // Send
     let signature;
     try {
       signature = await sendTxWithFreshBlockhash({
@@ -347,7 +351,7 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: 'Token transfer failed (network busy). Please try again.' });
     }
 
-    // Record spin (unchanged)
+    // Record spin
     const nowISO = new Date().toISOString();
     const baseRow = {
       discord_id,
