@@ -1,4 +1,4 @@
-// /api/spin.js  (ATA-gated with DB lookup fallback: token OR id)
+// /api/spin.js  (ATA-gated + robust spin_tokens lookup + optional debug)
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair } from '@solana/web3.js';
 import {
@@ -33,36 +33,64 @@ export default async function handler(req, res) {
   const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
   try {
-    const { token: signedToken, server_id, spin, ata_check } = req.body || {};
+    const { token: signedToken, server_id, spin, ata_check, debug } = req.body || {};
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id)   return res.status(400).json({ error: 'Server ID required' });
 
-    // Verify HMAC
+    // Parse & verify HMAC
     const [rawToken, providedSig] = String(signedToken).split('.');
     if (!rawToken || !providedSig) return res.status(400).json({ error: 'Invalid token format' });
     const expectedSig = createHmac('sha256', SPIN_KEY).update(rawToken).digest('hex');
     if (providedSig !== expectedSig) return res.status(403).json({ error: 'Invalid token signature' });
 
-    // ---- Load spin token row: try by token, then fallback to id (rawToken) ----
-    let t = null; let tErr = null;
+    // ---- Robust spin_tokens lookup: try several variants ----
+    const selCols = 'id, discord_id, wallet_address, contract_address, used, server_id';
+    let t = null, tErr = null, lookupPath = null;
 
-    const selCols = 'discord_id, wallet_address, contract_address, used, server_id';
-    let q1 = await supabase.from('spin_tokens').select(selCols).eq('token', signedToken).maybeSingle();
-    tErr = q1.error; t = q1.data;
+    // 1) Stored as full signed token in `token` column
+    let q = await supabase.from('spin_tokens').select(selCols).eq('token', signedToken).maybeSingle();
+    tErr = q.error; t = q.data; lookupPath = 'token=signedToken';
 
-    if ((tErr || !t)) {
-      // Fallback: some setups store only raw id in 'id' column
-      const q2 = await supabase.from('spin_tokens').select(selCols).eq('id', rawToken).maybeSingle();
-      tErr = q2.error; t = q2.data;
+    if (!t) {
+      // 2) Stored as raw UUID in `token` column
+      q = await supabase.from('spin_tokens').select(selCols).eq('token', rawToken).maybeSingle();
+      tErr = q.error; t = q.data; if (t) lookupPath = 'token=rawToken';
+    }
+    if (!t) {
+      // 3) Stored as raw UUID in `id` column
+      q = await supabase.from('spin_tokens').select(selCols).eq('id', rawToken).maybeSingle();
+      tErr = q.error; t = q.data; if (t) lookupPath = 'id=rawToken';
+    }
+    if (!t && !tErr) {
+      // 4) Last resort: try id=signedToken (in case bot stored full string in id)
+      q = await supabase.from('spin_tokens').select(selCols).eq('id', signedToken).maybeSingle();
+      tErr = q.error; t = q.data; if (t) lookupPath = 'id=signedToken';
     }
 
-    if (tErr || !t) {
-      if (tErr) console.error('[spin] spin_tokens lookup error:', tErr.message || tErr);
-      return res.status(400).json({ error: 'Invalid token' });
+    if (tErr) {
+      console.error('[spin] spin_tokens lookup error:', tErr.message || tErr);
     }
-    if (String(t.server_id) !== String(server_id)) return res.status(400).json({ error: 'Server mismatch' });
+    if (!t) {
+      // Provide clear debug context when requested
+      const dbg = {
+        reason: 'spin_tokens_not_found',
+        lookupTried: lookupPath,
+        supabaseUrlTail: SUPABASE_URL?.slice(-24),
+        server_id,
+        rawToken,
+        signedTokenSample: signedToken.slice(0, 12) + '…' + signedToken.slice(-12),
+      };
+      return res.status(400).json({ error: 'Invalid token', ...(debug ? { debug: dbg } : {}) });
+    }
+
+    if (String(t.server_id) !== String(server_id)) {
+      return res.status(400).json({ error: 'Server mismatch' });
+    }
 
     const { discord_id, wallet_address, contract_address, used } = t;
+    const isSuperadmin = await isUserSuperadmin(supabase, server_id, discord_id);
+    const role = isSuperadmin ? 'superadmin' : null;
+
     if (used) return res.status(409).json({ error: 'This spin token has already been used' });
 
     // Server-token allowlist
@@ -77,18 +105,6 @@ export default async function handler(req, res) {
     }
     const allowed = stRows.some(r => r.contract_address === contract_address && (r.enabled !== false));
     if (!allowed) return res.status(400).json({ error: 'This token is not enabled for this server' });
-
-    // Role
-    let role = null;
-    {
-      const { data: adminRow } = await supabase
-        .from('server_admins')
-        .select('role')
-        .eq('server_id', server_id)
-        .eq('discord_id', discord_id)
-        .maybeSingle();
-      role = adminRow?.role || null;
-    }
 
     // Wheel config
     const { data: cfg, error: cfgErr } = await supabase
@@ -107,8 +123,7 @@ export default async function handler(req, res) {
     const weights = Array.isArray(cfg.payout_weights) && cfg.payout_weights.length === amounts.length
       ? cfg.payout_weights.map(Number)
       : amounts.map(() => 1);
-    const decimals = 5; // default from your original code
-
+    const decimals = 5; // your original default
     if (!amounts.length) return res.status(400).json({ error: 'Wheel has no payout amounts configured' });
 
     // ===== ATA CHECK MODE (no side effects) =====
@@ -135,22 +150,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // Helper to fetch prices (best-effort; never blocks UI)
-    async function getPricesUSD(mintAddress) {
-      let solUsd = 0, tokenUsd = 0;
-      try {
-        const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
-        const j = await r.json();
-        solUsd = Number(j?.solana?.usd || 0) || 0;
-      } catch {}
-      try {
-        const r2 = await fetch(`https://price.jup.ag/v4/price?ids=${encodeURIComponent(mintAddress)}`);
-        const j2 = await r2.json();
-        tokenUsd = Number(j2?.data?.[mintAddress]?.price || 0) || 0;
-      } catch {}
-      return { solUsd, tokenUsd };
-    }
-
     // ===== Page load (no spin): return config + spins_left + adminInfo =====
     if (!spin) {
       let spins_left = 1;
@@ -158,7 +157,6 @@ export default async function handler(req, res) {
         if (role === 'superadmin') {
           spins_left = 'Unlimited';
         } else {
-          // Note: last-24h view; your DB uniqueness is per UTC day — adjust if desired.
           const sinceISO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
           const { count } = await supabase
             .from('daily_spins')
@@ -167,8 +165,8 @@ export default async function handler(req, res) {
             .eq('server_id', server_id)
             .eq('contract_address', contract_address)
             .gte('created_at_utc', sinceISO);
-          const used = count ?? 0;
-          spins_left = Math.max(0, 1 - used);
+          const usedCt = count ?? 0;
+          spins_left = Math.max(0, 1 - usedCt);
         }
       } catch {
         spins_left = 1;
@@ -191,7 +189,19 @@ export default async function handler(req, res) {
           tokenBase = 0; // ATA may not exist yet
         }
 
-        const { solUsd, tokenUsd } = await getPricesUSD(contract_address);
+        // Optional best-effort pricing (unchanged)
+        let solUsd = 0, tokenUsd = 0;
+        try {
+          const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+          const j = await r.json();
+          solUsd = Number(j?.solana?.usd || 0) || 0;
+        } catch {}
+        try {
+          const r2 = await fetch(`https://price.jup.ag/v4/price?ids=${encodeURIComponent(contract_address)}`);
+          const j2 = await r2.json();
+          tokenUsd = Number(j2?.data?.[contract_address]?.price || 0) || 0;
+        } catch {}
+
         const gasAmt = lamports / 1e9;
         const tokenAmt = tokenBase / (10 ** decimals);
 
@@ -207,18 +217,20 @@ export default async function handler(req, res) {
         adminInfo = {};
       }
 
+      // Include mint for helper screen
       return res.status(200).json({
         tokenConfig: {
           token_name: tokenName,
           payout_amounts: amounts,
           payout_weights: weights,
           image_url: cfg.image_url || '/img/Wheel_Generic_800px.webp',
-          mint_address: contract_address, // for helper screen
+          mint_address: contract_address,
         },
         role,
         spins_left,
         contract_address,
         adminInfo,
+        ...(debug || role === 'superadmin' ? { debug: { lookupPath, supabaseUrlTail: SUPABASE_URL.slice(-24) } } : {})
       });
     }
 
@@ -252,8 +264,16 @@ export default async function handler(req, res) {
       preclaimRowId = preclaim?.id || null;
     }
 
-    // Atomic token consume
-    const { data: claimRow, error: claimErr } = await supabase
+    // Atomic token consume (keep using the same key the row was found by)
+    // We don't know which column exists, so attempt both safely.
+    const clearUsed = async () => {
+      await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
+      await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('id', rawToken);
+    };
+
+    let claimRow = null;
+    // Try update by `token`; if no row was updated, try by `id`
+    let qUp = await supabase
       .from('spin_tokens')
       .update({ used: true, used_at: new Date().toISOString() })
       .eq('token', signedToken)
@@ -261,7 +281,18 @@ export default async function handler(req, res) {
       .select('discord_id, wallet_address, contract_address')
       .maybeSingle();
 
-    if (!claimRow || claimErr) {
+    if (!qUp.data) {
+      qUp = await supabase
+        .from('spin_tokens')
+        .update({ used: true, used_at: new Date().toISOString() })
+        .eq('id', rawToken)
+        .is('used', false)
+        .select('discord_id, wallet_address, contract_address')
+        .maybeSingle();
+    }
+    claimRow = qUp.data;
+
+    if (!claimRow || qUp.error) {
       if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
       return res.status(409).json({ error: 'This spin token has already been used' });
     }
@@ -290,14 +321,14 @@ export default async function handler(req, res) {
       const baseAmt = Number(balInfo?.value?.amount || 0);
       if (!Number.isFinite(baseAmt) || baseAmt < amountBase) {
         if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
-        await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
+        await clearUsed();
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
       }
     } catch {
       // continue; ATA may be created by tx below (funding side)
     }
 
-    // ====== DO NOT create the user's ATA anymore ======
+    // DO NOT create the user's ATA anymore (ATA gate)
     const ixs = [];
     const [fromInfo, toInfo] = await Promise.all([
       connection.getAccountInfo(fromATA),
@@ -311,11 +342,11 @@ export default async function handler(req, res) {
     }
     if (!toInfo) {
       if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
-      await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
+      await clearUsed();
       return res.status(409).json({
         error: 'NO_ATA',
-        message: `No ${tokenName} token account found on your wallet. Please create it in your wallet and try again.`,
-        token_name: tokenName,
+        message: `No ${cfg.token_name || 'Token'} token account found on your wallet. Please create it in your wallet and try again.`,
+        token_name: cfg.token_name || 'Token',
         mint_address: contract_address,
       });
     }
@@ -340,7 +371,7 @@ export default async function handler(req, res) {
       console.error('[spin] sendTx error:', msg);
 
       if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
-      await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
+      await clearUsed();
 
       if (msg.toLowerCase().includes('insufficient') || msg.includes('0x1')) {
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
@@ -379,16 +410,33 @@ export default async function handler(req, res) {
     }
 
     await supabase.from('spin_tokens').update({ signature }).eq('token', signedToken);
+    await supabase.from('spin_tokens').update({ signature }).eq('id', rawToken);
 
     return res.status(200).json({
       segmentIndex: idx,
-      prize: `${rewardDisplay} ${tokenName}`,
+      prize: `${rewardDisplay} ${cfg.token_name || 'Token'}`,
       spins_left: role === 'superadmin' ? 'Unlimited' : undefined,
       signature,
+      ...(debug || role === 'superadmin' ? { debug: { usedLookup: lookupPath } } : {})
     });
 
   } catch (err) {
     console.error('Unhandled spin error:', err?.message || err);
     return res.status(500).json({ error: 'A server error occurred' });
+  }
+}
+
+// helper: superadmin check (matches your server_admins table)
+async function isUserSuperadmin(supabase, server_id, discord_id) {
+  try {
+    const { data } = await supabase
+      .from('server_admins')
+      .select('role')
+      .eq('server_id', server_id)
+      .eq('discord_id', discord_id)
+      .maybeSingle();
+    return (data?.role || '').toLowerCase() === 'superadmin';
+  } catch {
+    return false;
   }
 }
