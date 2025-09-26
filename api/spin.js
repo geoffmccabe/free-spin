@@ -1,4 +1,4 @@
-// /api/spin.js  (ATA-gated, minimal-diff version)
+// /api/spin.js  (ATA-gated, minimal-diff version — fixed)
 import { createClient } from '@supabase/supabase-js';
 import { Connection, PublicKey, Keypair } from '@solana/web3.js';
 import {
@@ -272,7 +272,7 @@ export default async function handler(req, res) {
     const amountBase = Math.trunc(rewardDisplay * (10 ** decimals));
 
     // Build addresses; quick pool check (unchanged)
-    const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY))));
+    const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
     const userPk  = new PublicKey(wallet_address);
     const mintPk  = new PublicKey(contract_address);
 
@@ -305,8 +305,7 @@ export default async function handler(req, res) {
       ));
     }
     if (!toInfo) {
-      // OLD (removed): we used to create the user's ATA here, which cost you rent.
-      // NEW: refuse and tell the client to show the helper screen.
+      // Refuse and tell the client to show the helper screen.
       if (preclaimRowId) await supabase.from('daily_spins').delete().eq('id', preclaimRowId);
       await supabase.from('spin_tokens').update({ used: false, used_at: null }).eq('token', signedToken);
       return res.status(409).json({
