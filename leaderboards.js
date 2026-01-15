@@ -107,7 +107,8 @@ async function handleLeaderboardCommand(interaction) {
 
   const text =
     `**${tok.token_name} Leaderboard (30d)**\n` +
-    list.map((e, i) => `#${i + 1}: ${nameMap.get(e.discord_id)} — ${e.payout} ${tok.token_name} (${e.spins} spins)`).join('\n');
+    list.map((e, i) => `#${i + 1}: ${nameMap.get(e.discord_id)} — ${e.payout} ${tok.token_name} (${e.spins} ${e.spins === 1 ? 'spin' : 'spins'})
+`).join('\n');
 
   return interaction.editReply({ content: text, flags: 64 });
 }
