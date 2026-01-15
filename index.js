@@ -39,7 +39,7 @@ client.on('interactionCreate', async (interaction) => { try {
         const focusedValue = interaction.options.getFocused();
         console.log(`Focused value: ${focusedValue}`);
         const { data: serverTokens, error: tokenError } = await retryQuery(() =>
-          supabase.from('server_tokens').select('contract_address, default_token').eq('server_id', server_id)
+          supabase.from('server_tokens').select('contract_address, enabled').eq('server_id', server_id)
         );
         if (tokenError) {
           console.error(`Token query error: ${tokenError.message}`);
