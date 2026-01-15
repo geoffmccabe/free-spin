@@ -1,10 +1,24 @@
 import { createHmac, randomUUID } from 'crypto';
-import { supabase, retryQuery, SPIN_CHANNEL_NAME, SPIN_URL, DEFAULT_TOKEN_ADDRESS } from './index.js';
+import { supabase, retryQuery, SPIN_URL, DEFAULT_TOKEN_ADDRESS } from './index.js';
+
+function utcYYYYMMDD() {
+  const d = new Date();
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function normalizeTokenName(s) {
+  return String(s || '').trim().toLowerCase();
+}
 
 async function handleSpinCommand(interaction, supabase, retryQuery) {
   const discord_id = interaction.user.id;
   const server_id = interaction.guildId;
-  console.log(`Processing /spin for user: ${discord_id}, server: ${server_id}`);
+  const requestedTokenName = interaction.options.getString('token_name'); // may be null
+
+  console.log(`Processing /spin for user: ${discord_id}, server: ${server_id}, token_name: ${requestedTokenName || '(default)'}`);
 
   try {
     await interaction.deferReply({ flags: 64 });
@@ -13,139 +27,159 @@ async function handleSpinCommand(interaction, supabase, retryQuery) {
     return;
   }
 
-  const [
-    { data: userData, error: userError },
-    { data: serverTokens },
-    { data: adminData },
-    { data: userPref }
-  ] = await Promise.all([
-    retryQuery(() => supabase.from('users').select('wallet_address, spin_limit').eq('discord_id', discord_id).single()),
-    retryQuery(() => supabase.from('server_tokens').select('contract_address, default_token').eq('server_id', server_id)),
-    retryQuery(() => supabase.from('server_admins').select('role').eq('discord_id', discord_id).eq('server_id', server_id).single()),
-    retryQuery(() => supabase.from('user_preferences').select('last_token').eq('discord_id', discord_id).eq('server_id', server_id).single())
-  ]);
+  // 1) Wallet must exist
+  const { data: userData, error: userError } = await retryQuery(() =>
+    supabase.from('users').select('wallet_address').eq('discord_id', discord_id).maybeSingle()
+  );
 
   if (userError || !userData?.wallet_address) {
     console.error(`User query error: ${userError?.message || 'No wallet found'}`);
-    return interaction.editReply({ content: `❌ Please link your Solana wallet first using the \`/mywallet\` command.`, flags: 64 });
+    return interaction.editReply({
+      content: `❌ Please link your Solana wallet first using \`/mywallet\`.`,
+      flags: 64
+    });
   }
 
-  const isSuperadmin = adminData?.role === 'superadmin';
-  console.log(`Admin check: ${discord_id} is ${isSuperadmin ? '' : 'not '}superadmin`);
-
-  let contract_addresses = serverTokens?.map(t => t.contract_address) || [];
-  let default_token = serverTokens?.find(t => t.default_token)?.contract_address || DEFAULT_TOKEN_ADDRESS;
-  if (contract_addresses.length === 0) {
-    contract_addresses = [DEFAULT_TOKEN_ADDRESS];
-    console.log(`No server-specific tokens for server ${server_id}, using default: ${contract_addresses[0]}`);
-  } else {
-    console.log(`Server tokens found: ${contract_addresses.join(', ')}, default: ${default_token}`);
-  }
-
-  const { data: coinData, error: coinError } = await retryQuery(() =>
-    supabase.from('wheel_configurations').select('contract_address, token_name').in('contract_address', contract_addresses)
+  // 2) Role
+  const { data: adminData } = await retryQuery(() =>
+    supabase.from('server_admins').select('role').eq('server_id', server_id).eq('discord_id', discord_id).maybeSingle()
   );
-  if (coinError || !coinData?.length) {
-    console.error(`Coin query error: ${coinError?.message || 'No coins found'}`);
-    return interaction.editReply({ content: `❌ No tokens available for spinning on this server.`, flags: 64 });
-  }
-  console.log(`Available coins: ${JSON.stringify(coinData)}`);
+  const isSuperadmin = adminData?.role === 'superadmin';
 
-  const token_name = interaction.options.getString('token_name');
-  let selected_token = token_name ? coinData.find(c => c.token_name === token_name)?.contract_address : null;
-  if (!selected_token && !token_name) {
-    selected_token = userPref?.last_token || default_token;
-  }
-  if (!selected_token || !contract_addresses.includes(selected_token)) {
-    selected_token = default_token;
-  }
-  const coin = coinData.find(c => c.contract_address === selected_token);
-  if (!coin) {
-    console.error(`Invalid token selected: ${selected_token}`);
-    return interaction.editReply({ content: `❌ Invalid token selected.`, flags: 64 });
-  }
-  console.log(`Selected token for spin: ${coin.token_name} (${coin.contract_address})`);
+  // 3) Enabled tokens for this server
+  const { data: serverTokens, error: stErr } = await retryQuery(() =>
+    supabase
+      .from('server_tokens')
+      .select('contract_address, is_default, enabled')
+      .eq('server_id', server_id)
+  );
 
-  const availableCoinsToSpin = [];
-  let spinsLeft = userData.spin_limit;
-  if (!isSuperadmin) {
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { data: recentSpins, error: spinCountError } = await retryQuery(() =>
-      supabase.from('daily_spins').select('contract_address').eq('discord_id', discord_id).gte('created_at', twentyFourHoursAgo)
-    );
-    if (spinCountError) {
-      console.error(`Spin count error: ${spinCountError.message}`);
-      return interaction.editReply({ content: `❌ Database error checking spin count.`, flags: 64 });
-    }
-    const totalSpinsToday = recentSpins.length;
-    spinsLeft = Math.max(0, userData.spin_limit - totalSpinsToday);
-    if (totalSpinsToday >= userData.spin_limit) {
-      console.log(`Spin limit exceeded for discord_id: ${discord_id}`);
-      return interaction.editReply({ content: `❌ You have used all your ${userData.spin_limit} daily spins today. Try again tomorrow!`, flags: 64 });
-    }
-    const spunContracts = recentSpins.map(s => s.contract_address);
-    for (const coin of coinData) {
-      if (!spunContracts.includes(coin.contract_address)) {
-        availableCoinsToSpin.push(coin);
-      }
-    }
-    if (availableCoinsToSpin.length === 0) {
-      return interaction.editReply({ content: `❌ You have already spun all available tokens today. Try again tomorrow!`, flags: 64 });
+  if (stErr) {
+    console.error(`server_tokens query error: ${stErr.message}`);
+    return interaction.editReply({ content: `❌ Database error loading server tokens.`, flags: 64 });
+  }
+
+  const enabledContracts = (serverTokens || [])
+    .filter(t => t.enabled !== false)
+    .map(t => t.contract_address);
+
+  // If a server has no rows yet, fall back to DEFAULT_TOKEN_ADDRESS only if it has a wheel config
+  const contractsToConsider = enabledContracts.length ? enabledContracts : [DEFAULT_TOKEN_ADDRESS];
+
+  // 4) Load wheel configs for this server + those contracts (token_name, decimals, etc)
+  const { data: configs, error: cfgErr } = await retryQuery(() =>
+    supabase
+      .from('wheel_configurations')
+      .select('server_id, contract_address, token_name, decimals')
+      .eq('server_id', server_id)
+      .in('contract_address', contractsToConsider)
+  );
+
+  if (cfgErr) {
+    console.error(`wheel_configurations query error: ${cfgErr.message}`);
+    return interaction.editReply({ content: `❌ Database error loading wheel configuration.`, flags: 64 });
+  }
+
+  if (!configs || !configs.length) {
+    return interaction.editReply({
+      content: `❌ This server has no wheel configuration. Ask the admin to configure tokens and payouts.`,
+      flags: 64
+    });
+  }
+
+  // 5) Choose which coin to spin
+  let chosen = null;
+
+  if (requestedTokenName) {
+    const wanted = normalizeTokenName(requestedTokenName);
+    chosen = configs.find(c => normalizeTokenName(c.token_name) === wanted) || null;
+    if (!chosen) {
+      return interaction.editReply({
+        content: `❌ Unknown token name for this server. Try autocomplete to select a valid token.`,
+        flags: 64
+      });
     }
   } else {
-    console.log(`Bypassing spin limit for superadmin: ${discord_id}`);
-    availableCoinsToSpin.push(...coinData);
-    spinsLeft = 'Unlimited';
+    const defaultRow = (serverTokens || []).find(t => t.is_default === true && t.enabled !== false);
+    if (defaultRow) {
+      chosen = configs.find(c => c.contract_address === defaultRow.contract_address) || null;
+    }
+    if (!chosen) chosen = configs[0];
   }
 
-  const secretKey = process.env.SPIN_KEY;
-  if (!secretKey) {
-    console.error("FATAL: SPIN_KEY environment variable not found or is empty.");
-    return interaction.editReply({ content: `❌ A server configuration error occurred. Please notify an administrator.`, flags: 64 });
+  const contract_address = chosen.contract_address;
+  const token_name = chosen.token_name || 'Token';
+
+  // 6) Enforce daily limit before generating link (DB also enforces later in /api/spin.js)
+  if (!isSuperadmin) {
+    const today = utcYYYYMMDD();
+    const { count, error: cErr } = await retryQuery(() =>
+      supabase
+        .from('daily_spins')
+        .select('id', { count: 'exact', head: true })
+        .eq('server_id', server_id)
+        .eq('discord_id', discord_id)
+        .eq('contract_address', contract_address)
+        .eq('spin_day', today)
+    );
+
+    if (cErr) {
+      console.error(`Spin count error: ${cErr.message}`);
+      return interaction.editReply({ content: `❌ Database error checking daily limit.`, flags: 64 });
+    }
+
+    if ((count || 0) >= 1) {
+      return interaction.editReply({ content: `❌ Daily limit reached for ${token_name}.`, flags: 64 });
+    }
   }
 
-  const token = randomUUID();
-  const signature = createHmac('sha256', secretKey).update(token).digest('hex');
-  const signedToken = `${token}.${signature}`;
+  // 7) Create signed spin token (stored in spin_tokens with status=issued)
+  const raw = randomUUID();
+  const key = process.env.SPIN_KEY;
+  if (!key) {
+    console.error('Missing SPIN_KEY env var');
+    return interaction.editReply({ content: `❌ Server misconfigured (missing SPIN_KEY).`, flags: 64 });
+  }
+  const sig = createHmac('sha256', key).update(raw).digest('hex');
+  const signedToken = `${raw}.${sig}`;
 
   const { data: tokenData, error: tokenError } = await retryQuery(() =>
-    supabase.from('spin_tokens').insert({
-      discord_id,
-      wallet_address: userData.wallet_address,
-      contract_address: coin.contract_address,
-      token: signedToken,
-      used: false
-    }).select('token').single()
+    supabase
+      .from('spin_tokens')
+      .insert({
+        token: signedToken,
+        server_id,
+        discord_id,
+        wallet_address: userData.wallet_address,
+        contract_address,
+        status: 'issued'
+      })
+      .select('token')
+      .single()
   );
-  if (tokenError) {
-    console.error(`Token insert error: ${tokenError.message}`);
-    return interaction.editReply({ content: `❌ Failed to generate spin token.`, flags: 64 });
+
+  if (tokenError || !tokenData?.token) {
+    console.error(`Spin token insert error: ${tokenError?.message || 'unknown'}`);
+    return interaction.editReply({ content: `❌ Failed to create spin link.`, flags: 64 });
   }
-  console.log(`Inserting spin token: ${tokenData.token}`);
 
-  await retryQuery(() =>
-    supabase.from('user_preferences').upsert({
-      discord_id,
-      server_id,
-      last_token: coin.contract_address
-    })
-  );
-
-  // Use SPIN_URL EXACTLY as provided. No preflight, no guessing.
+  // 8) Build URL exactly as configured
   const base = (SPIN_URL || '').trim();
-  console.log(`[spin-url] using verbatim: ${base}`);
   const sep = base.includes('?') ? '&' : '?';
   const spinUrl = `${base}${sep}token=${encodeURIComponent(tokenData.token)}&server_id=${encodeURIComponent(server_id)}`;
 
-  const spinsLeftText = typeof spinsLeft === 'number' ? `${spinsLeft} spin${spinsLeft === 1 ? '' : 's'} left today` : 'Unlimited spins';
-  console.log(`Sending spin URL: ${spinUrl}`);
-  return interaction.editReply({ content: `Your spin is ready! Click here: ${spinUrl}\n${spinsLeftText}`, flags: 64 });
+  const spinsLeftText = isSuperadmin ? `Unlimited spins` : `1 spin per day`;
+  return interaction.editReply({
+    content: `✅ Your spin for **${token_name}** is ready:\n${spinUrl}\n${spinsLeftText}`,
+    flags: 64
+  });
 }
 
 async function handleWalletCommand(interaction, supabase, retryQuery) {
   const discord_id = interaction.user.id;
   const wallet_address = interaction.options.getString('address');
-  console.log(`Processing wallet command for user: ${discord_id}, address: ${wallet_address}`);
+
+  console.log(`Processing wallet command for user: ${discord_id}, address: ${wallet_address || '(view)'}`);
 
   try {
     await interaction.deferReply({ flags: 64 });
@@ -160,45 +194,33 @@ async function handleWalletCommand(interaction, supabase, retryQuery) {
     }
 
     const { data, error } = await retryQuery(() =>
-      supabase.from('users').upsert({ discord_id, wallet_address, spin_limit: 1 }).select('wallet_address').single()
+      supabase
+        .from('users')
+        .upsert({ discord_id, wallet_address })
+        .select('wallet_address')
+        .single()
     );
-    if (error) {
-      console.error(`Wallet upsert error: ${error.message}`);
+
+    if (error || !data?.wallet_address) {
+      console.error(`Wallet upsert error: ${error?.message || 'unknown'}`);
       return interaction.editReply({ content: `❌ Failed to save wallet address.`, flags: 64 });
     }
-    console.log(`Wallet saved: ${data.wallet_address}`);
-    return interaction.editReply({ content: `✅ Wallet address saved: \`${data.wallet_address}\``, flags: 64 });
-  } else {
-    const { data, error } = await retryQuery(() =>
-      supabase.from('users').select('wallet_address').eq('discord_id', discord_id).single()
-    );
-    if (error || !data?.wallet_address) {
-      console.error(`Wallet query error: ${error?.message || 'No wallet found'}`);
-      return interaction.editReply({ content: `❌ No wallet address found. Please provide one using \`/mywallet <address>\`.`, flags: 64 });
-    }
-    console.log(`Wallet retrieved: ${data.wallet_address}`);
-    return interaction.editReply({ content: `ℹ️ Your wallet address: \`${data.wallet_address}\``, flags: 64 });
-  }
-}
 
-async function handleHelpCommand(interaction) {
-  console.log(`Processing help command`);
-  try {
-    await interaction.deferReply({ flags: 64 });
-  } catch (error) {
-    console.error(`Defer reply failed: ${error.message}`);
-    return;
+    return interaction.editReply({ content: `✅ Wallet saved: \`${data.wallet_address}\``, flags: 64 });
   }
 
-  const helpText = `
-**Free-Spin Bot Commands**
-- **/spin [token_name]**: Spin the wheel to win $HAROLD or other tokens (limited daily).
-- **/mywallet [address]**: Link or view your Solana wallet address.
-- **/spinleaders [token_name]**: View the leaderboard for a specific token.
-- **/spinhelp**: Show this help message.
-- **/settoken <contract_address> [remove] [default]**: (Superadmin only) Add or remove a token for this server.
-  `;
-  return interaction.editReply({ content: helpText, flags: 64 });
+  const { data, error } = await retryQuery(() =>
+    supabase.from('users').select('wallet_address').eq('discord_id', discord_id).maybeSingle()
+  );
+
+  if (error || !data?.wallet_address) {
+    return interaction.editReply({
+      content: `❌ No wallet address found. Set one with \`/mywallet <address>\`.`,
+      flags: 64
+    });
+  }
+
+  return interaction.editReply({ content: `ℹ️ Your wallet address: \`${data.wallet_address}\``, flags: 64 });
 }
 
 async function handleSetTokenCommand(interaction, supabase, retryQuery) {
@@ -208,7 +230,8 @@ async function handleSetTokenCommand(interaction, supabase, retryQuery) {
   const remove = interaction.options.getBoolean('remove') || false;
   const set_default = interaction.options.getBoolean('default') || false;
   const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] Processing /settoken for user: ${discord_id}, server: ${server_id}, contract: ${contract_address}, remove: ${remove}, default: ${set_default}`);
+
+  console.log(`[${timestamp}] /settoken user:${discord_id} server:${server_id} contract:${contract_address} remove:${remove} default:${set_default}`);
 
   try {
     await interaction.deferReply({ flags: 64 });
@@ -217,57 +240,83 @@ async function handleSetTokenCommand(interaction, supabase, retryQuery) {
     return;
   }
 
-  const { data: adminData, error: adminError } = await retryQuery(() =>
-    supabase.from('server_admins').select('role').eq('server_id', server_id).eq('discord_id', discord_id).single()
+  // Must be superadmin
+  const { data: adminRow } = await retryQuery(() =>
+    supabase.from('server_admins').select('role').eq('server_id', server_id).eq('discord_id', discord_id).maybeSingle()
   );
-  const isOwner = interaction.guild.ownerId === discord_id;
-  if (adminError || adminData?.role !== 'superadmin') {
-    const errorMsg = isOwner 
-      ? `[${timestamp}] Server owner ${discord_id} attempted /settoken for ${contract_address} without superadmin role on server ${server_id}`
-      : `[${timestamp}] Unauthorized /settoken by ${discord_id} for ${contract_address} on server ${server_id}`;
-    console.error(errorMsg);
-    return interaction.editReply({ content: `❌ You must be a superadmin on this server to use this command.`, flags: 64 });
-  }
-  console.log(`[${timestamp}] Superadmin role verified for ${discord_id}`);
-
-  if (!contract_address.match(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)) {
-    return interaction.editReply({ content: `❌ Invalid contract address.`, flags: 64 });
+  if (adminRow?.role !== 'superadmin') {
+    return interaction.editReply({ content: `❌ Only superadmins can use /settoken.`, flags: 64 });
   }
 
-  const { data: configData, error: configError } = await retryQuery(() =>
-    supabase.from('wheel_configurations').select('token_name').eq('contract_address', contract_address).single()
+  // Wheel config must exist for this server+coin
+  const { data: cfg, error: cfgErr } = await retryQuery(() =>
+    supabase
+      .from('wheel_configurations')
+      .select('token_name, decimals')
+      .eq('server_id', server_id)
+      .eq('contract_address', contract_address)
+      .maybeSingle()
   );
-  if (configError || !configData) {
-    console.error(`[${timestamp}] Config error: ${configError?.message || 'No config found'}`);
-    return interaction.editReply({ content: `❌ Invalid token: Not configured in the system.`, flags: 64 });
+
+  if (cfgErr || !cfg) {
+    return interaction.editReply({
+      content: `❌ Not configured: add a wheel configuration for this server and token first.`,
+      flags: 64
+    });
   }
-  console.log(`[${timestamp}] Token verified: ${configData.token_name}`);
 
   if (remove) {
     const { error } = await retryQuery(() =>
       supabase.from('server_tokens').delete().eq('server_id', server_id).eq('contract_address', contract_address)
     );
-    if (error) {
-      console.error(`[${timestamp}] Token delete error: ${error.message}`);
-      return interaction.editReply({ content: `❌ Failed to remove token.`, flags: 64 });
-    }
-    console.log(`[${timestamp}] Token removed: ${contract_address} by ${discord_id} on ${server_id}`);
-    return interaction.editReply({ content: `✅ Token ${configData.token_name} removed from this server.`, flags: 64 });
-  } else {
-    const { data, error } = await retryQuery(() =>
-      supabase.from('server_tokens').upsert({ 
-        server_id, 
-        contract_address, 
-        default_token: set_default 
-      }).select('contract_address').single()
-    );
-    if (error) {
-      console.error(`[${timestamp}] Token insert error: ${error.message}`);
-      return interaction.editReply({ content: `❌ Failed to add token.`, flags: 64 });
-    }
-    console.log(`[${timestamp}] Token added: ${data.contract_address} by ${discord_id} on ${server_id}, default: ${set_default}`);
-    return interaction.editReply({ content: `✅ Token ${configData.token_name} added to this server${set_default ? ' as default' : ''}.`, flags: 64 });
+    if (error) return interaction.editReply({ content: `❌ Failed to remove token.`, flags: 64 });
+    return interaction.editReply({ content: `✅ Removed token **${cfg.token_name}** from this server.`, flags: 64 });
   }
+
+  // If setting default, clear other defaults first (unique partial index enforces it too)
+  if (set_default) {
+    await retryQuery(() =>
+      supabase.from('server_tokens').update({ is_default: false }).eq('server_id', server_id)
+    );
+  }
+
+  const { error } = await retryQuery(() =>
+    supabase
+      .from('server_tokens')
+      .upsert({
+        server_id,
+        contract_address,
+        mint_address: contract_address,
+        decimals: cfg.decimals,
+        enabled: true,
+        is_default: set_default
+      })
+  );
+
+  if (error) return interaction.editReply({ content: `❌ Failed to add token.`, flags: 64 });
+
+  return interaction.editReply({
+    content: `✅ Enabled token **${cfg.token_name}** for this server${set_default ? ' as default' : ''}.`,
+    flags: 64
+  });
+}
+
+async function handleHelpCommand(interaction) {
+  try {
+    await interaction.deferReply({ flags: 64 });
+  } catch (error) {
+    console.error(`Defer reply failed: ${error.message}`);
+    return;
+  }
+
+  return interaction.editReply({
+    content:
+      `Commands:\n` +
+      `• /mywallet (set or view wallet)\n` +
+      `• /spin (get a spin link)\n` +
+      `• /leaders (view leaderboard)\n`,
+    flags: 64
+  });
 }
 
 export { handleSpinCommand, handleWalletCommand, handleHelpCommand, handleSetTokenCommand };
