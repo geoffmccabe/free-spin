@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { requireAdmin } from '../../lib/auth.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -62,16 +63,10 @@ export default async function handler(req, res) {
     const { token, server_id, action, contract_address: addrRaw } = req.body || {};
     if (!token || !server_id) return res.status(400).json({ error: 'token and server_id required' });
 
-    // Validate token + role
-    const { data: tok, error: tokErr } = await supabase
-      .from('spin_tokens').select('discord_id').eq('token', token).single();
-    if (tokErr || !tok) return res.status(400).json({ error: 'Invalid token' });
-
-    const { data: adminData } = await supabase
-      .from('server_admins').select('role').eq('discord_id', tok.discord_id).eq('server_id', server_id).single();
-    const role = adminData?.role || null;
-    const isAdmin = role === 'admin' || role === 'superadmin';
-    if (!isAdmin) return res.status(403).json({ error: 'Admins only' });
+    // Verify token signature + admin role
+    const gate = await requireAdmin(supabase, token, server_id);
+    if (!gate.ok) return res.status(gate.status).json({ error: gate.error });
+    const role = gate.role;
 
     if (action === 'list' || !action) {
       const rows = await fetchServerTokens(server_id);

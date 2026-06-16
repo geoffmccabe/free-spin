@@ -3,6 +3,7 @@
 // Filters by server_id + contract_address; buckets by US/Eastern; never returns plain text.
 
 import { createClient } from '@supabase/supabase-js';
+import { requireAdmin } from '../lib/auth.js';
 
 function jsonError(res, status, message, details) {
   res.status(status).json({ error: message, details });
@@ -18,11 +19,16 @@ export default async function handler(req, res) {
     }
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Required query params
-    const { server_id, contract_address, tz = 'America/New_York', range = 'all' } = req.query || {};
+    // Accept params from POST body (admin panel) or query string.
+    const src = { ...(req.query || {}), ...(req.body || {}) };
+    const { token, server_id, contract_address, tz = 'America/New_York', range = 'all' } = src;
     if (!server_id || !contract_address) {
       return jsonError(res, 400, 'server_id and contract_address required');
     }
+
+    // Admin-only: spin stats must not be world-readable.
+    const gate = await requireAdmin(supabase, token, server_id);
+    if (!gate.ok) return jsonError(res, gate.status, gate.error);
 
     // Token label (decimals default to 5; we avoid selecting non-existent columns)
     let token_name = 'TOKEN';

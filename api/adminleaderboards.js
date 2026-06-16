@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { requireAdmin } from '../lib/auth.js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -18,9 +19,12 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { server_id, contract_address, view = 'token', range = '30d', sort = 'spins' } = req.body || {};
+    const { token, server_id, contract_address, view = 'token', range = '30d', sort = 'spins' } = req.body || {};
     if (!server_id) return res.status(400).json({ error: 'server_id required' });
     if (view === 'token' && !contract_address) return res.status(400).json({ error: 'contract_address required' });
+
+    const gate = await requireAdmin(supabase, token, server_id);
+    if (!gate.ok) return res.status(gate.status).json({ error: gate.error });
 
     const start = rangeToStart(range);
     const end = new Date();

@@ -8,6 +8,7 @@ import {
 } from '@solana/spl-token';
 import { randomInt } from 'crypto';
 import { sendTxWithFreshBlockhash } from '../lib/solanaSend.js';
+import { verifySignedToken } from '../lib/auth.js';
 
 function utcDateStringYYYYMMDD(d = new Date()) {
   const y = d.getUTCFullYear();
@@ -59,6 +60,11 @@ export default async function handler(req, res) {
     const { token: signedToken, server_id, spin } = req.body || {};
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id) return res.status(400).json({ error: 'Server ID required' });
+
+    // Reject forged tokens early (only enforced when SPIN_KEY is configured).
+    if (verifySignedToken(signedToken) === false) {
+      return res.status(403).json({ error: 'Invalid token' });
+    }
 
     // Load spin token
     const { data: t, error: tErr } = await supabase
@@ -143,9 +149,9 @@ export default async function handler(req, res) {
         spins_left = Math.max(0, 1 - used);
       }
 
-      // adminInfo is optional, keep it best-effort
+      // adminInfo (pool wallet address + balances) is for admins only — never expose to regular users.
       let adminInfo = {};
-      try {
+      if (role === 'admin' || role === 'superadmin') try {
         const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
         const poolAddr = funding.publicKey.toBase58();
 
@@ -289,13 +295,30 @@ export default async function handler(req, res) {
         commitment: 'confirmed',
       });
     } catch (e) {
-      const msg = String(e?.message || e);
-      console.error('[spin] sendTx error:', msg);
+      const code = e?.code;
+      console.error('[spin] sendTx error:', code || '(none)', String(e?.message || e));
 
-      if (dailyRowId) await supabase.from('daily_spins').delete().eq('id', dailyRowId);
-      await supabase.from('spin_tokens').update({ status: 'issued', reserved_at: null }).eq('token', signedToken);
+      if (code === 'PREFLIGHT' || code === 'ONCHAIN_FAIL') {
+        // Definitely nothing moved → safe to release the daily slot for a clean retry.
+        if (dailyRowId) await supabase.from('daily_spins').delete().eq('id', dailyRowId);
+        await supabase.from('spin_tokens').update({ status: 'issued', reserved_at: null }).eq('token', signedToken);
+        return res.status(502).json({ error: 'Token transfer failed. Please try again.' });
+      }
 
-      return res.status(502).json({ error: 'Token transfer failed. Please try again.' });
+      // Ambiguous (UNCONFIRMED): the transfer may have landed. Releasing the slot or
+      // token here is exactly the double-payout hole. Lock it for manual review instead.
+      await supabase.from('spin_tokens')
+        .update({ status: 'review' })
+        .eq('token', signedToken)
+        .eq('server_id', server_id);
+      if (dailyRowId) {
+        await supabase.from('daily_spins')
+          .update({ tx_signature: e?.signature || 'UNCONFIRMED', tier: 'review' })
+          .eq('id', dailyRowId);
+      }
+      return res.status(502).json({
+        error: 'Your spin is being processed. If you did not receive tokens, contact an admin.',
+      });
     }
 
     // Record result

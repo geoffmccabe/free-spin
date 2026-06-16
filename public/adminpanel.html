@@ -257,7 +257,7 @@
     const range= rangeSelect.value;
     lbScope.textContent = view==='token' ? '(This token)' : '(All tokens)';
 
-    const body = { server_id, view, range };
+    const body = { token, server_id, view, range };
     if (view==='token' && contract_address) body.contract_address = contract_address;
 
     const r = await fetch('/api/chart', {
@@ -306,7 +306,7 @@
 
     const view = viewSelect.value;
     const sort = sortSelect.value;
-    const body = { server_id, sort, view, range: rangeSelect.value };
+    const body = { token, server_id, sort, view, range: rangeSelect.value };
     if (view==='token' && contract_address) body.contract_address = contract_address;
 
     const r = await fetch('/api/adminleaderboards', {
