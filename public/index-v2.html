@@ -56,6 +56,9 @@
     let segments = [];
     let announcedPrize = null;
     let finalSpinsLeft = null;
+    let announcedTier = null;
+    let hasSpun = false;
+    let isSpinning = false;
 
     const qs = new URLSearchParams(window.location.search);
     const token = qs.get("token");
@@ -65,17 +68,26 @@
     const messageDiv = document.getElementById("message");
     const overlayImg = document.getElementById("wheel-overlay");
 
+    // v1 has this guard; v2 never got it and would call /api/spin with a null token.
+    if (!token || !server_id) {
+      messageDiv.textContent = "No spin link or server ID provided.";
+      spinButton.disabled = true;
+    }
+
     function resizeCanvas() {
       const container = document.getElementById('wheel-container');
       const size = Math.min(container.offsetWidth, container.offsetHeight);
       [document.getElementById('canvas-mechanics'), document.getElementById('canvas-text')].forEach(c => {
-        c.width = size; c.height = size;
+        // Math.max(...,1): a 0-wide container at load produced a 0x0 canvas that
+        // never recovered. v1 already guarded this.
+        c.width = Math.max(size, 1); c.height = Math.max(size, 1);
       });
     }
     window.addEventListener('resize', () => { resizeCanvas(); drawTextWheel(); });
     resizeCanvas();
 
     async function initializeWheel() {
+      if (!token || !server_id) return;
       try {
         const res = await fetch("/api/spin", {
           method:"POST", headers:{ "Content-Type": "application/json" },
@@ -84,12 +96,25 @@
         const data = await res.json();
         if (!res.ok || !data.tokenConfig) throw new Error(data.error || "Failed to load spin configuration");
 
-        const { token_name, payout_amounts, payout_weights, image_url } = data.tokenConfig;
-        segments = payout_amounts.map(a => ({
+        const { token_name, payout_amounts, image_url } = data.tokenConfig;
+        // v1 validates this; v2 called .map() straight on it and threw a raw
+        // TypeError at the user when a wheel had no payouts configured.
+        const amounts = Array.isArray(payout_amounts) ? payout_amounts : [];
+        if (!amounts.length) throw new Error("No payout amounts configured.");
+
+        segments = amounts.map(a => ({
           text:`${a}`, text2:token_name, textFillStyle:'white', textFontFamily:'Arial'
         }));
 
-        if (image_url) { overlayImg.src=image_url; overlayImg.style.display='block'; }
+        // Preload so a dead image_url leaves a clean wheel instead of a broken-image icon.
+        if (image_url) {
+          const img = new Image();
+          img.onload = () => { overlayImg.src = image_url; overlayImg.style.display = 'block'; };
+          img.onerror = () => { overlayImg.style.display = 'none'; };
+          img.src = image_url;
+        } else {
+          overlayImg.style.display = 'none';
+        }
 
         const container = document.getElementById('wheel-container');
         const radius = Math.min(container.offsetWidth, container.offsetHeight) / 2;
@@ -107,11 +132,18 @@
               messageDiv.innerHTML = announcedPrize
                 ? `You won: <span class="gold">${announcedPrize}</span>\n${spinsLeftText}`
                 : `Spin complete.\n${spinsLeftText}`;
-              effects.onWin({ prize: announcedPrize, rare: true }); // let effects decide rare vs common
+              isSpinning = false;
+              // The server has always returned a `tier`; v2 ignored it and hardcoded
+              // rare:true, so the big front-of-screen celebration fired on every
+              // single win including the smallest one.
+              const rare = ['epic', 'legendary', 'mythic'].includes(String(announcedTier || '').toLowerCase());
+              effects.onWin({ prize: announcedPrize, rare });
             },
             callbackBefore: () => {
               effects.tick(mechanicsWheel.rotationAngle);
-              drawTextWheel(mechanicsWheel.rotationAngle - 60);
+              // -90, matching v1. v2 used -60, leaving the prize text rotated 30°
+              // out of step with the wheel image for the whole spin.
+              drawTextWheel(mechanicsWheel.rotationAngle - 90);
               overlayImg.style.transform = `rotate(${mechanicsWheel.rotationAngle-30}deg)`;
             }
           }
@@ -148,9 +180,12 @@
     }
 
     async function doSpin() {
-      const spinButton = document.getElementById("spin-button");
+      // v1's latch. Without it a second click that slipped through (or a retry after
+      // a failed spin that had actually paid) fired another /api/spin request.
+      if (hasSpun || isSpinning || !mechanicsWheel) return;
+      hasSpun = true;
+      isSpinning = true;
       spinButton.disabled = true;
-      const messageDiv = document.getElementById("message");
       messageDiv.textContent = "Preparing your spin...";
       effects.startSpin();
       try {
@@ -168,16 +203,21 @@
         mechanicsWheel.animation.stopAngle=(center + (Math.random()*(seg.endAngle-seg.startAngle)*0.8) - ((seg.endAngle-seg.startAngle)*0.4)) % 360;
 
         announcedPrize=data.prize;
+        announcedTier=data.tier;
         finalSpinsLeft=data.spins_left;
+        messageDiv.textContent = "Spinning...";
         mechanicsWheel.stopAnimation(false);
         mechanicsWheel.rotationAngle=0;
         mechanicsWheel.draw();
         drawTextWheel(-60);
         mechanicsWheel.startAnimation();
       } catch (err) {
-        messageDiv.textContent=err.message;
-        spinButton.disabled=false;
+        messageDiv.textContent=`Spin failed: ${err.message}`;
+        isSpinning=false;
         effects.stopSpinSound();
+        // Deliberately NOT re-enabling the button or clearing hasSpun: the spin may
+        // have been consumed server-side, so a client retry risks a second request
+        // against a token that is already reserved or in review.
       }
     }
 
@@ -185,7 +225,14 @@
     initializeWheel();
   </script>
 
-  <!-- Load the ATA gate AFTER the inline module so it can intercept the click -->
+  <!-- ATA gate: intentionally NOT loaded.
+       This tag pointed at a TypeScript file, so it only ever threw a SyntaxError and
+       the gate never ran. atadetection.js is now valid JS and self-gates (it shows
+       only when the user's token account is missing), but /api/spin already creates
+       the recipient's token account with the prize pool paying the ~0.002 SOL rent —
+       so making users create it themselves is a product decision, not a bug fix.
+       Re-enable by uncommenting once that's decided.
   <script type="module" src="./atadetection.js"></script>
+  -->
 </body>
 </html>

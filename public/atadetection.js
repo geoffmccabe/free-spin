@@ -1,16 +1,12 @@
-// atadetection.ts
+// atadetection.js
 // Renders an ATA helper screen + "DETECT" that asks the backend to verify ATA existence.
 // Assumes URL has ?token=...&server_id=...
-
-type SpinAtaCheckResponse = {
-  ok?: boolean;
-  ata_exists?: boolean;
-  token_name?: string;
-  mint_address?: string;
-  is_superadmin?: boolean;
-  error?: string;
-  message?: string;
-};
+//
+// NOTE: this file was written in TypeScript but served straight to the browser as
+// .js, so it threw a SyntaxError on load and never executed — the ATA gate has
+// never actually run in production. It is now valid JavaScript and only takes over
+// the page when the user's token account is genuinely missing. It is currently NOT
+// loaded by index-v2.html; see the comment there before switching it back on.
 
 (function () {
   const qs = new URLSearchParams(window.location.search);
@@ -153,19 +149,23 @@ type SpinAtaCheckResponse = {
       Tip: If you don’t see the prompt to create the token account, first add the token by mint address, then open it and press <em>Receive</em>.
     </div>
   `;
-  document.body.appendChild(wrap);
+  // Held back until we know the ATA is actually missing, so this screen can never
+  // cover a wheel that would have worked fine.
+  function showGate() {
+    if (!wrap.isConnected) document.body.appendChild(wrap);
+  }
 
-  const tokenHead = document.getElementById('tokenNameHead') as HTMLSpanElement;
-  const tokenText = document.getElementById('tokenNameText') as HTMLSpanElement;
-  const tokenNamePhA = document.getElementById('tokenNamePhantomA') as HTMLSpanElement;
-  const tokenNamePhB = document.getElementById('tokenNamePhantomB') as HTMLSpanElement;
-  const mintAddrPh = document.getElementById('mintAddrPhantom') as HTMLSpanElement;
-  const solflareSteps = document.getElementById('solflareSteps') as HTMLOListElement;
-  const detectBtn = document.getElementById('detectBtn') as HTMLButtonElement;
-  const statusDiv = document.getElementById('status') as HTMLDivElement;
+  const tokenHead = wrap.querySelector('#tokenNameHead');
+  const tokenText = wrap.querySelector('#tokenNameText');
+  const tokenNamePhA = wrap.querySelector('#tokenNamePhantomA');
+  const tokenNamePhB = wrap.querySelector('#tokenNamePhantomB');
+  const mintAddrPh = wrap.querySelector('#mintAddrPhantom');
+  const solflareSteps = wrap.querySelector('#solflareSteps');
+  const detectBtn = wrap.querySelector('#detectBtn');
+  const statusDiv = wrap.querySelector('#status');
 
   // Fill Solflare steps with your exact wording (1–9), using real token name + mint
-  function setSolflareSteps(tokenName: string, mint: string) {
+  function setSolflareSteps(tokenName, mint) {
     solflareSteps.innerHTML = `
       <li>Open Solflare Wallet</li>
       <li>Scroll down to the bottom of tokens</li>
@@ -180,7 +180,7 @@ type SpinAtaCheckResponse = {
   }
 
   // Updates titles/placeholders after backend informs us of token/mint
-  function setTokenMeta(name: string, mint: string) {
+  function setTokenMeta(name, mint) {
     tokenHead.textContent = name;
     tokenText.textContent = name;
     tokenNamePhA.textContent = name;
@@ -203,7 +203,7 @@ type SpinAtaCheckResponse = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: signedToken, server_id: serverId, ata_check: true })
       });
-      const data = (await resp.json()) as SpinAtaCheckResponse;
+      const data = await resp.json();
 
       // If server doesn’t support ata_check, try a plain config call (no spin)
       if (!resp.ok && !data?.token_name) {
@@ -227,7 +227,10 @@ type SpinAtaCheckResponse = {
       if (!currentMint) throw new Error('Missing mint address');
       setTokenMeta(currentName, currentMint);
       statusDiv.textContent = '';
-    } catch (e: any) {
+
+      // Only interrupt the user if their token account really is missing.
+      if (data && data.ata_exists === false) showGate();
+    } catch (e) {
       statusDiv.textContent = (e?.message || 'Failed to load token info');
       statusDiv.className = 'status bad';
     }
@@ -244,7 +247,7 @@ type SpinAtaCheckResponse = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: signedToken, server_id: serverId, ata_check: true })
       });
-      const data = (await resp.json()) as SpinAtaCheckResponse;
+      const data = await resp.json();
 
       if (!resp.ok) {
         // graceful message for older backends
@@ -264,7 +267,7 @@ type SpinAtaCheckResponse = {
         statusDiv.innerHTML = `No ${escapeHtml(name)} ATA found yet. Follow the steps above, then press <strong>DETECT</strong> again.`;
         statusDiv.className = 'status bad';
       }
-    } catch (e: any) {
+    } catch (e) {
       statusDiv.textContent = e?.message || 'Detection failed';
       statusDiv.className = 'status bad';
     } finally {
@@ -273,9 +276,9 @@ type SpinAtaCheckResponse = {
   });
 
   // utils
-  function escapeHtml(s: string) {
-    return s.replace(/[&<>"']/g, c =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as any)[c]
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
     );
   }
 

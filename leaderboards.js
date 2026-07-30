@@ -1,4 +1,5 @@
 import { client, supabase, retryQuery } from './index.js';
+import { selectAllRows } from './lib/fetchAll.js';
 
 function normalize(s) {
   return String(s || '').trim().toLowerCase();
@@ -64,13 +65,18 @@ async function handleLeaderboardCommand(interaction) {
 
   const startISO = daysAgoISO(30);
 
+  // Paged: a plain .select() stops at Supabase's 1000-row cap.
   const { data: rows, error } = await retryQuery(() =>
-    supabase
-      .from('daily_spins')
-      .select('discord_id, payout_amount_raw, created_at')
-      .eq('server_id', server_id)
-      .eq('contract_address', tok.contract_address)
-      .gte('created_at', startISO)
+    selectAllRows(() =>
+      supabase
+        .from('daily_spins')
+        .select('discord_id, payout_amount_raw, created_at')
+        .eq('server_id', server_id)
+        .eq('contract_address', tok.contract_address)
+        .gte('created_at', startISO)
+        .order('created_at', { ascending: true })
+        .order('discord_id', { ascending: true })
+    )
   );
 
   if (error) return interaction.editReply({ content: '❌ Failed to fetch leaderboard data.', flags: 64 });
@@ -92,7 +98,9 @@ async function handleLeaderboardCommand(interaction) {
     payout: Number(v.payoutBase) / (10 ** (tok.decimals || 0))
   }));
 
-  list.sort((a, b) => b.payout - a.payout);
+  // Tie-break so equal payouts don't order arbitrarily (Array.sort is only stable
+  // over the input order, which came from a Map and could shift between calls).
+  list.sort((a, b) => (b.payout - a.payout) || (b.spins - a.spins) || String(a.discord_id).localeCompare(String(b.discord_id)));
   list = list.slice(0, 10);
 
   if (!list.length) {
@@ -107,8 +115,7 @@ async function handleLeaderboardCommand(interaction) {
 
   const text =
     `**${tok.token_name} Leaderboard (30d)**\n` +
-    list.map((e, i) => `#${i + 1}: ${nameMap.get(e.discord_id)} — ${e.payout} ${tok.token_name} (${e.spins} ${e.spins === 1 ? 'spin' : 'spins'})
-`).join('\n');
+    list.map((e, i) => `#${i + 1}: ${nameMap.get(e.discord_id)} — ${e.payout} ${tok.token_name} (${e.spins} ${e.spins === 1 ? 'spin' : 'spins'})`).join('\n');
 
   return interaction.editReply({ content: text, flags: 64 });
 }

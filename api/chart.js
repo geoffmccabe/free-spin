@@ -1,12 +1,31 @@
 // /api/chart.js
-// Returns { days: [{ day_et, spins, total_base }], token_name, decimals }
-// Filters by server_id + contract_address; buckets by US/Eastern; never returns plain text.
+// Returns { labels, spins, totalPayout, yMaxLeft, yMaxRight, token_name, decimals }
+// Buckets daily_spins by day in the caller's timezone. Admin-only.
+//
+// This endpoint was doubly broken:
+//  1. It selected `created_at_utc` and `amount_base`, neither of which exists on
+//     daily_spins (the real columns are `created_at` and `payout_amount_raw`), so
+//     PostgREST rejected the query and every request 500'd.
+//  2. Even had it worked, it returned { days: [...] } while adminpanel.html reads
+//     { labels, spins, totalPayout }, so the chart would have rendered empty.
+// It also required contract_address, which made the panel's "All tokens" view a
+// guaranteed 400, and hardcoded decimals to 5 regardless of the token.
 
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '../lib/auth.js';
+import { selectAllRows } from '../lib/fetchAll.js';
 
 function jsonError(res, status, message, details) {
   res.status(status).json({ error: message, details });
+}
+
+function rangeToStart(range) {
+  const now = Date.now();
+  if (range === '7d') return new Date(now - 6 * 24 * 3600 * 1000);
+  if (range === '30d') return new Date(now - 29 * 24 * 3600 * 1000);
+  if (range === '90d') return new Date(now - 89 * 24 * 3600 * 1000);
+  if (range === 'all') return null;
+  return new Date(now - 29 * 24 * 3600 * 1000);
 }
 
 export default async function handler(req, res) {
@@ -21,75 +40,106 @@ export default async function handler(req, res) {
 
     // Accept params from POST body (admin panel) or query string.
     const src = { ...(req.query || {}), ...(req.body || {}) };
-    const { token, server_id, contract_address, tz = 'America/New_York', range = 'all' } = src;
-    if (!server_id || !contract_address) {
-      return jsonError(res, 400, 'server_id and contract_address required');
+    const {
+      token,
+      server_id,
+      contract_address,
+      view = contract_address ? 'token' : 'server',
+      tz = 'America/New_York',
+      range = '30d',
+    } = src;
+
+    if (!server_id) return jsonError(res, 400, 'server_id required');
+    if (view === 'token' && !contract_address) {
+      return jsonError(res, 400, 'contract_address required for token view');
     }
 
     // Admin-only: spin stats must not be world-readable.
     const gate = await requireAdmin(supabase, token, server_id);
     if (!gate.ok) return jsonError(res, gate.status, gate.error);
 
-    // Token label (decimals default to 5; we avoid selecting non-existent columns)
-    let token_name = 'TOKEN';
-    const { data: cfg, error: cfgErr } = await supabase
+    // Per-mint decimals for this server, so payouts scale correctly in both views.
+    const { data: cfgs } = await supabase
       .from('wheel_configurations')
-      .select('token_name')
-      .eq('contract_address', contract_address)
-      .maybeSingle();
-    if (!cfgErr && cfg?.token_name) token_name = cfg.token_name;
-    const decimals = 5;
+      .select('contract_address, token_name, decimals')
+      .eq('server_id', server_id);
 
-    // Fetch all rows for this server+token (sorted)
-    const { data: rows, error } = await supabase
-      .from('daily_spins')
-      .select('created_at_utc, created_at, amount_base')
-      .eq('server_id', server_id)
-      .eq('contract_address', contract_address)
-      .order('created_at_utc', { ascending: true, nullsFirst: false });
-
-    if (error) {
-      return jsonError(res, 500, 'DB fetch error', error.message);
+    const decimalsByMint = new Map();
+    const nameByMint = new Map();
+    for (const c of cfgs || []) {
+      const d = Number(c.decimals);
+      decimalsByMint.set(c.contract_address, Number.isFinite(d) ? d : 0);
+      if (c.token_name) nameByMint.set(c.contract_address, c.token_name);
     }
 
-    // Aggregate by ET day (YYYY-MM-DD)
-    const fmt = new Intl.DateTimeFormat('en-CA', {
-      timeZone: tz,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
+    const token_name = view === 'token'
+      ? (nameByMint.get(contract_address) || 'TOKEN')
+      : 'All tokens';
+    const decimals = view === 'token' ? (decimalsByMint.get(contract_address) ?? 0) : 0;
+
+    const start = rangeToStart(range);
+
+    const { data: rows, error } = await selectAllRows(() => {
+      let q = supabase
+        .from('daily_spins')
+        .select('created_at, payout_amount_raw, contract_address')
+        .eq('server_id', server_id)
+        .order('created_at', { ascending: true });
+      if (view === 'token') q = q.eq('contract_address', contract_address);
+      if (start) q = q.gte('created_at', start.toISOString());
+      return q;
     });
+
+    if (error) return jsonError(res, 500, 'DB fetch error', error.message);
+
+    // Aggregate by day in the requested timezone (en-CA formats as YYYY-MM-DD)
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+
     const dayMap = new Map();
-
     for (const r of rows || []) {
-      const ts = r.created_at_utc || r.created_at;
-      if (!ts) continue;
-      const d = new Date(ts);
-      const day_et = fmt.format(d); // en-CA gives YYYY-MM-DD
-      const amt = Number(r.amount_base) || 0;
+      if (!r.created_at) continue;
+      const d = new Date(r.created_at);
+      if (Number.isNaN(d.getTime())) continue;
+      const day = fmt.format(d);
 
-      const cur = dayMap.get(day_et) || { day_et, spins: 0, total_base: 0 };
+      const base = r.payout_amount_raw != null
+        ? Number(String(r.payout_amount_raw).split('.')[0])
+        : 0;
+      const dec = decimalsByMint.get(r.contract_address) ?? decimals;
+      const amt = Number.isFinite(base) ? base / (10 ** dec) : 0;
+
+      const cur = dayMap.get(day) || { spins: 0, payout: 0 };
       cur.spins += 1;
-      cur.total_base += amt;
-      dayMap.set(day_et, cur);
+      cur.payout += amt;
+      dayMap.set(day, cur);
     }
 
-    let days = Array.from(dayMap.values()).sort((a, b) => (a.day_et < b.day_et ? -1 : 1));
-
-    // Optional range trimming
-    if (range === '7d' || range === '30d' || range === '90d') {
-      const nowTz = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
-      const back = range === '7d' ? 7 : range === '30d' ? 30 : 90;
-      const cutoff = new Date(nowTz);
-      cutoff.setDate(cutoff.getDate() - back);
-      const y = cutoff.getFullYear();
-      const m = String(cutoff.getMonth() + 1).padStart(2, '0');
-      const d2 = String(cutoff.getDate()).padStart(2, '0');
-      const cut = `${y}-${m}-${d2}`;
-      days = days.filter(x => x.day_et >= cut);
+    // Fill gap days so the line chart doesn't imply activity across empty stretches
+    const sortedDays = Array.from(dayMap.keys()).sort();
+    const labels = [];
+    if (sortedDays.length) {
+      const cursor = new Date(`${sortedDays[0]}T00:00:00Z`);
+      const last = new Date(`${sortedDays[sortedDays.length - 1]}T00:00:00Z`);
+      while (cursor <= last) {
+        labels.push(cursor.toISOString().slice(0, 10));
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+      }
     }
 
-    return res.status(200).json({ days, token_name, decimals });
+    const spins = labels.map(l => dayMap.get(l)?.spins || 0);
+    const totalPayout = labels.map(l => Number((dayMap.get(l)?.payout || 0).toFixed(6)));
+
+    return res.status(200).json({
+      labels,
+      spins,
+      totalPayout,
+      yMaxLeft: Math.max(1, ...spins),
+      yMaxRight: Math.max(1, ...totalPayout),
+      token_name,
+      decimals,
+    });
   } catch (e) {
     return jsonError(res, 500, 'Unhandled chart error', String(e?.message || e));
   }

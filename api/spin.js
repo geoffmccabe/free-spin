@@ -18,22 +18,45 @@ function utcDateStringYYYYMMDD(d = new Date()) {
 }
 
 function pickWeightedIndex(weights) {
-  const total = weights.reduce((a, b) => a + b, 0);
-  const r = randomInt(0, Math.max(1, total));
+  // Sanitise: a NaN/negative weight from bad config used to make randomInt() throw,
+  // which aborted the request *after* the daily slot had been consumed.
+  const safe = weights.map((w) => {
+    const n = Math.floor(Number(w));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  });
+  const total = safe.reduce((a, b) => a + b, 0);
+  if (total <= 0) return randomInt(0, Math.max(1, safe.length)); // all-zero config → uniform
+  const r = randomInt(0, total);
   let acc = 0;
-  for (let i = 0; i < weights.length; i++) {
-    acc += weights[i];
+  for (let i = 0; i < safe.length; i++) {
+    acc += safe[i];
     if (r < acc) return i;
   }
-  return 0;
+  return safe.length - 1;
 }
 
-function tierForIndex(idx, n) {
-  // Simple, stable mapping: lowest prizes are common, highest are legendary
+function tierForAmount(amount, amounts) {
+  // Rank by prize VALUE, not by position in the array. The old index-based version
+  // silently mislabelled every wheel whose payout_amounts weren't sorted ascending.
   const tiers = ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'];
-  if (n <= 1) return 'common';
-  const scaled = Math.floor((idx / (n - 1)) * (tiers.length - 1));
+  const distinct = [...new Set(amounts.map(Number))].sort((a, b) => a - b);
+  if (distinct.length <= 1) return 'common';
+  const rank = distinct.indexOf(Number(amount));
+  if (rank < 0) return 'common';
+  const scaled = Math.floor((rank / (distinct.length - 1)) * (tiers.length - 1));
   return tiers[Math.max(0, Math.min(tiers.length - 1, scaled))];
+}
+
+// Decimal-string → integer base units. `display * 10**decimals` in floating point
+// truncated some prizes down by one base unit (e.g. 8.2 * 1e6 = 8199999.999...).
+function toBaseUnits(display, decimals) {
+  const s = String(display).trim();
+  if (!/^-?\d*(\.\d*)?$/.test(s) || s === '' || s === '.') return NaN;
+  const neg = s.startsWith('-');
+  const [intPart = '0', fracPart = ''] = s.replace('-', '').split('.');
+  const frac = (fracPart + '0'.repeat(decimals)).slice(0, decimals);
+  const n = Number(`${intPart}${frac}`.replace(/^0+(?=\d)/, ''));
+  return neg ? -n : n;
 }
 
 export default async function handler(req, res) {
@@ -57,7 +80,7 @@ export default async function handler(req, res) {
   const connection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
   try {
-    const { token: signedToken, server_id, spin } = req.body || {};
+    const { token: signedToken, server_id, spin, ata_check } = req.body || {};
     if (!signedToken) return res.status(400).json({ error: 'Token required' });
     if (!server_id) return res.status(400).json({ error: 'Server ID required' });
 
@@ -129,6 +152,30 @@ export default async function handler(req, res) {
       : amounts.map(() => 1);
 
     const decimals = Number.isFinite(Number(cfg.decimals)) ? Number(cfg.decimals) : 0;
+
+    // ATA existence probe (read-only). atadetection.js has always called this; the
+    // server never implemented it, so the helper screen could never succeed.
+    if (ata_check && !spin) {
+      let ata_exists = false;
+      try {
+        if (wallet_address) {
+          const userAta = await getAssociatedTokenAddress(
+            new PublicKey(contract_address),
+            new PublicKey(wallet_address)
+          );
+          ata_exists = !!(await connection.getAccountInfo(userAta));
+        }
+      } catch {
+        ata_exists = false;
+      }
+      return res.status(200).json({
+        ok: true,
+        ata_exists,
+        token_name: tokenName,
+        mint_address: contract_address,
+        is_superadmin: role === 'superadmin',
+      });
+    }
 
     // Page load (no spin)
     if (!spin) {
@@ -238,51 +285,79 @@ export default async function handler(req, res) {
       dailyRowId = ins.id;
     }
 
-    // Choose prize
-    const idx = pickWeightedIndex(weights);
-    const rewardDisplay = Number(amounts[idx]);
-    const amountBase = Math.trunc(rewardDisplay * (10 ** decimals));
-    const tier = tierForIndex(idx, amounts.length);
+    // Nothing has been submitted to the chain yet, so any failure from here to the
+    // send() below is safe to roll back. Previously an unexpected throw (bad wallet
+    // address, malformed payout config, RPC hiccup) escaped to the outer catch and
+    // left the daily row inserted and the token stuck on 'reserved' forever — the
+    // user burned their one spin of the day and could never retry.
+    const releaseSpin = async () => {
+      if (dailyRowId) await supabase.from('daily_spins').delete().eq('id', dailyRowId);
+      await supabase
+        .from('spin_tokens')
+        .update({ status: 'issued', reserved_at: null })
+        .eq('token', signedToken)
+        .eq('server_id', server_id);
+    };
 
-    const funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
-    const userPk = new PublicKey(wallet_address);
-    const mintPk = new PublicKey(contract_address);
-
-    const fromATA = await getAssociatedTokenAddress(mintPk, funding.publicKey);
-    const toATA = await getAssociatedTokenAddress(mintPk, userPk);
-
-    // Check pool balance
+    let idx, rewardDisplay, amountBase, tier, funding, ixs, sendCtx;
     try {
-      const balInfo = await connection.getTokenAccountBalance(fromATA, 'confirmed');
-      const baseAmt = Number(balInfo?.value?.amount || 0);
-      if (!Number.isFinite(baseAmt) || baseAmt < amountBase) {
-        if (dailyRowId) await supabase.from('daily_spins').delete().eq('id', dailyRowId);
-        await supabase.from('spin_tokens').update({ status: 'issued', reserved_at: null }).eq('token', signedToken);
+      idx = pickWeightedIndex(weights);
+      rewardDisplay = Number(amounts[idx]);
+      amountBase = toBaseUnits(amounts[idx], decimals);
+      if (!Number.isFinite(amountBase) || amountBase < 0) {
+        throw new Error(`Bad payout amount in wheel config: ${amounts[idx]}`);
+      }
+      tier = tierForAmount(amounts[idx], amounts);
+
+      funding = Keypair.fromSecretKey(Buffer.from(JSON.parse(FUNDING_WALLET_PRIVATE_KEY)));
+      const userPk = new PublicKey(wallet_address);
+      const mintPk = new PublicKey(contract_address);
+
+      const fromATA = await getAssociatedTokenAddress(mintPk, funding.publicKey);
+      const toATA = await getAssociatedTokenAddress(mintPk, userPk);
+
+      // Check pool balance. Read inside the try (RPC may fail — then we just attempt
+      // the transfer and handle failure), but act on the result outside it, so a
+      // failing releaseSpin() can't be swallowed and let the payout continue.
+      let poolBase = null;
+      try {
+        const balInfo = await connection.getTokenAccountBalance(fromATA, 'confirmed');
+        const n = Number(balInfo?.value?.amount);
+        poolBase = Number.isFinite(n) ? n : null;
+      } catch {
+        poolBase = null; // unknown → proceed and let the send surface any problem
+      }
+      if (poolBase !== null && poolBase < amountBase) {
+        await releaseSpin();
         return res.status(503).json({ error: 'Prize pool is low. Please try again later.' });
       }
-    } catch {
-      // If RPC fails here, we still attempt transfer and handle failure.
-    }
 
-    // Build instructions with ATA create if needed
-    const ixs = [];
-    const [fromInfo, toInfo] = await Promise.all([
-      connection.getAccountInfo(fromATA),
-      connection.getAccountInfo(toATA),
-    ]);
+      // Build instructions with ATA create if needed
+      ixs = [];
+      const [fromInfo, toInfo] = await Promise.all([
+        connection.getAccountInfo(fromATA),
+        connection.getAccountInfo(toATA),
+      ]);
 
-    if (!fromInfo) {
-      ixs.push(createAssociatedTokenAccountInstruction(
-        funding.publicKey, fromATA, funding.publicKey, mintPk
-      ));
-    }
-    if (!toInfo) {
-      ixs.push(createAssociatedTokenAccountInstruction(
-        funding.publicKey, toATA, userPk, mintPk
-      ));
-    }
+      if (!fromInfo) {
+        ixs.push(createAssociatedTokenAccountInstruction(
+          funding.publicKey, fromATA, funding.publicKey, mintPk
+        ));
+      }
+      if (!toInfo) {
+        ixs.push(createAssociatedTokenAccountInstruction(
+          funding.publicKey, toATA, userPk, mintPk
+        ));
+      }
 
-    ixs.push(createTransferInstruction(fromATA, toATA, funding.publicKey, amountBase));
+      ixs.push(createTransferInstruction(fromATA, toATA, funding.publicKey, amountBase));
+
+      sendCtx = { fromATA, toATA, mintPk, userPk };
+    } catch (e) {
+      console.error('[spin] pre-send failure:', e?.message || e);
+      await releaseSpin();
+      return res.status(500).json({ error: 'Could not prepare your spin. Please try again.' });
+    }
 
     let signature;
     try {
@@ -290,7 +365,7 @@ export default async function handler(req, res) {
         connection,
         payer: funding,
         instructions: ixs,
-        recentAccounts: [fromATA, toATA, mintPk, userPk.toBase58()],
+        recentAccounts: [sendCtx.fromATA, sendCtx.toATA, sendCtx.mintPk, sendCtx.userPk.toBase58()],
         maxRetries: 4,
         commitment: 'confirmed',
       });
@@ -300,8 +375,7 @@ export default async function handler(req, res) {
 
       if (code === 'PREFLIGHT' || code === 'ONCHAIN_FAIL') {
         // Definitely nothing moved → safe to release the daily slot for a clean retry.
-        if (dailyRowId) await supabase.from('daily_spins').delete().eq('id', dailyRowId);
-        await supabase.from('spin_tokens').update({ status: 'issued', reserved_at: null }).eq('token', signedToken);
+        await releaseSpin();
         return res.status(502).json({ error: 'Token transfer failed. Please try again.' });
       }
 
@@ -344,7 +418,10 @@ export default async function handler(req, res) {
       prize: `${rewardDisplay} ${tokenName}`,
       signature,
       tier,
-      spins_left: role === 'superadmin' ? 'Unlimited' : undefined,
+      // Was `undefined` for normal users, which JSON drops entirely — so the page's
+      // `typeof spins_left === 'number'` check failed and every player was told
+      // "Unlimited spins" right after using their one spin of the day.
+      spins_left: role === 'superadmin' ? 'Unlimited' : 0,
     });
 
   } catch (err) {

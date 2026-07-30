@@ -81,6 +81,13 @@ export default async function handler(req, res) {
       return res.status(200).json({ items });
     }
 
+    // Mutations are superadmin-only, matching /settoken in the bot and the older
+    // api/admin_tokens.js. This endpoint let any plain admin enable/add a mint,
+    // which was a silent privilege downgrade versus every other path.
+    if (action !== 'list' && role !== 'superadmin') {
+      return res.status(403).json({ error: 'Superadmin required' });
+    }
+
     if (action === 'toggle') {
       const addr = String(addrRaw || '').trim();
       if (!validMint(addr)) return res.status(400).json({ error: 'Valid contract_address required' });
@@ -118,6 +125,20 @@ export default async function handler(req, res) {
     if (action === 'add') {
       const addr = String(addrRaw || '').trim();
       if (!validMint(addr)) return res.status(400).json({ error: 'Valid contract_address required' });
+
+      // A token with no wheel_configurations row for THIS server is unspinnable —
+      // /api/spin rejects it with "Invalid wheel configuration". /settoken and the
+      // older endpoint both check this first; this one didn't, so admins could add
+      // a mint that silently broke every spin for it.
+      const { data: cfg } = await supabase
+        .from('wheel_configurations')
+        .select('contract_address')
+        .eq('server_id', server_id)
+        .eq('contract_address', addr)
+        .maybeSingle();
+      if (!cfg) {
+        return res.status(400).json({ error: 'Create a wheel configuration for this server and mint first' });
+      }
 
       const { error: insErr } = await supabase
         .from('server_tokens')

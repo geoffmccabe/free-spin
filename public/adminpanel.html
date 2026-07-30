@@ -296,7 +296,14 @@
     tbody.innerHTML = '';
     rows.forEach((r,i)=>{
       const tr=document.createElement('tr');
-      tr.innerHTML = `<td>${i+1}</td><td>${r.name||r.discord_id}</td><td>${r.spins}</td><td>${r.payout}</td>`;
+      // textContent, not innerHTML: r.name is a Discord display name chosen by the
+      // user, so building the row as an HTML string let anyone put markup/script
+      // into an admin's browser just by renaming themselves.
+      [i+1, r.name||r.discord_id, r.spins, r.payout].forEach(v=>{
+        const td=document.createElement('td');
+        td.textContent = String(v);
+        tr.appendChild(td);
+      });
       tbody.appendChild(tr);
     });
   }

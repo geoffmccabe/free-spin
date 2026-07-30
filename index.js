@@ -46,10 +46,20 @@ client.on('interactionCreate', async (interaction) => { try {
           await interaction.respond([]);
           return;
         }
-        const contract_addresses = serverTokens?.map(t => t.contract_address) || [DEFAULT_TOKEN_ADDRESS];
+        // Only offer tokens that are actually ENABLED here. The old version mapped
+        // every row regardless of `enabled`, so disabled tokens stayed selectable
+        // and then failed at /api/spin with "not enabled for this server".
+        const enabled = (serverTokens || []).filter(t => t.enabled !== false).map(t => t.contract_address);
+        const contract_addresses = enabled.length ? enabled : [DEFAULT_TOKEN_ADDRESS];
         console.log(`Contract addresses: ${contract_addresses.join(', ')}`);
         const { data: coinData, error: coinError } = await retryQuery(() =>
-          supabase.from('wheel_configurations').select('contract_address, token_name').in('contract_address', contract_addresses)
+          supabase
+            .from('wheel_configurations')
+            .select('contract_address, token_name')
+            // Was missing — autocomplete listed token names configured on OTHER
+            // servers whenever two servers shared a mint.
+            .eq('server_id', server_id)
+            .in('contract_address', contract_addresses)
         );
         if (coinError) {
           console.error(`Coin query error: ${coinError.message}`);
@@ -57,11 +67,10 @@ client.on('interactionCreate', async (interaction) => { try {
           return;
         }
 
-        const uniqueTokens = Array.from(new Map(coinData.map(c => [c.token_name, c])).values());
-        let choices = uniqueTokens.map(c => ({ name: c.token_name, value: c.token_name }));
-        if (!choices.length) {
-          choices = [{ name: 'HAROLD', value: 'HAROLD' }];
-        }
+        const uniqueTokens = Array.from(new Map((coinData || []).map(c => [c.token_name, c])).values());
+        let choices = uniqueTokens
+          .filter(c => c.token_name)
+          .map(c => ({ name: c.token_name, value: c.token_name }));
         const filteredChoices = choices.filter(c => c.name.toLowerCase().startsWith(focusedValue.toLowerCase())).slice(0, 25);
         console.log(`Sending choices: ${JSON.stringify(filteredChoices)}`);
         await interaction.respond(filteredChoices);
