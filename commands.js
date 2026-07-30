@@ -280,6 +280,11 @@ async function handleSetTokenCommand(interaction, supabase, retryQuery) {
     );
   }
 
+  // onConflict is required. Without it supabase-js targets the primary key (`id`),
+  // which we never supply — so this ran as a plain INSERT and hit the unique index
+  // on (server_id, contract_address). Re-running /settoken on a token that was
+  // already added always failed with "Failed to add token", which made it
+  // impossible to flip an existing token to default. Verified against the live DB.
   const { error } = await retryQuery(() =>
     supabase
       .from('server_tokens')
@@ -290,7 +295,7 @@ async function handleSetTokenCommand(interaction, supabase, retryQuery) {
         decimals: cfg.decimals,
         enabled: true,
         is_default: set_default
-      })
+      }, { onConflict: 'server_id,contract_address' })
   );
 
   if (error) return interaction.editReply({ content: `❌ Failed to add token.`, flags: 64 });

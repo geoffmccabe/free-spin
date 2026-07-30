@@ -47,7 +47,9 @@ export default async function handler(req, res) {
     if (action === 'list' || !action) {
       const [{ data: st, error: stErr }, { data: cfg, error: cfgErr }] = await Promise.all([
         supabase.from('server_tokens').select('contract_address, enabled').eq('server_id', server_id),
-        supabase.from('wheel_configurations').select('contract_address, token_name')
+        // server_id scope was missing: HAROLD is configured on 4 servers, so this
+        // pulled every server's rows and the name map silently took whichever came last.
+        supabase.from('wheel_configurations').select('contract_address, token_name').eq('server_id', server_id)
       ]);
       if (stErr) return deny(res, 400, stErr.message);
       if (cfgErr) return deny(res, 400, cfgErr.message);
@@ -78,13 +80,17 @@ export default async function handler(req, res) {
     if (action === 'add') {
       if (!contract_address || !isBase58(contract_address)) return deny(res, 400, 'Valid contract_address required');
 
-      // must have wheel_configurations first (so wheel knows payouts)
+      // must have wheel_configurations first (so wheel knows payouts).
+      // .single() without a server_id filter returned 4 rows for the HAROLD mint and
+      // therefore errored, so this always reported "create wheel_configurations first"
+      // even when the config existed.
       const { data: cfg, error: cfgErr } = await supabase
         .from('wheel_configurations')
-        .select('contract_address')
+        .select('contract_address, decimals')
+        .eq('server_id', server_id)
         .eq('contract_address', contract_address)
-        .single();
-      if (cfgErr || !cfg) return deny(res, 400, 'Create wheel_configurations first for this mint');
+        .maybeSingle();
+      if (cfgErr || !cfg) return deny(res, 400, 'Create wheel_configurations first for this server and mint');
 
       // insert if not present
       const { data: exists } = await supabase
@@ -95,9 +101,17 @@ export default async function handler(req, res) {
         .maybeSingle();
 
       if (!exists) {
+        // mint_address and decimals are NOT NULL with no defaults — omitting them
+        // made this insert fail every time.
         const ins = await supabase
           .from('server_tokens')
-          .insert({ server_id, contract_address, enabled: true });
+          .insert({
+            server_id,
+            contract_address,
+            mint_address: contract_address,
+            decimals: cfg.decimals,
+            enabled: true,
+          });
         if (ins.error) return deny(res, 400, ins.error.message);
       }
       return res.status(200).json({ ok: true });

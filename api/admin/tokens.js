@@ -40,11 +40,14 @@ async function fetchServerTokens(server_id) {
   }
 }
 
-async function fetchTokenMeta(contractAddresses) {
+async function fetchTokenMeta(contractAddresses, server_id) {
   if (!contractAddresses.length) return {};
   const { data, error } = await supabase
     .from('wheel_configurations')
     .select('contract_address, token_name, image_url')
+    // Scope to this server: the same mint is configured on several servers, so an
+    // unscoped lookup let another server's name/image win the map.
+    .eq('server_id', server_id)
     .in('contract_address', contractAddresses);
   if (error) return {};
   const map = {};
@@ -70,7 +73,7 @@ export default async function handler(req, res) {
 
     if (action === 'list' || !action) {
       const rows = await fetchServerTokens(server_id);
-      const nameMap = await fetchTokenMeta(rows.map(r => r.contract_address));
+      const nameMap = await fetchTokenMeta(rows.map(r => r.contract_address), server_id);
       const items = rows.map(r => ({
         contract_address: r.contract_address,
         enabled: r.enabled,
@@ -132,7 +135,7 @@ export default async function handler(req, res) {
       // a mint that silently broke every spin for it.
       const { data: cfg } = await supabase
         .from('wheel_configurations')
-        .select('contract_address')
+        .select('contract_address, decimals')
         .eq('server_id', server_id)
         .eq('contract_address', addr)
         .maybeSingle();
@@ -140,9 +143,18 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Create a wheel configuration for this server and mint first' });
       }
 
+      // server_tokens.mint_address and .decimals are NOT NULL with no defaults, so
+      // the previous payload could never insert — "add" failed 100% of the time.
+      // Verified against the live schema.
       const { error: insErr } = await supabase
         .from('server_tokens')
-        .upsert({ server_id, contract_address: addr, enabled: true }, { onConflict: 'server_id,contract_address' });
+        .upsert({
+          server_id,
+          contract_address: addr,
+          mint_address: addr,
+          decimals: cfg.decimals,
+          enabled: true,
+        }, { onConflict: 'server_id,contract_address' });
       if (insErr) return res.status(400).json({ error: insErr.message });
 
       return res.status(200).json({ ok: true });
