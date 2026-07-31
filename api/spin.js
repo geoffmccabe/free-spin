@@ -352,6 +352,36 @@ export default async function handler(req, res) {
 
       ixs.push(createTransferInstruction(fromATA, toATA, funding.publicKey, amountBase));
 
+      // The pool can hold plenty of tokens and still be unable to move them: Solana
+      // charges the funding wallet a fee in SOL, and refuses any transaction that
+      // would drop the fee payer below the rent-exempt floor (890,880 lamports for a
+      // plain wallet). Creating a token account for a first-time winner costs another
+      // ~0.00204 SOL in rent on top. Without this check that shows up as a bare
+      // "Token transfer failed", which says nothing about the actual cause — the pool
+      // being out of gas. Check it up front and say so plainly instead.
+      const RENT_EXEMPT_FLOOR = 890880;   // lamports, 0-byte account
+      const ATA_RENT = 2039280;           // lamports, 165-byte token account
+      const FEE_HEADROOM = 20000;         // base fee + priority fee, generously
+      const atasToCreate = (fromInfo ? 0 : 1) + (toInfo ? 0 : 1);
+      const lamportsNeeded = RENT_EXEMPT_FLOOR + FEE_HEADROOM + atasToCreate * ATA_RENT;
+
+      let lamports = null;
+      try {
+        lamports = await connection.getBalance(funding.publicKey, 'confirmed');
+      } catch {
+        lamports = null; // RPC unavailable — fall through and let the send report it
+      }
+      if (lamports !== null && lamports < lamportsNeeded) {
+        console.error(
+          `[spin] funding wallet out of gas: has ${lamports} lamports, needs ${lamportsNeeded} ` +
+          `(${atasToCreate} token account(s) to create). Fund ${funding.publicKey.toBase58()}.`
+        );
+        await releaseSpin();
+        return res.status(503).json({
+          error: 'The prize pool is out of gas and cannot pay network fees. An admin has been notified — your spin has not been used.',
+        });
+      }
+
       sendCtx = { fromATA, toATA, mintPk, userPk };
     } catch (e) {
       console.error('[spin] pre-send failure:', e?.message || e);
