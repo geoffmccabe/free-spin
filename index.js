@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { createClient } from '@supabase/supabase-js';
 import { Connection } from '@solana/web3.js';
+import ws from 'ws';
 import { handleLeaderboardCommand } from './leaderboards.js';
 import { handleSpinCommand, handleWalletCommand, handleSetTokenCommand, handleHelpCommand } from './commands.js';
 
@@ -15,7 +16,17 @@ const SPIN_URL = process.env.SPIN_URL || 'https://solspin.lightningworks.io';
 const DEFAULT_TOKEN_ADDRESS = '3vgopg7xm3EWkXfxmWPUpcf7g939hecfqg18sLuXDzVt'; // $HAROLD
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// supabase-js builds a Realtime client in its constructor, and that needs a global
+// WebSocket, which Node 20 does not have — so `createClient` throws at startup and
+// the whole bot dies before it can answer a single command. Railway ignores the
+// `engines.node` field in package.json and kept serving Node 20, so rather than
+// depend on the host's Node version we hand Realtime an explicit `ws` transport.
+// This works on Node 20 and 22 alike. (Nothing here uses Realtime; it just has to
+// construct without throwing.)
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  realtime: { transport: ws },
+});
 const solanaConnection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 
 async function retryQuery(queryFn, maxRetries = 3, delay = 1000) {
