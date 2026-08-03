@@ -2,6 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
+  <!-- The admin token travels in this page's URL and is a long-lived credential.
+       Without this, the full URL (token included) is sent in the Referer header to
+       cdn.jsdelivr.net when Chart.js loads — handing an admin credential to a third
+       party. index.html has always had this; the admin page was missing it. -->
+  <meta name="referrer" content="no-referrer"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Admin</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
