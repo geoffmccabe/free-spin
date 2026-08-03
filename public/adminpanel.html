@@ -129,17 +129,17 @@
     try { return new URL(document.referrer).searchParams } catch { return null }
   };
   let token = qs.get('token')
-    || sessionStorage.getItem('solspin_token')
-    || localStorage.getItem('solspin_token')
+    || sessionStorage.getItem('spinbot_token')
+    || localStorage.getItem('spinbot_token')
     || (fromRef() && fromRef().get('token')) || null;
 
   let server_id = qs.get('server_id')
-    || sessionStorage.getItem('solspin_server_id')
-    || localStorage.getItem('solspin_server_id')
+    || sessionStorage.getItem('spinbot_server_id')
+    || localStorage.getItem('spinbot_server_id')
     || (fromRef() && fromRef().get('server_id')) || null;
 
-  if (token) sessionStorage.setItem('solspin_token', token);
-  if (server_id) sessionStorage.setItem('solspin_server_id', server_id);
+  if (token) sessionStorage.setItem('spinbot_token', token);
+  if (server_id) sessionStorage.setItem('spinbot_server_id', server_id);
 
   const warn = document.getElementById('warn');
 

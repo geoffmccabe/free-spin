@@ -12,7 +12,7 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const SPIN_CHANNEL_NAME = "🔄│free-spin";
 const LEADERBOARD_CHANNEL_NAME = "🏆│spin-leaderboard";
-const SPIN_URL = process.env.SPIN_URL || 'https://solspin.lightningworks.io';
+const SPIN_URL = process.env.SPIN_URL || 'https://spinbot.lightningworks.io/index.html';
 const DEFAULT_TOKEN_ADDRESS = '3vgopg7xm3EWkXfxmWPUpcf7g939hecfqg18sLuXDzVt'; // $HAROLD
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
